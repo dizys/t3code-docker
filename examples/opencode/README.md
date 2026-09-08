@@ -7,8 +7,9 @@ OpenAI-compatible endpoint, and T3 Code drives OpenCode.
 ## Install
 
 ```bash
-docker compose exec -u t3 t3code \
-  cp /opt/examples/opencode/opencode.deepseek.json /home/t3/.config/opencode/opencode.json
+docker compose exec -u t3 t3code sh -c \
+  'mkdir -p ~/.config/opencode &&
+   cp /opt/examples/opencode/opencode.deepseek.json ~/.config/opencode/opencode.json'
 ```
 
 or, if you already have an `opencode.json`, merge the `provider.deepseek` block

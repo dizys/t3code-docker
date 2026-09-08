@@ -21,6 +21,11 @@ services:
       T3_ALLOW_SUDO: ${T3_ALLOW_SUDO:-0}
       T3_AUTO_ADD_PROJECTS: ${T3_AUTO_ADD_PROJECTS:-1}
       T3_PRINT_PAIRING_ON_START: ${T3_PRINT_PAIRING_ON_START:-0}
+      # Used by the DeepSeek-through-OpenCode example. Keys for the harnesses
+      # themselves belong in T3 Code's per-provider-instance environment
+      # (Settings > Providers), where they stay isolated per instance and can
+      # be marked sensitive - not in a variable every process here inherits.
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
     volumes:
       # State, provider credentials, shell history - everything under ~.
       - t3-home:/home/t3

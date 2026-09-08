@@ -328,27 +328,67 @@ Ports: `3773`. Healthcheck: `GET /.well-known/t3/environment`.
 
 ## 10. Milestones
 
-- [ ] **M1 — Plan** (this file), committed.
-- [ ] **M2 — `slim` image.** Dockerfile through the harness layer; `entrypoint.sh`; healthcheck.
-      *Done when:* container boots, `/.well-known/t3/environment` returns 200, `t3 --version` and
-      every harness `--version` work.
-- [ ] **M3 — Pairing UX.** `t3-pair`, `T3_PUBLIC_URL` handling, QR, boot banner.
-      *Done when:* `t3-pair` emits a URL with the public host and a token that the server accepts.
-- [ ] **M4 — `full` image.** Go, Rust, C/C++, Bun, Deno, Python/uv, ffmpeg, Chromium + browser MCP.
-      *Done when:* `t3-doctor` reports every toolchain, and Chromium can screenshot a page headless.
-- [ ] **M5 — Compose + TLS.** `compose.yaml`, Caddy profile, `.env.example`.
-- [ ] **M6 — Docs.** README quickstart: server → HTTPS → `t3-pair` → phone, in that order.
-- [ ] **M7 — CI.** GitHub Actions: buildx multi-arch, run `smoke-test.sh`, publish to GHCR.
+All built and verified against a live Docker daemon; `scripts/smoke-test.sh`
+re-runs the checks (16 assertions on `slim`, 33 on `full`, all passing).
 
-Build and smoke-test each milestone locally before moving on — a Docker daemon is available in this
-environment, so none of this has to be taken on faith.
+- [x] **M1 — Plan** (this file).
+- [x] **M2 — `slim` image.** Boots, `/.well-known/t3/environment` returns 200,
+      Docker healthcheck goes `healthy`, and all five harness CLIs report a
+      version.
+- [x] **M3 — Pairing UX.** `t3-pair` emits `https://<public>/pair#token=…` with a
+      QR code, and the minted credential shows up in `t3 auth pairing list` on
+      the running server.
+- [x] **M4 — `full` image.** Go, Rust, clang/cmake, Bun, Deno, uv and ffmpeg all
+      present; Chromium renders and screenshots a real page; **both**
+      `playwright-mcp` and `chrome-devtools-mcp` complete an MCP handshake and
+      navigate to a page (`scripts/browser-probe.py`).
+- [x] **M5 — Compose + TLS.** `docker compose up -d` boots, auto-registers a git
+      checkout under `./workspace`, and `docker compose exec t3code t3-pair`
+      returns a public link. Caddy TLS lives behind `--profile tls`.
+- [x] **M6 — Docs.** README covers the server → HTTPS → `t3-pair` → phone path.
+- [x] **M7 — CI.** `.github/workflows/build.yml`: shellcheck + compose lint,
+      builds both targets, runs the smoke test, and publishes multi-arch images
+      to GHCR on a tag.
 
-## 11. Open questions
+## 11. What changed while building it
 
-- Should `full` be the default tag, or should `:latest` point at `slim` to avoid a 5 GB surprise?
-  *(Leaning: `:latest` = `full`, because "batteries included" is the whole premise; publish
-  `:slim` alongside and lead the README with the size table.)*
-- Passwordless `sudo` for the `t3` user: agents genuinely need it to `apt install` mid-task, but it
-  erodes the container boundary. *(Leaning: off by default, one env var to enable, clearly flagged.)*
-- Pin harness CLI versions, or always install latest at build time? *(Leaning: pin, with a bump
-  script — reproducible images beat fresh ones, and `t3` surfaces provider update prompts anyway.)*
+Things the plan did not anticipate, found by building rather than reading:
+
+- **`node-pty` needs no manual intervention, but the toolchain does.** With
+  `build-essential` and `python3` present the global install compiles it
+  silently; without them there are simply no terminals.
+- **`docker exec` lands as root.** A harness signed in that way writes its
+  credentials to `/root`, where the server (running as `t3`) never looks. All
+  the helper commands now step down to `t3` themselves, and `t3-login` wraps the
+  per-harness login commands so the footgun is hard to reach.
+- **Compose interpolates the whole file regardless of active profiles.** A
+  `${T3_DOMAIN:?…}` on the TLS-only Caddy service broke `docker compose up` for
+  everyone not using TLS. It has a `localhost` fallback now.
+- **`chrome-devtools-mcp` does work with Debian's Chromium** — but only when
+  launched with `--chromeArg=--no-sandbox`; without it Chromium starts and is
+  immediately lost ("Target closed"). `t3-browser-mcp` passes it.
+- **Sizes.** `slim` ≈ 2.7 GB on disk (~1.1 GB pulled), `full` ≈ 4.9 GB (~2.0 GB).
+  Trimming source maps and other platforms' prebuilds saves ~140 MB. The bulk is
+  irreducible: `t3` pulls a 206 MB platform-specific Anthropic SDK, OpenCode
+  ships two 177 MB Linux builds (baseline and modern — dropping either breaks
+  someone's CPU), and Cursor's payload is 524 MB.
+
+## 12. Resolved decisions
+
+- **`:latest` = `full`.** "Batteries included" is the premise; `:slim` is
+  published alongside and the README leads with the size table.
+- **`sudo` off by default,** behind `T3_ALLOW_SUDO=1`, documented as giving the
+  agent root in the container.
+- **Harness versions pinned** via build args, so a rebuild is reproducible.
+- **Playwright is the default browser MCP,** with chrome-devtools available;
+  both are smoke-tested.
+
+## 13. Still open
+
+- Antigravity is not installed (Google sign-in happens inside the desktop app,
+  and it manages its own runtime). Worth revisiting if it grows a headless path.
+- `t3 serve --tailscale-serve` needs `tailscaled` in the container. Documented as
+  host-side Tailscale instead; a sidecar profile is a possible follow-up.
+- The mobile client does not host preview automation today (§2.9). If that
+  changes, the server-side browser becomes a convenience rather than the only
+  way for a phone-driven agent to see anything.

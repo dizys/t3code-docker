@@ -45,7 +45,11 @@ services:
       - t3code
     environment:
       # A real hostname pointed at this machine; Caddy gets the certificate.
-      T3_DOMAIN: ${T3_DOMAIN:?set T3_DOMAIN in .env to use the tls profile}
+      # Compose interpolates the whole file regardless of active profiles, so
+      # this cannot be a required variable - it would break `up` for everyone
+      # not using TLS. The localhost fallback gets an internal certificate,
+      # which is fine for a local try-out and useless for a phone.
+      T3_DOMAIN: ${T3_DOMAIN:-localhost}
     volumes:
       - ./examples/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

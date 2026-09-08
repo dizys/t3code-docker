@@ -31,8 +31,8 @@ Usage: t3-browser-mcp [--server NAME] [--harness LIST] [--remove] [--print]
 
 Notes:
   * Chromium is sandboxed by the container already, so --no-sandbox is passed.
-  * chrome-devtools-mcp officially supports Google Chrome; with Debian's
-    Chromium, playwright is the safer default.
+  * chrome-devtools-mcp officially supports Google Chrome rather than Debian's
+    Chromium; it does work here, but playwright is the tested default.
 USAGE
 }
 
@@ -56,7 +56,10 @@ case "$server" in
   chrome-devtools)
     name="chrome-devtools"
     cmd="chrome-devtools-mcp"
-    args=(--headless --isolated --executablePath "$chromium_path")
+    # Without --chromeArg=--no-sandbox this launches Chromium and immediately
+    # loses it ("Target closed"): it has no sandbox flag of its own.
+    args=(--headless --isolated --executablePath "$chromium_path"
+          --chromeArg=--no-sandbox --chromeArg=--disable-dev-shm-usage)
     ;;
   *) echo "t3-browser-mcp: unknown server '$server'" >&2; exit 2 ;;
 esac

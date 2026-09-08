@@ -20,7 +20,7 @@ a box somewhere, and a phone is enough to drive it. No laptop in the loop.
 | Go, Rust, clang/cmake, Bun, Deno, uv | — | ✅ |
 | ffmpeg, ImageMagick, psql, redis-cli | — | ✅ |
 | Headless Chromium + browser MCP servers | — | ✅ |
-| Approximate size | ~4 GB | ~7 GB |
+| Size on disk (pulled) | ~2.7 GB (~1.1 GB) | ~4.9 GB (~2.0 GB) |
 
 Neither image contains credentials or model access. You bring harnesses you have
 already paid for and sign them in yourself.
@@ -126,8 +126,9 @@ OpenCode, so the agent can navigate, screenshot, click, and read the console
 whatever client you are on. Start a new thread afterwards — providers read their
 MCP configuration at session start.
 
-Playwright is the default because `chrome-devtools-mcp` officially supports
-Google Chrome rather than Debian's Chromium.
+Playwright is the default: `chrome-devtools-mcp` officially supports Google
+Chrome rather than Debian's Chromium. It does work here — `t3-browser-mcp`
+passes it the sandbox flags it needs — but it is the less tested path.
 
 ## Harnesses
 

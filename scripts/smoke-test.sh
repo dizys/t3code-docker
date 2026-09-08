@@ -40,8 +40,18 @@ done
 printf '\nServer\n'
 version="$(curl -fsS --noproxy '*' "$health_url" | jq -r .serverVersion)"
 [ -n "$version" ] && ok "health endpoint (serverVersion=$version)" || no "health endpoint"
-check "docker healthcheck reports healthy" \
-  '[ "$(docker inspect --format "{{.State.Health.Status}}" '"$NAME"')" = healthy ]'
+# The healthcheck has a start period, so the first probe lands after the
+# server is already answering. Give it room rather than racing it.
+health_status=""
+for _ in $(seq 1 60); do
+  health_status="$(docker inspect --format '{{.State.Health.Status}}' "$NAME" 2>/dev/null || true)"
+  [ "$health_status" = healthy ] && break
+  [ "$health_status" = unhealthy ] && break
+  sleep 5
+done
+[ "$health_status" = healthy ] \
+  && ok "docker healthcheck reports healthy" \
+  || no "docker healthcheck reports $health_status"
 
 printf '\nHarnesses\n'
 for bin in t3 claude codex opencode grok cursor-agent; do
@@ -59,20 +69,41 @@ esac
 check "minted token is registered server-side" \
   "docker exec $NAME t3 auth pairing list --json 2>/dev/null | grep -q orchestration:operate"
 
+have() { docker exec "$NAME" sh -c "command -v $1" >/dev/null 2>&1; }
+
 printf '\nRuntimes\n'
 for bin in node python3 git gh; do
-  check "$bin present" "docker exec $NAME command -v $bin"
+  check "$bin present" "have $bin"
 done
 
-if docker exec "$NAME" command -v chromium >/dev/null 2>&1; then
-  printf '\nBrowser (full image)\n'
+if have chromium; then
+  printf '\nToolchains and browser (full image)\n'
   for bin in go rustc cargo bun deno uv ffmpeg cmake clang; do
-    check "$bin present" "docker exec $NAME command -v $bin"
+    check "$bin present" "have $bin"
   done
-  check "chromium renders headless" \
-    "docker exec $NAME chromium --headless --no-sandbox --disable-gpu --dump-dom about:blank"
-  check "playwright-mcp present" "docker exec $NAME command -v playwright-mcp"
-  check "chrome-devtools-mcp present" "docker exec $NAME command -v chrome-devtools-mcp"
+
+  # about:blank would pass even with a broken renderer; render real markup and
+  # look for it in the DOM, then prove the raster path produces a real image.
+  docker exec "$NAME" sh -c \
+    'printf "<h1 id=marker>t3code-smoke-ok</h1>" > /tmp/smoke.html'
+  check "chromium renders a page" \
+    "docker exec $NAME sh -c 'chromium --headless --no-sandbox --disable-gpu \
+       --dump-dom file:///tmp/smoke.html 2>/dev/null | grep -q t3code-smoke-ok'"
+  check "chromium screenshots a page" \
+    "docker exec $NAME sh -c 'chromium --headless --no-sandbox --disable-gpu \
+       --window-size=800,600 --screenshot=/tmp/smoke.png file:///tmp/smoke.html \
+       >/dev/null 2>&1 && [ \"\$(stat -c %s /tmp/smoke.png)\" -gt 1000 ]'"
+
+  check "playwright-mcp present" "have playwright-mcp"
+  check "chrome-devtools-mcp present" "have chrome-devtools-mcp"
+
+  # "installed" and "an agent can see a page" are different claims.
+  docker cp "$(dirname "$0")/browser-probe.py" "$NAME:/tmp/browser-probe.py" >/dev/null
+  check "browser MCP drives a real page (playwright)" \
+    "docker exec -u t3 $NAME python3 /tmp/browser-probe.py"
+  check "browser MCP drives a real page (chrome-devtools)" \
+    "docker exec -u t3 $NAME python3 /tmp/browser-probe.py \
+       \$(docker exec $NAME t3-browser-mcp --server chrome-devtools --print)"
   check "t3-browser-mcp registers with opencode" \
     "docker exec $NAME t3-browser-mcp --harness opencode"
   check "opencode config records the mcp server" \

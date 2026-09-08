@@ -1,0 +1,11 @@
+# Local CA certificates injected at build time (corporate proxies, CI sandboxes).
+# The directory itself is tracked so the Dockerfile's COPY always resolves.
+/ca-certs/*
+!/ca-certs/.gitkeep
+
+.env
+*.log
+
+# Default compose workspace mount; the repos inside are the user's, not ours.
+/workspace/*
+!/workspace/.gitkeep

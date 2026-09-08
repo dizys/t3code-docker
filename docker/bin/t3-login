@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Sign a harness in, as the right user.
+#
+# `docker exec` runs as root, and a harness signed in as root writes its
+# credentials to /root - where T3 Code (running as t3) will never find them.
+# This runs the login as t3 so the credentials land on the persisted volume.
+set -euo pipefail
+
+if [ "$(id -u)" -eq 0 ] && command -v gosu >/dev/null 2>&1 && id t3 >/dev/null 2>&1; then
+  exec gosu t3 "$0" "$@"
+fi
+
+usage() {
+  cat <<'USAGE'
+Usage: t3-login <harness>
+
+  claude     Claude Code        -> claude auth login
+  codex      Codex              -> codex login
+  opencode   OpenCode           -> opencode auth login
+  cursor     Cursor CLI         -> agent login
+  grok       Grok Build         -> grok login
+
+Run this with a TTY:  docker compose exec -it t3code t3-login claude
+Then enable the provider in T3 Code under Settings > Providers.
+USAGE
+}
+
+harness="${1:-}"
+case "$harness" in
+  claude)   cmd=(claude auth login) ;;
+  codex)    cmd=(codex login) ;;
+  opencode) cmd=(opencode auth login) ;;
+  cursor)   cmd=(agent login) ;;
+  grok)     cmd=(grok login) ;;
+  -h|--help|"") usage; [ -n "$harness" ] && exit 0 || exit 2 ;;
+  *) printf 't3-login: unknown harness %s\n\n' "$harness" >&2; usage >&2; exit 2 ;;
+esac
+
+if ! command -v "${cmd[0]}" >/dev/null 2>&1; then
+  echo "t3-login: ${cmd[0]} is not installed in this image" >&2
+  exit 1
+fi
+
+if [ ! -t 0 ]; then
+  echo "t3-login: no TTY. Re-run with: docker compose exec -it t3code t3-login $harness" >&2
+  exit 1
+fi
+
+exec "${cmd[@]}"

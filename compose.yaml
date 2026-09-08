@@ -1,0 +1,60 @@
+name: t3code
+
+services:
+  t3code:
+    image: ${T3_IMAGE:-t3code:full}
+    build:
+      context: .
+      target: ${T3_BUILD_TARGET:-full}
+    container_name: t3code
+    restart: unless-stopped
+    hostname: ${T3_HOSTNAME:-t3code}
+    environment:
+      # Public address clients reach this server on. `t3-pair` builds its
+      # pairing links from this; without it the links point at the container's
+      # own bridge address and nothing can use them.
+      T3_PUBLIC_URL: ${T3_PUBLIC_URL:-}
+      # Match these to the owner of your workspace bind mount.
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+      T3_ALLOW_SUDO: ${T3_ALLOW_SUDO:-0}
+      T3_AUTO_ADD_PROJECTS: ${T3_AUTO_ADD_PROJECTS:-1}
+      T3_PRINT_PAIRING_ON_START: ${T3_PRINT_PAIRING_ON_START:-0}
+    volumes:
+      # State, provider credentials, shell history - everything under ~.
+      - t3-home:/home/t3
+      # Your repositories. Each git checkout directly inside becomes a project.
+      - ${T3_WORKSPACE_HOST:-./workspace}:/workspace
+    ports:
+      # Loopback by default: publishing an unencrypted agent control plane to
+      # the internet would hand anyone who finds it a shell. Use the `tls`
+      # profile, a tunnel, or a private network instead.
+      - "${T3_BIND_ADDR:-127.0.0.1}:${T3_PORT:-3773}:3773"
+    # Chromium needs more than the default 64 MB of shared memory.
+    shm_size: ${T3_SHM_SIZE:-1gb}
+    stop_grace_period: 30s
+
+  # docker compose --profile tls up -d
+  caddy:
+    profiles: ["tls"]
+    image: caddy:2-alpine
+    container_name: t3code-caddy
+    restart: unless-stopped
+    depends_on:
+      - t3code
+    environment:
+      # A real hostname pointed at this machine; Caddy gets the certificate.
+      T3_DOMAIN: ${T3_DOMAIN:?set T3_DOMAIN in .env to use the tls profile}
+    volumes:
+      - ./examples/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+
+volumes:
+  t3-home:
+  caddy-data:
+  caddy-config:

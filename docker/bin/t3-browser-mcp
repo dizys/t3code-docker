@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# Wire a headless browser into the agent harnesses over MCP.
+#
+# T3 Code has its own preview_* browser tools, but the server only brokers
+# them - a web or desktop client actually hosts the browser. With just a phone
+# connected there is no host, so the agent cannot see anything it builds. This
+# gives the agent a browser that lives in the container instead.
+set -euo pipefail
+
+# `docker exec` lands as root (the image sets no USER so the entrypoint can
+# remap uids). Step down so nothing here leaves root-owned files in the
+# state directory.
+if [ "$(id -u)" -eq 0 ] && command -v gosu >/dev/null 2>&1 && id t3 >/dev/null 2>&1; then
+  exec gosu t3 "$0" "$@"
+fi
+
+server="playwright"
+harnesses="claude,codex,opencode"
+action="add"
+print_only=0
+chromium_path="${CHROME_PATH:-/usr/bin/chromium}"
+
+usage() {
+  cat <<'USAGE'
+Usage: t3-browser-mcp [--server NAME] [--harness LIST] [--remove] [--print]
+
+  --server NAME    playwright (default) or chrome-devtools
+  --harness LIST   comma-separated: claude,codex,opencode (default: all three)
+  --remove         unregister instead of registering
+  --print          show the command that would be registered and exit
+
+Notes:
+  * Chromium is sandboxed by the container already, so --no-sandbox is passed.
+  * chrome-devtools-mcp officially supports Google Chrome; with Debian's
+    Chromium, playwright is the safer default.
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --server)  server="${2:?--server needs a value}"; shift 2 ;;
+    --harness) harnesses="${2:?--harness needs a value}"; shift 2 ;;
+    --remove)  action="remove"; shift ;;
+    --print)   print_only=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) printf 't3-browser-mcp: unknown argument %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+case "$server" in
+  playwright)
+    name="playwright"
+    cmd="playwright-mcp"
+    args=(--headless --isolated --no-sandbox --executable-path "$chromium_path")
+    ;;
+  chrome-devtools)
+    name="chrome-devtools"
+    cmd="chrome-devtools-mcp"
+    args=(--headless --isolated --executablePath "$chromium_path")
+    ;;
+  *) echo "t3-browser-mcp: unknown server '$server'" >&2; exit 2 ;;
+esac
+
+if [ "$print_only" -eq 1 ]; then
+  printf '%s' "$cmd"; printf ' %s' "${args[@]}"; printf '\n'
+  exit 0
+fi
+
+if [ "$action" = "add" ] && ! command -v "$cmd" >/dev/null 2>&1; then
+  echo "t3-browser-mcp: $cmd is not installed (it ships in the 'full' image)" >&2
+  exit 1
+fi
+
+json_args="$(printf '%s\n' "${args[@]}" | jq -R . | jq -s .)"
+
+register_claude() {
+  command -v claude >/dev/null 2>&1 || { echo "  claude: not installed"; return; }
+  if [ "$action" = "remove" ]; then
+    claude mcp remove --scope user "$name" >/dev/null 2>&1 || true
+    echo "  claude: removed $name"
+  else
+    claude mcp remove --scope user "$name" >/dev/null 2>&1 || true
+    if claude mcp add --scope user "$name" -- "$cmd" "${args[@]}" >/dev/null 2>&1; then
+      echo "  claude: registered $name"
+    else
+      echo "  claude: FAILED to register $name" >&2
+    fi
+  fi
+}
+
+register_codex() {
+  command -v codex >/dev/null 2>&1 || { echo "  codex: not installed"; return; }
+  local config="${CODEX_HOME:-$HOME/.codex}/config.toml"
+  mkdir -p "$(dirname "$config")"
+  touch "$config"
+
+  # Drop any block we previously wrote, then re-add if needed.
+  local tmp; tmp="$(mktemp)"
+  awk -v marker="# >>> t3-browser-mcp:${name} >>>" \
+      -v endmarker="# <<< t3-browser-mcp:${name} <<<" '
+    $0 == marker { skip = 1 }
+    skip != 1 { print }
+    $0 == endmarker { skip = 0 }
+  ' "$config" > "$tmp"
+  mv "$tmp" "$config"
+
+  if [ "$action" = "remove" ]; then
+    echo "  codex: removed $name"
+    return
+  fi
+
+  {
+    printf '\n# >>> t3-browser-mcp:%s >>>\n' "$name"
+    printf '[mcp_servers.%s]\n' "$name"
+    printf 'command = "%s"\n' "$cmd"
+    printf 'args = %s\n' "$(printf '%s' "$json_args" | jq -c .)"
+    printf '# <<< t3-browser-mcp:%s <<<\n' "$name"
+  } >> "$config"
+  echo "  codex: registered $name in $config"
+}
+
+register_opencode() {
+  command -v opencode >/dev/null 2>&1 || { echo "  opencode: not installed"; return; }
+  local config="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
+  mkdir -p "$(dirname "$config")"
+  [ -s "$config" ] || echo '{"$schema":"https://opencode.ai/config.json"}' > "$config"
+
+  local tmp; tmp="$(mktemp)"
+  if [ "$action" = "remove" ]; then
+    jq --arg n "$name" 'del(.mcp[$n])' "$config" > "$tmp"
+    mv "$tmp" "$config"
+    echo "  opencode: removed $name"
+    return
+  fi
+
+  jq --arg n "$name" --arg c "$cmd" --argjson a "$json_args" \
+     '.mcp[$n] = {type: "local", command: ([$c] + $a), enabled: true}' \
+     "$config" > "$tmp"
+  mv "$tmp" "$config"
+  echo "  opencode: registered $name in $config"
+}
+
+printf '%s %s (%s)\n' \
+  "$([ "$action" = "add" ] && echo Registering || echo Removing)" "$name" "$cmd"
+
+IFS=',' read -ra selected <<< "$harnesses"
+for h in "${selected[@]}"; do
+  case "$h" in
+    claude)   register_claude ;;
+    codex)    register_codex ;;
+    opencode) register_opencode ;;
+    all)      register_claude; register_codex; register_opencode ;;
+    "")       ;;
+    *) echo "  unknown harness: $h" >&2 ;;
+  esac
+done
+
+if [ "$action" = "add" ]; then
+  printf '\nRestart the thread (or the provider session) for the new tools to appear.\n'
+fi

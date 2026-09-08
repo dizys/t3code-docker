@@ -1,0 +1,10 @@
+# Build context: ship only what the image needs.
+.git
+.github
+.env
+.env.example
+compose.yaml
+scripts
+workspace
+PLAN.md
+README.md

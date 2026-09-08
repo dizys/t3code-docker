@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Mint a pairing link for this container that points at a reachable address.
+#
+# T3 Code's own startup banner builds its pairing URL from the first
+# non-internal network interface. Inside a container that is the bridge
+# address (172.x / 192.0.2.x), which no phone can reach. This wraps
+# `t3 auth pairing create --base-url` instead, so the link carries the public
+# URL you actually serve on.
+set -euo pipefail
+
+# `docker exec` lands as root (the image sets no USER so the entrypoint can
+# remap uids). Step down so nothing here leaves root-owned files in the
+# state directory.
+if [ "$(id -u)" -eq 0 ] && command -v gosu >/dev/null 2>&1 && id t3 >/dev/null 2>&1; then
+  exec gosu t3 "$0" "$@"
+fi
+
+base_url="${T3_PUBLIC_URL:-}"
+ttl="${T3_PAIR_TTL:-30d}"
+label=""
+show_qr=1
+
+usage() {
+  cat <<'USAGE'
+Usage: t3-pair [--base-url URL] [--ttl DURATION] [--label TEXT] [--no-qr]
+
+  --base-url URL   Public base URL clients will reach, e.g. https://t3.example.com
+                   (default: $T3_PUBLIC_URL)
+  --ttl DURATION   How long the link stays valid: 5m, 1h, 30d (default: 30d)
+  --label TEXT     Label shown in the server's connections list
+  --no-qr          Print the URL only, no QR code
+
+Revoke links with `t3 auth pairing list` / `t3 auth pairing revoke <id>`.
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base-url) base_url="${2:?--base-url needs a value}"; shift 2 ;;
+    --ttl)      ttl="${2:?--ttl needs a value}"; shift 2 ;;
+    --label)    label="${2:?--label needs a value}"; shift 2 ;;
+    --no-qr)    show_qr=0; shift ;;
+    -h|--help)  usage; exit 0 ;;
+    *) printf 't3-pair: unknown argument %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+if [ -z "$base_url" ]; then
+  container_ip="$(hostname -i 2>/dev/null | awk '{print $1}')"
+  base_url="http://${container_ip:-127.0.0.1}:${T3CODE_PORT:-3773}"
+  cat >&2 <<WARN
+[t3-pair] No public URL set, falling back to the container address:
+[t3-pair]   ${base_url}
+[t3-pair] That address is only reachable from inside this container's network.
+[t3-pair] Set T3_PUBLIC_URL (or pass --base-url) to the address your phone or
+[t3-pair] browser can actually reach.
+WARN
+fi
+
+base_url="${base_url%/}"
+
+args=(auth pairing create --base-url "$base_url" --ttl "$ttl" --json)
+[ -n "$label" ] && args+=(--label "$label")
+
+# `t3 auth` logs migration chatter on stderr; keep stdout clean for the JSON.
+response="$(t3 "${args[@]}" 2>/dev/null | sed -n '/^{/,$p')"
+
+if [ -z "$response" ]; then
+  echo "t3-pair: failed to mint a pairing token" >&2
+  echo "t3-pair: re-run with: t3 auth pairing create --base-url '$base_url' --json" >&2
+  exit 1
+fi
+
+pair_url="$(printf '%s' "$response" | jq -r '.pairUrl // empty')"
+expires="$(printf '%s' "$response" | jq -r '.expiresAt // empty')"
+pair_id="$(printf '%s' "$response" | jq -r '.id // empty')"
+
+if [ -z "$pair_url" ]; then
+  echo "t3-pair: server did not return a pairing URL:" >&2
+  printf '%s\n' "$response" >&2
+  exit 1
+fi
+
+printf '\n'
+printf 'Pairing URL: %s\n' "$pair_url"
+[ -n "$expires" ] && printf 'Expires:     %s\n' "$expires"
+[ -n "$pair_id" ] && printf 'Revoke with: t3 auth pairing revoke %s\n' "$pair_id"
+printf '\n'
+
+if [ "$show_qr" -eq 1 ] && command -v qrencode >/dev/null 2>&1; then
+  qrencode -t ANSIUTF8 -m 2 "$pair_url"
+  printf '\n'
+fi
+
+case "$pair_url" in
+  https://*) ;;
+  *) echo "Note: this link is plain HTTP. The token in it is a credential -" >&2
+     echo "      put TLS in front of the server before using it off your LAN." >&2 ;;
+esac

@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Report what this container has, what is authenticated, and whether the
+# server is answering. Safe to run at any time; changes nothing.
+set -uo pipefail
+
+# `docker exec` lands as root (the image sets no USER so the entrypoint can
+# remap uids). Step down so nothing here leaves root-owned files in the
+# state directory.
+if [ "$(id -u)" -eq 0 ] && command -v gosu >/dev/null 2>&1 && id t3 >/dev/null 2>&1; then
+  exec gosu t3 "$0" "$@"
+fi
+
+ok()   { printf '  \033[32m%-22s\033[0m %s\n' "$1" "${2:-}"; }
+bad()  { printf '  \033[31m%-22s\033[0m %s\n' "$1" "${2:-}"; }
+warn() { printf '  \033[33m%-22s\033[0m %s\n' "$1" "${2:-}"; }
+head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+
+version_of() {
+  local bin="$1"; shift
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    bad "$bin" "not installed"
+    return
+  fi
+  local out
+  out="$("$@" 2>/dev/null | head -1 | tr -d '\r')"
+  ok "$bin" "${out:-installed}"
+}
+
+head_ "T3 Code"
+version_of t3 t3 --version
+printf '  %-22s %s\n' "state dir" "${T3CODE_HOME:-unset}"
+printf '  %-22s %s\n' "bind" "${T3CODE_HOST:-unset}:${T3CODE_PORT:-unset}"
+printf '  %-22s %s\n' "public URL" "${T3_PUBLIC_URL:-<unset - t3-pair will warn>}"
+printf '  %-22s %s\n' "workspace" "${T3_WORKSPACE:-unset}"
+
+head_ "Server"
+if curl -fsS --max-time 5 \
+     "http://127.0.0.1:${T3CODE_PORT:-3773}/.well-known/t3/environment" \
+     -o /tmp/.t3-doctor-env 2>/dev/null; then
+  ok "health" "$(jq -r '"serverVersion=" + .serverVersion + " env=" + .environmentId' \
+       /tmp/.t3-doctor-env 2>/dev/null || echo responding)"
+  rm -f /tmp/.t3-doctor-env
+else
+  bad "health" "no response on 127.0.0.1:${T3CODE_PORT:-3773}"
+fi
+
+head_ "Harnesses"
+version_of claude claude --version
+version_of codex codex --version
+version_of opencode opencode --version
+version_of grok grok --version
+version_of cursor-agent cursor-agent --version
+
+head_ "Harness sign-in"
+# Only some harnesses keep a credential file we can point at; for the rest
+# the honest answer is "cannot tell from disk".
+cred() {
+  local name="$1" path="$2"
+  if [ -e "$path" ]; then ok "$name" "signed in ($path)"; else warn "$name" "not signed in"; fi
+}
+cred claude   "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
+cred codex    "$HOME/.codex/auth.json"
+cred opencode "$HOME/.local/share/opencode/auth.json"
+for h in cursor grok; do
+  case "$h" in
+    cursor) dir="$HOME/.cursor"; bin=cursor-agent ;;
+    grok)   dir="$HOME/.grok";   bin=grok ;;
+  esac
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    warn "$h" "not installed"
+  elif [ -d "$dir" ]; then
+    printf '  %-22s %s\n' "$h" "config dir present (sign-in state not readable)"
+  else
+    warn "$h" "no config dir yet"
+  fi
+done
+printf '  %s\n' "(sign in with: t3-login claude|codex|opencode|cursor|grok)"
+
+head_ "Toolchains"
+version_of node node --version
+version_of python3 python3 --version
+version_of git git --version
+version_of go go version
+version_of rustc rustc --version
+version_of cargo cargo --version
+version_of bun bun --version
+version_of deno deno --version
+version_of uv uv --version
+version_of gcc gcc --version
+version_of clang clang --version
+version_of cmake cmake --version
+version_of ffmpeg ffmpeg -version
+version_of gh gh --version
+
+head_ "Browser"
+if command -v chromium >/dev/null 2>&1; then
+  ok chromium "$(chromium --version 2>/dev/null | head -1)"
+  if chromium --headless --no-sandbox --disable-gpu --dump-dom about:blank \
+       >/dev/null 2>&1; then
+    ok "headless render" "works"
+  else
+    bad "headless render" "chromium could not render a page"
+  fi
+else
+  warn chromium "not installed (slim image)"
+fi
+version_of chrome-devtools-mcp chrome-devtools-mcp --version
+version_of playwright-mcp playwright-mcp --version
+printf '  %s\n' "(wire one into a harness with: t3-browser-mcp)"
+
+printf '\n'

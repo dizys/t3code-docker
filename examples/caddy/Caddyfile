@@ -1,0 +1,18 @@
+# Terminates TLS for T3 Code and proxies to the server container.
+#
+# Caddy gets and renews the certificate itself, so ports 80 and 443 must be
+# reachable from the internet and T3_DOMAIN must resolve to this machine.
+# reverse_proxy upgrades WebSocket connections without extra configuration,
+# which matters here: T3 Code's clients hold one long-lived socket.
+
+{$T3_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy t3code:3773 {
+		# Agent turns can stream for a long time before the next byte arrives.
+		transport http {
+			read_timeout 24h
+			write_timeout 24h
+		}
+	}
+}

@@ -94,9 +94,32 @@ const HARNESSES = [
   { id: "cursor", name: "Cursor", bin: "cursor-agent",
     probe: ["cursor-agent", "status", "--format", "json"],
     reads: ({ stdout }) => JSON.parse(stdout).isAuthenticated === true },
-  // Grok has no status command; it only reports through the login screen.
-  { id: "grok", name: "Grok Build", bin: "grok", cred: null },
+  { id: "grok", name: "Grok Build", bin: "grok", detect: () => grokSignedIn() },
 ];
+
+/**
+ * Grok ships no status command, so read its model listing the way T3 Code does:
+ * an xAI key in the environment wins, otherwise `grok models` says which it is.
+ *
+ * Not from its credentials file. Grok documents one - `jq -r '."https://
+ * accounts.x.ai/sign-in".key' ~/.grok/auth.json` - but a file of exactly that
+ * shape still leaves the CLI reporting "You are not authenticated", so the file
+ * existing proves nothing. Asking costs 287ms and is the truth.
+ */
+const grokSignedIn = async () => {
+  if (process.env.XAI_API_KEY?.trim()) return true;
+  let text;
+  try {
+    const { stdout, stderr } = await run("grok", ["models"], { timeout: 8000, maxBuffer: 1024 * 1024 });
+    text = stdout + stderr;
+  } catch (error) {
+    text = (error?.stdout ?? "") + (error?.stderr ?? "");
+  }
+  // "You are using XAI_API_KEY." is its own phrasing for a key it picked up.
+  if (/you are logged in|using XAI_API_KEY/i.test(text)) return true;
+  if (/not authenticated|not logged in/i.test(text)) return false;
+  return null;
+};
 
 // Probing spawns a process per agent, so cache briefly: the page polls status
 // every 15s and several browsers may watch at once. Anything that changes a
@@ -106,6 +129,7 @@ const PROBE_TTL_MS = 10_000;
 const forgetSignInState = () => { probeCache = { at: 0, value: null }; };
 
 const signedInState = async (h) => {
+  if (h.detect) return h.detect();
   if (!h.probe) {
     const { existsSync } = await import("node:fs");
     return h.cred ? existsSync(h.cred) : null;
@@ -150,6 +174,72 @@ const harnessStatus = async () => {
   }));
   probeCache = { at: Date.now(), value };
   return value;
+};
+
+/**
+ * OpenCode takes a key per provider, and there are north of two hundred of them
+ * - typing the id from memory is a guess. models.dev is the catalog OpenCode
+ * itself resolves providers from, so offer that list and let the browser pick.
+ *
+ * The document is 4.5MB, which is not something to hand a phone on every page
+ * load, so pull it here, keep the id and name and nothing else, and cache that
+ * to disk: a restart stays instant and an offline container keeps working. The
+ * fallback below is only for a container that has never once reached the net.
+ */
+const PROVIDER_FALLBACK = [
+  ["anthropic", "Anthropic"], ["openai", "OpenAI"], ["google", "Google"],
+  ["openrouter", "OpenRouter"], ["deepseek", "DeepSeek"], ["xai", "xAI"],
+  ["groq", "Groq"], ["mistral", "Mistral"], ["amazon-bedrock", "Amazon Bedrock"],
+  ["azure", "Azure"], ["cerebras", "Cerebras"], ["together", "Together"],
+  ["fireworks-ai", "Fireworks"], ["ollama", "Ollama"], ["opencode", "OpenCode Zen"],
+].map(([id, name]) => ({ id, name }));
+
+const PROVIDER_CACHE = `${process.env.T3CODE_HOME || `${process.env.HOME}/.t3`}/setup/providers.json`;
+const PROVIDER_TTL_MS = 24 * 60 * 60 * 1000;
+let providerMemo = null;
+
+const providers = async () => {
+  if (providerMemo) return providerMemo;
+  const { readFile, writeFile, mkdir } = await import("node:fs/promises");
+  try {
+    const cached = JSON.parse(await readFile(PROVIDER_CACHE, "utf8"));
+    if (Array.isArray(cached.list) && Date.now() - cached.at < PROVIDER_TTL_MS) {
+      providerMemo = cached.list;
+      return providerMemo;
+    }
+  } catch { /* no usable cache; fetch */ }
+  try {
+    const res = await fetch("https://models.dev/api.json", { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const list = Object.entries(await res.json())
+      .map(([id, p]) => ({ id, name: typeof p?.name === "string" && p.name ? p.name : id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (list.length === 0) throw new Error("empty catalog");
+    providerMemo = list;
+    try {
+      await mkdir(PROVIDER_CACHE.replace(/\/[^/]+$/, ""), { recursive: true });
+      await writeFile(PROVIDER_CACHE, JSON.stringify({ at: Date.now(), list }));
+    } catch { /* the cache is an optimisation, not a requirement */ }
+    return providerMemo;
+  } catch {
+    // Serve a stale cache before the built-in list: it is the real catalog.
+    try {
+      const cached = JSON.parse(await readFile(PROVIDER_CACHE, "utf8"));
+      if (Array.isArray(cached.list) && cached.list.length) return (providerMemo = cached.list);
+    } catch { /* fall through */ }
+    return PROVIDER_FALLBACK;
+  }
+};
+
+/** Which providers already hold a key, so the picker can say so. */
+const configuredProviders = async () => {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const auth = JSON.parse(await readFile(`${process.env.HOME}/.local/share/opencode/auth.json`, "utf8"));
+    return Object.keys(auth ?? {});
+  } catch {
+    return [];
+  }
 };
 
 const status = async () => {
@@ -388,7 +478,9 @@ const setApiKey = async (agentId, key, providerId) => {
   // OpenCode reads credentials from a file, which is far steadier than driving
   // its picker; verified by writing one and having `opencode auth list` see it.
   if (agent.apiKey.kind === "opencode") {
-    if (!/^[a-z0-9-]{1,40}$/.test(String(providerId ?? "")))
+    // Dots are in the catalog too (wafer.ai), and this only ever becomes a key
+    // in a JSON object, never a path segment.
+    if (!/^[a-z0-9][a-z0-9._-]{0,39}$/.test(String(providerId ?? "")))
       throw new Error("Choose a provider (e.g. anthropic, openai, deepseek)");
     const dir = `${process.env.HOME}/.local/share/opencode`;
     await mkdir(dir, { recursive: true });
@@ -430,6 +522,7 @@ const page = (authed, mount) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>T3 Code setup</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111'/%3E%3Ctext x='16' y='22' font-family='ui-monospace,monospace' font-size='16' font-weight='700' fill='%23fff' text-anchor='middle'%3ET3%3C/text%3E%3C/svg%3E">
 <style>
 /* Tokens lifted from T3 Code's own stylesheet (apps/web/src/index.css) so this
    page does not feel like a different product: its radii, its zinc/neutral
@@ -684,21 +777,55 @@ if (document.getElementById('mint')) {
 
     if (signinActive) return;
 
+    // The provider list is fetched once and reused: it is the same for every
+    // agent row and does not change while the page is open.
+    let providerList = null;
+    const loadProviders = async () => {
+      if (providerList) return providerList;
+      try {
+        providerList = await (await fetch(BASE + '/providers')).json();
+      } catch (err) {
+        providerList = {providers: [], configured: []};
+      }
+      return providerList;
+    };
+
     for (const b of document.querySelectorAll('.setkey')) {
-      b.onclick = () => {
+      b.onclick = async () => {
         const agent = b.dataset.agent;
-        const providerField = b.dataset.kind === 'opencode'
-          ? '<input class="pv" placeholder="Provider id, e.g. deepseek" style="flex:1 1 130px" />' : '';
+        const needsProvider = b.dataset.kind === 'opencode';
+        let providerField = '';
+        if (needsProvider) {
+          b.disabled = true;
+          const {providers, configured} = await loadProviders();
+          b.disabled = false;
+          const done = new Set(configured || []);
+          const opts = (providers || []).map((p) =>
+            '<option value="' + esc(p.id) + '">' + esc(p.name) +
+            (done.has(p.id) ? ' \u2713' : '') + '</option>').join('');
+          providerField =
+            '<select class="pv" style="flex:1 1 100%">' +
+            '<option value="">Choose a provider' + (opts ? '' : ' (catalog unavailable)') + '</option>' +
+            opts + '<option value="__custom">Other - type an id</option></select>' +
+            '<input class="pv-custom" placeholder="Provider id, e.g. deepseek" ' +
+            'style="flex:1 1 130px;display:none" />';
+        }
         $('agent-' + agent).innerHTML =
-          '<div class="controls" style="margin-top:8px">' + providerField +
+          '<div class="controls" style="margin-top:8px;flex-wrap:wrap">' + providerField +
           '<input class="kv-key" type="password" placeholder="API key" style="flex:1 1 150px" />' +
           '<button class="tiny save">Save</button></div><div class="out"></div>';
         const box = $('agent-' + agent);
+        const sel = box.querySelector('.pv');
+        const custom = box.querySelector('.pv-custom');
+        if (sel) sel.onchange = () => {
+          const isCustom = sel.value === '__custom';
+          custom.style.display = isCustom ? '' : 'none';
+          if (isCustom) custom.focus();
+        };
         box.querySelector('.save').onclick = async (e) => {
           e.target.disabled = true;
           const body = {agent, key: box.querySelector('.kv-key').value};
-          const pv = box.querySelector('.pv');
-          if (pv) body.provider = pv.value.trim();
+          if (sel) body.provider = sel.value === '__custom' ? custom.value.trim() : sel.value;
           const res = await fetch(BASE + '/auth/apikey', {method: 'POST',
             headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
           const data = await res.json();
@@ -791,7 +918,8 @@ if (document.getElementById('mint')) {
 </script></body></html>`;
 
 const ROUTES = ["/login", "/status", "/pair", "/revoke",
-  "/auth/apikey", "/auth/signin", "/auth/session", "/auth/code", "/auth/cancel"];
+  "/auth/apikey", "/auth/signin", "/auth/session", "/auth/code", "/auth/cancel",
+  "/providers"];
 
 /**
  * Work out which prefix this request arrived under, and which route it wants.
@@ -853,6 +981,13 @@ const server = createServer(async (req, res) => {
 
     if (route === "/status") return sendJson(res, 200, await status());
 
+
+    if (req.method === "GET" && route === "/providers") {
+      return sendJson(res, 200, {
+        providers: await providers(),
+        configured: await configuredProviders(),
+      });
+    }
     if (req.method === "POST" && route === "/auth/apikey") {
       try {
         const input = JSON.parse((await readBody(req)) || "{}");

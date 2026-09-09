@@ -94,7 +94,7 @@ CLIs rather than reading about them:
 | --- | --- | --- |
 | Claude Code | `setup-token` — shows a URL, takes the code back | — |
 | Codex | device code — `login --device-auth` | stored via `login --with-api-key` |
-| OpenCode | — | written to its `auth.json`, per provider |
+| OpenCode | — | pick a provider, key written to its `auth.json` |
 | Cursor | browser flow, polls to completion | — |
 | Grok Build | device code — URL plus a code to confirm | — |
 
@@ -103,12 +103,29 @@ phone in your hand; where the CLI wants the code pasted back, a field appears
 for it. Nothing is typed into a terminal, and the page never becomes one — it
 runs the CLI and reads what it prints.
 
-The signed-in badge asks each CLI (`claude auth status`, `codex login status`,
-`cursor-agent status`) rather than looking for a credentials file, so a
-credential that never touches disk still reads correctly — `ANTHROPIC_API_KEY`
+The signed-in badge asks each CLI rather than looking for a credentials file, so
+a credential that never touches disk still reads correctly — `ANTHROPIC_API_KEY`
 and `CLAUDE_CODE_OAUTH_TOKEN` in the container environment both count, which is
-what T3 Code itself honours. Grok has no status command, so it reports
-"Sign-in state not readable" rather than guessing.
+what T3 Code itself honours:
+
+| Agent | Read from |
+| --- | --- |
+| Claude Code | `claude auth status --json` |
+| Codex | `codex login status` |
+| Cursor | `cursor-agent status --format json` |
+| Grok Build | `grok models`, plus `XAI_API_KEY` — same as T3 Code |
+| OpenCode | its `auth.json`, which is where its keys live |
+
+Grok has no status command and its credentials file is not evidence: a file of
+exactly the shape its own help text documents still leaves the CLI reporting
+"You are not authenticated". Asking it costs a quarter of a second. Where an
+answer genuinely cannot be had, the badge says "Sign-in state not readable"
+rather than guessing at one.
+
+OpenCode takes a key per provider, and there are over two hundred, so the page
+offers the [models.dev](https://models.dev) catalog as a picker with a **Other —
+type an id** entry for anything not in it. The catalog is fetched once and
+cached on the state volume, so it survives restarts and keeps working offline.
 
 You can still use T3 Code's own setup flow instead, which opens a terminal on
 this machine with the command ready to run. Both write to the same place. Revoking a client's session drops that device; it does

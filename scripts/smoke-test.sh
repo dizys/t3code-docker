@@ -268,6 +268,36 @@ sys.exit(0 if h["codex"]["signedIn"] is True and h["claude"]["signedIn"] is Fals
 }
 check "a stored key flips the panel without waiting for a cache" key_flips_signed_in
 
+# Grok has no status command, and its credentials file proves nothing - a file
+# of exactly the shape its own help text documents still leaves the CLI saying
+# "You are not authenticated". So the reading comes from `grok models`, the way
+# T3 Code does it, and a fresh container must read as a definite no rather than
+# the "not readable" this used to show.
+grok_reads_definitely() {
+  docker exec "$NAME" sh -c \
+    "curl -sS --max-time 25 -b /tmp/jar http://127.0.0.1:3774/status" | python3 -c '
+import json, sys
+h = {a["id"]: a for a in json.load(sys.stdin)["harnesses"]}
+sys.exit(0 if h["grok"]["signedIn"] is False and h["cursor"]["signedIn"] is False else 1)'
+}
+check "Grok and Cursor report a definite sign-in state" grok_reads_definitely
+
+# OpenCode takes a key per provider and there are over two hundred of them, so
+# the page offers the models.dev catalog rather than asking you to recall an id.
+provider_catalog() {
+  docker exec "$NAME" sh -c \
+    "curl -sS --max-time 30 -b /tmp/jar http://127.0.0.1:3774/providers" | python3 -c '
+import json, sys, re
+d = json.load(sys.stdin)
+ids = [p["id"] for p in d["providers"]]
+ok = len(ids) >= 10 and "anthropic" in ids
+# Every id the picker offers has to survive the write path, or the dropdown
+# hands people options the server then rejects.
+rx = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
+sys.exit(0 if ok and all(rx.match(i) for i in ids) else 1)'
+}
+check "the provider picker offers a catalog the server accepts" provider_catalog
+
 # Claude renders its URL as an OSC-8 hyperlink wrapped over several lines;
 # scraping the visible text yields a truncated URL missing the PKCE challenge
 # and state, which would send you to a sign-in page that cannot complete.

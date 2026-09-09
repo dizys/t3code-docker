@@ -93,9 +93,9 @@ CLIs rather than reading about them:
 | Agent | Sign in | API key |
 | --- | --- | --- |
 | Claude Code | `setup-token` — shows a URL, takes the code back | — |
-| Codex | browser flow | stored via `login --with-api-key` |
+| Codex | device code — `login --device-auth` | stored via `login --with-api-key` |
 | OpenCode | — | written to its `auth.json`, per provider |
-| Cursor | browser flow | — |
+| Cursor | browser flow, polls to completion | — |
 | Grok Build | device code — URL plus a code to confirm | — |
 
 **Sign in** shows the URL as a link and a QR code, so you can approve it on the

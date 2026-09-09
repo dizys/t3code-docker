@@ -169,7 +169,10 @@ const AGENTS = {
     signin: { argv: ["claude", "setup-token"], pty: true, expectsCode: true } },
   codex: { name: "Codex",
     apiKey: { kind: "stdin", argv: ["codex", "login", "--with-api-key"] },
-    signin: { argv: ["codex", "login"], pty: true } },
+    // Plain `codex login` starts a callback server on localhost:1455, which a
+    // browser on any other machine cannot reach - it lands on the user's own
+    // localhost instead. Codex says so itself and offers the device flow.
+    signin: { argv: ["codex", "login", "--device-auth"], pty: true } },
   grok: { name: "Grok Build",
     signin: { argv: ["grok", "login", "--device-auth"], pty: false } },
   cursor: { name: "Cursor",
@@ -200,7 +203,7 @@ const findUrl = (raw, stripped) => {
   if (all.length === 0) return null;
   return all.sort((a, b) => b.length - a.length)[0];
 };
-const findCode = (text) => (text.match(/\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/) ?? [null])[0];
+const findCode = (text) => (text.match(/\b[A-Z0-9]{4,6}-[A-Z0-9]{4,6}\b/) ?? [null])[0];
 
 const sessions = new Map();
 const SESSION_TTL_MS = 15 * 60 * 1000;
@@ -503,6 +506,10 @@ ${
 const BASE = ${JSON.stringify(mount)};
 if (document.getElementById('mint')) {
   const $ = (id) => document.getElementById(id);
+  // A sign-in renders into the agent's row. The periodic refresh rebuilds that
+  // list, so it has to leave the row alone while a sign-in is in flight -
+  // otherwise the URL, the QR and the code field vanish mid-flow.
+  let signinActive = null;
   const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const when = (v) => { if (!v) return '—'; const d = new Date(v);
     return isNaN(d) ? '—' : d.toLocaleString(undefined, {dateStyle:'medium', timeStyle:'short'}); };
@@ -574,7 +581,7 @@ if (document.getElementById('mint')) {
       (s.publicUrl ? '' : '<div class="notice warn">Without T3_PUBLIC_URL, pairing links ' +
         "point at this container's own address and no device can reach them.</div>");
 
-    $('agents').innerHTML = '<div class="rows">' + s.harnesses.map((h) => {
+    if (!signinActive) $('agents').innerHTML = '<div class="rows">' + s.harnesses.map((h) => {
       const status = !h.installed ? '<span class="bad">Not installed</span>'
         : h.signedIn === true ? '<span class="ok"><span class="dot"></span>Signed in</span>'
         : h.signedIn === false ? '<span class="warn">Not signed in</span>'
@@ -588,6 +595,8 @@ if (document.getElementById('mint')) {
         '<div id="agent-' + h.id + '"></div></div>' +
         '<div style="display:flex;gap:6px">' + actions + '</div></div>';
     }).join('') + '</div>';
+
+    if (signinActive) return;
 
     for (const b of document.querySelectorAll('.setkey')) {
       b.onclick = () => {
@@ -629,17 +638,27 @@ if (document.getElementById('mint')) {
           box.innerHTML = '<div class="notice err">' + esc(started.error) + '</div>';
           b.disabled = false; return;
         }
+        signinActive = agent;
+        const finish = (html) => {
+          signinActive = null;
+          box.innerHTML = html;
+          b.disabled = false;
+        };
+        let painted = false;
         const poll = async () => {
           const st = await (await fetch(BASE + '/auth/session?id=' + started.id)).json();
           if (st.state === 'done') {
-            box.innerHTML = '<div class="notice" style="background:var(--muted)">Signed in.</div>';
-            b.disabled = false; load(); return;
+            finish('<div class="notice" style="background:var(--muted)">Signed in.</div>');
+            load(); return;
           }
           if (st.state === 'failed' || st.state === 'cancelled') {
-            box.innerHTML = '<div class="notice err">' + esc(st.error || 'Sign-in stopped') + '</div>';
-            b.disabled = false; return;
+            finish('<div class="notice err">' + esc(st.error || 'Sign-in stopped') + '</div>');
+            return;
           }
-          if (st.url) {
+          // Paint once. Re-rendering on every poll would clear the code field
+          // under whoever is pasting into it.
+          if (st.url && !painted) {
+            painted = true;
             box.innerHTML =
               '<p class="meta" style="margin:8px 0 0">Open this on any device and approve:</p>' +
               '<div class="link">' + esc(st.url) + '</div>' +
@@ -654,6 +673,7 @@ if (document.getElementById('mint')) {
             const send = box.querySelector('.sendcode');
             if (send) send.onclick = async () => {
               send.disabled = true;
+              send.textContent = 'Submitting';
               await fetch(BASE + '/auth/code', {method: 'POST',
                 headers: {'content-type': 'application/json'},
                 body: JSON.stringify({id: started.id, code: box.querySelector('.codein').value})});
@@ -661,6 +681,7 @@ if (document.getElementById('mint')) {
             box.querySelector('.cancel').onclick = async () => {
               await fetch(BASE + '/auth/cancel', {method: 'POST',
                 headers: {'content-type': 'application/json'}, body: JSON.stringify({id: started.id})});
+              finish('<div class="meta">Sign-in cancelled.</div>');
             };
           }
           setTimeout(poll, 2000);

@@ -232,6 +232,21 @@ claude_url_complete() {
 }
 check "Claude sign-in captures a complete OAuth URL" claude_url_complete
 
+# Codex's default login starts a callback server on localhost:1455, which is
+# unreachable from a browser on any other machine - the redirect lands on the
+# user's own localhost. Any sign-in URL naming localhost is broken by
+# construction for a remote server, so assert against the whole class.
+codex_device_not_localhost() {
+  local id session
+  id="$(auth_post '{"agent":"codex"}' /auth/signin | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+  [ -n "$id" ] || return 1
+  sleep 13
+  session="$(docker exec "$NAME" sh -c "curl -sS -b /tmp/jar 'http://127.0.0.1:3774/auth/session?id=$id'")"
+  printf '%s' "$session" | grep -q 'auth.openai.com/codex/device' &&
+  ! printf '%s' "$session" | grep -q localhost
+}
+check "Codex signs in by device code, not a localhost callback" codex_device_not_localhost
+
 grok_device_code() {
   local id
   id="$(auth_post '{"agent":"grok"}' /auth/signin | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"

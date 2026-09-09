@@ -129,6 +129,7 @@ RUN set -eux; \
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY docker/bin/ /usr/local/bin/
+COPY docker/setup/ /opt/t3-setup/
 COPY examples/ /opt/examples/
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/t3-*
 
@@ -138,6 +139,8 @@ ENV T3CODE_HOME=/home/t3/.t3 \
     T3_WORKSPACE=/workspace \
     T3_AUTO_ADD_PROJECTS=1 \
     T3_PRINT_PAIRING_ON_START=0 \
+    T3_SETUP_ENABLED=1 \
+    T3_SETUP_PORT=3774 \
     PUID=1000 \
     PGID=1000
 
@@ -145,7 +148,7 @@ RUN mkdir -p /workspace /home/t3/.t3 && chown -R t3:t3 /workspace /home/t3
 
 VOLUME ["/home/t3", "/workspace"]
 WORKDIR /workspace
-EXPOSE 3773
+EXPOSE 3773 3774
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
     CMD curl -fsS --max-time 4 "http://127.0.0.1:${T3CODE_PORT}/.well-known/t3/environment" >/dev/null || exit 1

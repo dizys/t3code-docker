@@ -16,7 +16,9 @@ T3_HOME=/home/t3
 : "${T3_AUTO_ADD_PROJECTS:=1}"
 : "${T3_PRINT_PAIRING_ON_START:=0}"
 : "${T3_ALLOW_SUDO:=0}"
-export T3CODE_HOME T3CODE_HOST T3CODE_PORT T3_WORKSPACE
+: "${T3_SETUP_ENABLED:=1}"
+: "${T3_SETUP_PORT:=3774}"
+export T3CODE_HOME T3CODE_HOST T3CODE_PORT T3_WORKSPACE T3_SETUP_PORT
 
 # --- privileged half: fix uids, then re-exec as the unprivileged user --------
 if [ "$(id -u)" -eq 0 ]; then
@@ -115,6 +117,33 @@ register_projects() {
 }
 
 register_projects
+
+# The setup service exists for one job: minting a pairing link on demand,
+# without a shell in the container and without a restart. Everything after
+# pairing belongs to T3 Code's own UI, which does it better.
+start_setup_service() {
+  [ "$T3_SETUP_ENABLED" = "1" ] || return 0
+  [ -f /opt/t3-setup/server.mjs ] || return 0
+
+  if [ -z "${T3_SETUP_KEY:-}" ]; then
+    T3_SETUP_KEY="$(node -e 'console.log(require("crypto").randomBytes(16).toString("hex"))')"
+    log "T3_SETUP_KEY was not set; generated one for this container:"
+    log "    ${T3_SETUP_KEY}"
+    log "    Set T3_SETUP_KEY yourself to keep it stable across recreates."
+  fi
+  export T3_SETUP_KEY
+
+  (
+    while :; do
+      node /opt/t3-setup/server.mjs || log "setup service exited; restarting in 5s"
+      sleep 5
+    done
+  ) &
+
+  log "setup UI on port ${T3_SETUP_PORT} - publish it to pair a device from a browser"
+}
+
+start_setup_service
 
 if [ "$T3_PRINT_PAIRING_ON_START" = "1" ]; then
   # The server has to be up before a token is worth anything; mint it just

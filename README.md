@@ -58,6 +58,38 @@ docker compose exec t3code t3-doctor
 Then open T3 Code, go to **Settings → Providers**, and enable the provider you
 signed in.
 
+## First run: the setup UI
+
+The container runs a small setup page on port **3774**, next to T3 Code itself
+on 3773. It exists for exactly one job — minting a pairing link — because that
+is the only step that cannot happen inside T3 Code, since it is what gets you
+*to* T3 Code. Adding a device needs neither a shell in the container nor a
+restart.
+
+Set a password for it when you create the container:
+
+```
+T3_SETUP_KEY=<something long>
+T3_PUBLIC_URL=https://t3.example.com
+```
+
+Leave `T3_SETUP_KEY` empty and one is generated at boot and printed to the log;
+setting it yourself keeps it stable when the container is recreated. Then open
+port 3774, enter the key, and press **Create pairing link** — you get a URL and
+a QR code built against your public address, valid for as long as you choose.
+The page also shows whether the server is healthy, whether `T3_PUBLIC_URL` is
+set, and which agents are signed in.
+
+`T3_SETUP_ENABLED=0` turns it off once you are set up.
+
+**Treat the key like a password.** Anything it can do, a pairing link can do —
+the difference is that it can issue them repeatedly. The port is loopback-only
+in `compose.yaml`; publish it only as far as you need.
+
+Everything after pairing belongs to T3 Code's own setup flow, which checks your
+agents and **opens a terminal on this machine with the right sign-in command
+ready to run**. You do not need `docker exec` for that.
+
 ## Connecting a phone
 
 The server's own startup banner prints a pairing URL built from the container's

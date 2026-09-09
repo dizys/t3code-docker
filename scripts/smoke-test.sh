@@ -8,6 +8,7 @@ IMAGE="${1:-t3code:full}"
 NAME="t3code-smoke-$$"
 PORT="${SMOKE_PORT:-13773}"
 PUBLIC_URL="https://smoke.example.test"
+SETUP_KEY="smoke-setup-key"
 
 pass=0
 fail=0
@@ -29,6 +30,7 @@ printf '\nSmoke-testing %s\n\n' "$IMAGE"
 docker run -d --name "$NAME" \
   -p "127.0.0.1:${PORT}:3773" \
   -e "T3_PUBLIC_URL=${PUBLIC_URL}" \
+  -e "T3_SETUP_KEY=${SETUP_KEY}" \
   "$IMAGE" >/dev/null
 
 printf 'Waiting for the server to answer...\n'
@@ -147,6 +149,28 @@ fi
 
 # T3_PRINT_PAIRING_ON_START is the only way to pair without a shell in the
 # container, so it has to actually reach the log.
+# The setup service is the only way to pair without a shell in the container
+# and without a restart, so it has to work unattended.
+printf '\nSetup service\n'
+SETUP_JAR="$(mktemp)"
+check "refuses an unauthenticated request" \
+  "[ \"\$(docker exec $NAME curl -sS -o /dev/null -w '%{http_code}' \
+     http://127.0.0.1:3774/status)\" = 401 ]"
+docker exec "$NAME" sh -c \
+  "curl -sS -c /tmp/jar -d 'key=$SETUP_KEY' -o /dev/null http://127.0.0.1:3774/login" >/dev/null 2>&1
+check "grants a session for the right key" \
+  "docker exec $NAME sh -c 'curl -fsS -b /tmp/jar http://127.0.0.1:3774/status | grep -q publicUrl'"
+setup_pair="$(docker exec "$NAME" sh -c \
+  "curl -sS -b /tmp/jar -H 'content-type: application/json' -d '{\"ttl\":\"1h\"}' \
+     http://127.0.0.1:3774/pair" 2>/dev/null || true)"
+case "$setup_pair" in
+  *"\"pairUrl\":\"${PUBLIC_URL}/pair#token="*) ok "mints a pairing link over HTTP" ;;
+  *) no "mints a pairing link over HTTP"; printf '%s\n' "$setup_pair" | head -3 ;;
+esac
+check "the minted link is live on the running server" \
+  "docker exec -u t3 $NAME t3 auth pairing list --json 2>/dev/null | grep -q orchestration:operate"
+rm -f "$SETUP_JAR"
+
 printf '\nStartup pairing link\n'
 docker rm -f "${NAME}-boot" >/dev/null 2>&1 || true
 docker run -d --name "${NAME}-boot" \

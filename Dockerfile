@@ -93,10 +93,10 @@ FROM base AS slim
 
 # Pinned so a rebuild is reproducible. `scripts/bump-versions.sh` refreshes them.
 ARG T3_VERSION=0.0.40
-ARG CLAUDE_CODE_VERSION=2.1.263
+ARG CLAUDE_CODE_VERSION=2.1.266
 ARG CODEX_VERSION=0.153.4
-ARG OPENCODE_VERSION=1.18.29
-ARG GROK_VERSION=1.0.13
+ARG OPENCODE_VERSION=1.18.30
+ARG GROK_VERSION=1.0.24
 
 # node-pty has no Linux prebuilds and compiles here; build-essential and
 # python3 (installed above) are what make that work.

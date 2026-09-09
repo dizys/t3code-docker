@@ -103,6 +103,13 @@ phone in your hand; where the CLI wants the code pasted back, a field appears
 for it. Nothing is typed into a terminal, and the page never becomes one — it
 runs the CLI and reads what it prints.
 
+The signed-in badge asks each CLI (`claude auth status`, `codex login status`,
+`cursor-agent status`) rather than looking for a credentials file, so a
+credential that never touches disk still reads correctly — `ANTHROPIC_API_KEY`
+and `CLAUDE_CODE_OAUTH_TOKEN` in the container environment both count, which is
+what T3 Code itself honours. Grok has no status command, so it reports
+"Sign-in state not readable" rather than guessing.
+
 You can still use T3 Code's own setup flow instead, which opens a terminal on
 this machine with the command ready to run. Both write to the same place. Revoking a client's session drops that device; it does
 not touch your threads, projects or provider logins.

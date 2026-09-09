@@ -23,7 +23,7 @@ retry() { local n=$1; shift; local i; for i in $(seq 1 "$n"); do
 
 STATE_MOUNT=""
 cleanup() {
-  docker rm -f "$NAME" "${NAME}-mount" "${NAME}-boot" "${NAME}-anon" >/dev/null 2>&1 || true
+  docker rm -f "$NAME" "${NAME}-mount" "${NAME}-boot" "${NAME}-anon" "${NAME}-env" >/dev/null 2>&1 || true
   if [ -n "$STATE_MOUNT" ]; then
     sudo rm -rf "$STATE_MOUNT" 2>/dev/null || rm -rf "$STATE_MOUNT" 2>/dev/null || true
   fi
@@ -231,6 +231,42 @@ check "an API key is written for OpenCode" opencode_key_stored
 
 check "an unknown agent is refused" \
   "auth_post '{\"agent\":\"bogus\",\"key\":\"x\"}' /auth/apikey | grep -q error"
+
+# The panel used to decide this from a credentials file on disk, which misses
+# every credential that never lands there. T3 Code honours ANTHROPIC_API_KEY and
+# CLAUDE_CODE_OAUTH_TOKEN, so a container holding one showed as authenticated in
+# T3 Code and "Not signed in" here. Ask each CLI instead, and assert both
+# directions: the reading has to change when the credential appears, or it is
+# not reading anything.
+setup_status() { docker exec "$1" sh -c \
+  "curl -sS --max-time 20 -b /tmp/envjar http://127.0.0.1:3774/status"; }
+
+env_token_reads_as_signed_in() {
+  docker rm -f "${NAME}-env" >/dev/null 2>&1 || true
+  docker run -d --name "${NAME}-env" -e T3_SETUP_KEY=envkey \
+    -e CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-smoke "$IMAGE" >/dev/null
+  retry 25 "docker exec ${NAME}-env sh -c \"curl -sS --max-time 5 -c /tmp/envjar \
+    -d 'key=envkey' -o /dev/null http://127.0.0.1:3774/login && \
+    curl -fsS --max-time 20 -b /tmp/envjar http://127.0.0.1:3774/status | grep -q harnesses\"" || return 1
+  setup_status "${NAME}-env" | python3 -c '
+import json, sys
+h = {a["id"]: a for a in json.load(sys.stdin)["harnesses"]}
+sys.exit(0 if h["claude"]["signedIn"] is True else 1)'
+}
+check "an env-var Claude credential reads as signed in" env_token_reads_as_signed_in
+docker rm -f "${NAME}-env" >/dev/null 2>&1 || true
+
+# Reading it correctly once is not enough: a cached verdict would keep saying
+# "not signed in" straight after a key is stored, which is exactly when someone
+# is looking at the panel.
+key_flips_signed_in() {
+  docker exec "$NAME" sh -c \
+    "curl -sS --max-time 20 -b /tmp/jar http://127.0.0.1:3774/status" | python3 -c '
+import json, sys
+h = {a["id"]: a for a in json.load(sys.stdin)["harnesses"]}
+sys.exit(0 if h["codex"]["signedIn"] is True and h["claude"]["signedIn"] is False else 1)'
+}
+check "a stored key flips the panel without waiting for a cache" key_flips_signed_in
 
 # Claude renders its URL as an OSC-8 hyperlink wrapped over several lines;
 # scraping the visible text yields a truncated URL missing the PKCE challenge

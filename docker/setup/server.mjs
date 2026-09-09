@@ -77,29 +77,83 @@ const which = async (bin) => {
   }
 };
 
+// Ask each CLI what it thinks rather than guessing from a file on disk. A
+// credentials file is only one of the ways these tools are authenticated -
+// ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN leave nothing on disk at all,
+// and T3 Code honours those, which is why the two screens used to disagree.
 const HARNESSES = [
-  { id: "claude", name: "Claude Code", bin: "claude", cred: `${process.env.HOME}/.claude/.credentials.json` },
-  { id: "codex", name: "Codex", bin: "codex", cred: `${process.env.HOME}/.codex/auth.json` },
-  { id: "opencode", name: "OpenCode", bin: "opencode", cred: `${process.env.HOME}/.local/share/opencode/auth.json` },
-  { id: "cursor", name: "Cursor", bin: "cursor-agent", cred: null },
+  { id: "claude", name: "Claude Code", bin: "claude",
+    probe: ["claude", "auth", "status", "--json"],
+    reads: ({ stdout }) => JSON.parse(stdout).loggedIn === true },
+  { id: "codex", name: "Codex", bin: "codex",
+    // Codex prints both verdicts on stderr, and exits 1 for "Not logged in".
+    probe: ["codex", "login", "status"],
+    reads: ({ stdout, stderr }) => /^logged in/i.test((stderr + stdout).trim()) },
+  { id: "opencode", name: "OpenCode", bin: "opencode",
+    cred: `${process.env.HOME}/.local/share/opencode/auth.json` },
+  { id: "cursor", name: "Cursor", bin: "cursor-agent",
+    probe: ["cursor-agent", "status", "--format", "json"],
+    reads: ({ stdout }) => JSON.parse(stdout).isAuthenticated === true },
+  // Grok has no status command; it only reports through the login screen.
   { id: "grok", name: "Grok Build", bin: "grok", cred: null },
 ];
 
-const status = async () => {
-  const { existsSync } = await import("node:fs");
-  const harnesses = [];
-  for (const h of HARNESSES) {
+// Probing spawns a process per agent, so cache briefly: the page polls status
+// every 15s and several browsers may watch at once. Anything that changes a
+// sign-in clears this, so the panel never shows a stale verdict after acting.
+let probeCache = { at: 0, value: null };
+const PROBE_TTL_MS = 10_000;
+const forgetSignInState = () => { probeCache = { at: 0, value: null }; };
+
+const signedInState = async (h) => {
+  if (!h.probe) {
+    const { existsSync } = await import("node:fs");
+    return h.cred ? existsSync(h.cred) : null;
+  }
+  const [bin, ...args] = h.probe;
+  let out;
+  try {
+    // A hung CLI must not hang the status endpoint.
+    out = await run(bin, args, { timeout: 5000, maxBuffer: 1024 * 1024 });
+  } catch (error) {
+    // Signed out is how these tools spend most of their life, and both Claude
+    // and Codex report it with exit 1 while still printing the answer - so
+    // read the output before calling the probe failed. A missing binary or a
+    // timeout leaves nothing to read and stays unknown.
+    out = { stdout: error?.stdout ?? "", stderr: error?.stderr ?? "" };
+    if ((out.stdout + out.stderr).trim() === "") return null;
+  }
+  try {
+    return h.reads(out);
+  } catch {
+    // Unparseable output is not evidence of being signed out; null renders as
+    // "not readable", which is honest.
+    return null;
+  }
+};
+
+const harnessStatus = async () => {
+  if (probeCache.value && Date.now() - probeCache.at < PROBE_TTL_MS) return probeCache.value;
+  // In parallel: serially these add up to seconds, and the slowest alone is
+  // most of the wait.
+  const value = await Promise.all(HARNESSES.map(async (h) => {
     const installed = await which(h.bin);
-    harnesses.push({
+    return {
       id: h.id,
       name: h.name,
       installed,
-      signedIn: h.cred ? existsSync(h.cred) : null,
+      signedIn: installed ? await signedInState(h) : null,
       canSignIn: Boolean(AGENTS[h.id]?.signin),
       canSetKey: Boolean(AGENTS[h.id]?.apiKey),
       keyKind: AGENTS[h.id]?.apiKey?.kind ?? null,
-    });
-  }
+    };
+  }));
+  probeCache = { at: Date.now(), value };
+  return value;
+};
+
+const status = async () => {
+  const harnesses = await harnessStatus();
   return {
     server: await health(),
     publicUrl: PUBLIC_URL || null,
@@ -254,6 +308,8 @@ const startSignin = (agentId) => {
   child.stderr.on("data", absorb);
   child.on("error", (err) => { session.state = "failed"; session.error = String(err.message); });
   child.on("close", (code) => {
+    // Either way the CLI may have written credentials, so re-probe next time.
+    forgetSignInState();
     if (session.state === "cancelled") return;
     session.state = code === 0 ? "done" : "failed";
     if (code !== 0 && !session.error) {
@@ -297,6 +353,7 @@ const setApiKey = async (agentId, key, providerId) => {
         code === 0 ? resolve() : reject(new Error(stripAnsi(out).trim().slice(-200) || "login failed")));
       child.stdin.end(`${key}\n`);
     });
+    forgetSignInState();
     return { ok: true };
   }
 
@@ -311,6 +368,7 @@ const setApiKey = async (agentId, key, providerId) => {
     try { current = JSON.parse(await readFile(`${dir}/auth.json`, "utf8")); } catch {}
     current[providerId] = { type: "api", key };
     await writeFile(`${dir}/auth.json`, JSON.stringify(current, null, 2), { mode: 0o600 });
+    forgetSignInState();
     return { ok: true };
   }
   throw new Error("unsupported");

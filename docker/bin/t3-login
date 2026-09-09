@@ -3,7 +3,10 @@
 #
 # `docker exec` runs as root, and a harness signed in as root writes its
 # credentials to /root - where T3 Code (running as t3) will never find them.
-# This runs the login as t3 so the credentials land on the persisted volume.
+# `t3 connect` is worse: it writes into the state directory itself, so running
+# it as root can leave root-owned files (SQLite's -wal and -shm among them)
+# that the server, running as t3, then cannot write.
+# This runs the login as t3 so everything lands where the server expects it.
 set -euo pipefail
 
 if [ "$(id -u)" -eq 0 ] && command -v gosu >/dev/null 2>&1 && id t3 >/dev/null 2>&1; then
@@ -19,9 +22,14 @@ Usage: t3-login <harness>
   opencode   OpenCode           -> opencode auth login
   cursor     Cursor CLI         -> agent login
   grok       Grok Build         -> grok login
+  connect    T3 Connect         -> t3 connect
 
 Run this with a TTY:  docker compose exec -it t3code t3-login claude
 Then enable the provider in T3 Code under Settings > Providers.
+
+`connect` authorizes this environment for T3 Connect. It does not start or
+disturb the running server - the link takes effect on the next start, so
+restart the container afterwards.
 USAGE
 }
 
@@ -32,6 +40,7 @@ case "$harness" in
   opencode) cmd=(opencode auth login) ;;
   cursor)   cmd=(agent login) ;;
   grok)     cmd=(grok login) ;;
+  connect)  cmd=(t3 connect) ;;
   -h|--help|"") usage; [ -n "$harness" ] && exit 0 || exit 2 ;;
   *) printf 't3-login: unknown harness %s\n\n' "$harness" >&2; usage >&2; exit 2 ;;
 esac

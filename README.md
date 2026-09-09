@@ -124,11 +124,19 @@ docker compose --profile tls up -d
 This is also what the hosted web app at [app.t3.codes](https://app.t3.codes)
 needs — it connects straight to your server, over HTTPS only.
 
-**T3 Connect.** Sign the machine in and let T3's relay handle reachability:
+**T3 Connect.** Sign the machine in and let T3's relay handle reachability.
+Devices then attach by account rather than by redeeming a pairing token, and
+Connect renews their credentials, so you are not re-pairing every 30 days:
 
 ```bash
-docker compose exec -it t3code t3 connect
+docker compose exec -it t3code t3-login connect
 ```
+
+This authorizes the environment; it does not start or disturb the running
+server, and the link takes effect **on the next start** — so restart the
+container afterwards. Use `t3-login connect` rather than `t3 connect` directly:
+`docker exec` lands as root, and Connect writes into the state directory, where
+root-owned files would leave the server unable to write.
 
 **Tailscale.** Run Tailscale on the host and set `T3_PUBLIC_URL` to the tailnet
 name. (`t3 serve --tailscale-serve` wants `tailscaled` inside the container;

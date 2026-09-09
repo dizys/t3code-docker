@@ -82,8 +82,29 @@ The page also shows whether the server is healthy, whether `T3_PUBLIC_URL` is
 set, and which agents are signed in.
 
 Beyond pairing it is a small management surface: connected clients with a
-**Revoke** button each, outstanding unredeemed links with the same, and the
-environment status above. Revoking a client's session drops that device; it does
+**Revoke** button each, outstanding unredeemed links with the same, the
+environment status, and an **Agents** card that signs your coding agents in.
+
+### Signing agents in from the page
+
+Each agent gets the actions it actually supports, established by running the
+CLIs rather than reading about them:
+
+| Agent | Sign in | API key |
+| --- | --- | --- |
+| Claude Code | `setup-token` — shows a URL, takes the code back | — |
+| Codex | browser flow | stored via `login --with-api-key` |
+| OpenCode | — | written to its `auth.json`, per provider |
+| Cursor | browser flow | — |
+| Grok Build | device code — URL plus a code to confirm | — |
+
+**Sign in** shows the URL as a link and a QR code, so you can approve it on the
+phone in your hand; where the CLI wants the code pasted back, a field appears
+for it. Nothing is typed into a terminal, and the page never becomes one — it
+runs the CLI and reads what it prints.
+
+You can still use T3 Code's own setup flow instead, which opens a terminal on
+this machine with the command ready to run. Both write to the same place. Revoking a client's session drops that device; it does
 not touch your threads, projects or provider logins.
 
 `T3_SETUP_ENABLED=0` turns it off once you are set up.

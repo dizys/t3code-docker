@@ -95,6 +95,9 @@ const status = async () => {
       name: h.name,
       installed,
       signedIn: h.cred ? existsSync(h.cred) : null,
+      canSignIn: Boolean(AGENTS[h.id]?.signin),
+      canSetKey: Boolean(AGENTS[h.id]?.apiKey),
+      keyKind: AGENTS[h.id]?.apiKey?.kind ?? null,
     });
   }
   return {
@@ -144,6 +147,170 @@ const mintPairing = async ({ ttl, label }) => {
     qr = null;
   }
   return { ...issued, qr };
+};
+
+
+// --- agent authentication ---------------------------------------------------
+//
+// Every one of these CLIs has a headless path, established by running them:
+//   grok    login --device-auth   prints a URL and a code, then polls. No input.
+//   cursor  login (NO_OPEN_BROWSER) prints a URL, then polls. No input.
+//   claude  setup-token           prints a URL, then waits for a pasted code.
+//   codex   login --with-api-key  reads the key from stdin. No browser.
+//   opencode                      stores credentials in a JSON file we can write.
+//
+// The browser flows are TUIs, so they are run under `script` for a pty and
+// their output is stripped of escapes before anything is scraped out of it.
+import { spawn } from "node:child_process";
+import { writeFile, mkdir, readFile } from "node:fs/promises";
+
+const AGENTS = {
+  claude: { name: "Claude Code",
+    signin: { argv: ["claude", "setup-token"], pty: true, expectsCode: true } },
+  codex: { name: "Codex",
+    apiKey: { kind: "stdin", argv: ["codex", "login", "--with-api-key"] },
+    signin: { argv: ["codex", "login"], pty: true } },
+  grok: { name: "Grok Build",
+    signin: { argv: ["grok", "login", "--device-auth"], pty: false } },
+  cursor: { name: "Cursor",
+    signin: { argv: ["cursor-agent", "login"], pty: true, env: { NO_OPEN_BROWSER: "1" } } },
+  opencode: { name: "OpenCode", apiKey: { kind: "opencode" } },
+};
+
+const stripAnsi = (text) =>
+  text
+    .replace(/\u001b\]8;[^\u0007\u001b]*(\u0007|\u001b\\)/g, "")  // OSC-8 hyperlinks
+    .replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, "")                  // CSI
+    .replace(/\u001b[()][A-Za-z0-9]/g, "")
+    .replace(/\u001b[<-?]/g, "");
+
+/**
+ * Claude renders its sign-in URL as an OSC-8 hyperlink, wrapped across several
+ * lines. The visible text is therefore broken into pieces and scraping it
+ * yields a truncated URL missing every parameter after client_id - but the
+ * escape sequence carries the whole thing as its target, so read that first
+ * and only fall back to plain text for the CLIs that print one.
+ */
+const OSC8 = /\u001b\]8;[^;]*;([^\u0007\u001b]+)(?:\u0007|\u001b\\)/g;
+
+const findUrl = (raw, stripped) => {
+  const targets = [...raw.matchAll(OSC8)].map((m) => m[1]).filter((u) => /^https?:/.test(u));
+  const plain = stripped.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
+  const all = [...targets, ...plain];
+  if (all.length === 0) return null;
+  return all.sort((a, b) => b.length - a.length)[0];
+};
+const findCode = (text) => (text.match(/\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/) ?? [null])[0];
+
+const sessions = new Map();
+const SESSION_TTL_MS = 15 * 60 * 1000;
+
+const startSignin = (agentId) => {
+  const agent = AGENTS[agentId];
+  if (!agent?.signin) throw new Error(`${agentId} has no browser sign-in`);
+  const { argv, pty, env, expectsCode } = agent.signin;
+
+  // argv is fixed per agent, never built from request input, so the shell that
+  // `script` needs cannot be steered from outside.
+  const [cmd, args] = pty
+    ? ["script", ["-qec", argv.join(" "), "/dev/null"]]
+    : [argv[0], argv.slice(1)];
+
+  const child = spawn(cmd, args, {
+    env: { ...process.env, ...(env ?? {}), NO_COLOR: "1" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  const id = randomBytes(9).toString("hex");
+  const session = {
+    id, agentId, state: "starting", url: null, code: null,
+    needsCode: Boolean(expectsCode), output: "", error: null, child,
+    startedAt: Date.now(),
+  };
+
+  // Keep a window of the raw stream too: the escape sequences carry the real
+  // hyperlink targets, and stripping them first loses the URL.
+  let raw = "";
+  const absorb = (chunk) => {
+    raw = (raw + String(chunk)).slice(-20000);
+    session.output = (session.output + stripAnsi(String(chunk))).slice(-8000);
+    if (!session.url) {
+      session.url = findUrl(raw, session.output);
+      if (session.url) {
+        run("qrencode", ["-t", "SVG", "-m", "1", "-o", "-", session.url])
+          .then(({ stdout }) => { session.qr = stdout; })
+          .catch(() => {});
+      }
+    }
+    session.code ??= findCode(session.output);
+    if (session.url && session.state === "starting") {
+      session.state = session.needsCode ? "awaiting-code" : "awaiting-browser";
+    }
+  };
+  child.stdout.on("data", absorb);
+  child.stderr.on("data", absorb);
+  child.on("error", (err) => { session.state = "failed"; session.error = String(err.message); });
+  child.on("close", (code) => {
+    if (session.state === "cancelled") return;
+    session.state = code === 0 ? "done" : "failed";
+    if (code !== 0 && !session.error) {
+      session.error = session.output.trim().split("\n").slice(-3).join(" ").slice(0, 300)
+        || `exited with code ${code}`;
+    }
+  });
+
+  sessions.set(id, session);
+  setTimeout(() => {
+    if (sessions.get(id)?.state?.startsWith("awaiting")) {
+      try { session.child.kill(); } catch {}
+      session.state = "failed";
+      session.error = "Timed out waiting for the browser step.";
+    }
+  }, SESSION_TTL_MS).unref?.();
+  return session;
+};
+
+const publicSession = (s) => ({
+  id: s.id, agent: s.agentId, state: s.state, url: s.url, code: s.code, qr: s.qr ?? null,
+  needsCode: s.needsCode, error: s.error,
+  tail: s.output.trim().split("\n").slice(-4).join("\n"),
+});
+
+const setApiKey = async (agentId, key, providerId) => {
+  const agent = AGENTS[agentId];
+  if (!agent?.apiKey) throw new Error(`${agentId} does not take a stored API key`);
+  if (!key || key.length > 500) throw new Error("Enter a key");
+
+  if (agent.apiKey.kind === "stdin") {
+    await new Promise((resolve, reject) => {
+      const child = spawn(agent.apiKey.argv[0], agent.apiKey.argv.slice(1), {
+        env: process.env, stdio: ["pipe", "pipe", "pipe"],
+      });
+      let out = "";
+      child.stdout.on("data", (c) => { out += c; });
+      child.stderr.on("data", (c) => { out += c; });
+      child.on("error", reject);
+      child.on("close", (code) =>
+        code === 0 ? resolve() : reject(new Error(stripAnsi(out).trim().slice(-200) || "login failed")));
+      child.stdin.end(`${key}\n`);
+    });
+    return { ok: true };
+  }
+
+  // OpenCode reads credentials from a file, which is far steadier than driving
+  // its picker; verified by writing one and having `opencode auth list` see it.
+  if (agent.apiKey.kind === "opencode") {
+    if (!/^[a-z0-9-]{1,40}$/.test(String(providerId ?? "")))
+      throw new Error("Choose a provider (e.g. anthropic, openai, deepseek)");
+    const dir = `${process.env.HOME}/.local/share/opencode`;
+    await mkdir(dir, { recursive: true });
+    let current = {};
+    try { current = JSON.parse(await readFile(`${dir}/auth.json`, "utf8")); } catch {}
+    current[providerId] = { type: "api", key };
+    await writeFile(`${dir}/auth.json`, JSON.stringify(current, null, 2), { mode: 0o600 });
+    return { ok: true };
+  }
+  throw new Error("unsupported");
 };
 
 const send = (res, code, body, headers = {}) => {
@@ -314,10 +481,10 @@ ${
   <div class="skeleton" style="width:50%"></div></div>
 </div>
 
-<div class="card"><h2>Signing in your agents</h2>
-  <p class="hint">Do this inside T3 Code once you are paired &mdash; its setup flow opens
-  a terminal on this machine with the right command ready to run. You do not need a
-  shell in the container.</p>
+<div class="card"><h2>Agents</h2>
+  <p class="hint">Sign in here, or set an API key. Credentials are stored on the
+  state volume, so they survive the container being recreated.</p>
+  <div id="agents"><div class="skeleton" style="width:55%"></div></div>
 </div>`
     : `<div class="login"><div class="card">
   <h2>Setup key</h2>
@@ -402,16 +569,105 @@ if (document.getElementById('mint')) {
       : '<span class="bad"><span class="dot"></span>' + esc(s.server.detail) + '</span>']);
     rows.push(['Public URL', s.publicUrl ? esc(s.publicUrl)
       : '<span class="warn">Not set</span>']);
-    for (const h of s.harnesses) {
-      rows.push([esc(h.name), !h.installed ? '<span class="bad">Not installed</span>'
-        : h.signedIn === true ? '<span class="ok">Signed in</span>'
-        : h.signedIn === false ? '<span class="warn">Not signed in</span>'
-        : '<span class="meta">Installed</span>']);
-    }
     $('status').innerHTML = '<dl>' + rows.map(([k, v]) =>
       '<div class="kv"><dt>' + k + '</dt><dd>' + v + '</dd></div>').join('') + '</dl>' +
       (s.publicUrl ? '' : '<div class="notice warn">Without T3_PUBLIC_URL, pairing links ' +
         "point at this container's own address and no device can reach them.</div>");
+
+    $('agents').innerHTML = '<div class="rows">' + s.harnesses.map((h) => {
+      const status = !h.installed ? '<span class="bad">Not installed</span>'
+        : h.signedIn === true ? '<span class="ok"><span class="dot"></span>Signed in</span>'
+        : h.signedIn === false ? '<span class="warn">Not signed in</span>'
+        : '<span class="meta">Sign-in state not readable</span>';
+      const actions = !h.installed ? '' :
+        (h.canSignIn ? '<button class="ghost tiny signin" data-agent="' + h.id + '">Sign in</button>' : '') +
+        (h.canSetKey ? '<button class="ghost tiny setkey" data-agent="' + h.id +
+           '" data-kind="' + esc(h.keyKind) + '">API key</button>' : '');
+      return '<div class="row"><div class="main"><div class="name">' + esc(h.name) +
+        '</div><div class="meta">' + status + '</div>' +
+        '<div id="agent-' + h.id + '"></div></div>' +
+        '<div style="display:flex;gap:6px">' + actions + '</div></div>';
+    }).join('') + '</div>';
+
+    for (const b of document.querySelectorAll('.setkey')) {
+      b.onclick = () => {
+        const agent = b.dataset.agent;
+        const providerField = b.dataset.kind === 'opencode'
+          ? '<input class="pv" placeholder="Provider id, e.g. deepseek" style="flex:1 1 130px" />' : '';
+        $('agent-' + agent).innerHTML =
+          '<div class="controls" style="margin-top:8px">' + providerField +
+          '<input class="kv-key" type="password" placeholder="API key" style="flex:1 1 150px" />' +
+          '<button class="tiny save">Save</button></div><div class="out"></div>';
+        const box = $('agent-' + agent);
+        box.querySelector('.save').onclick = async (e) => {
+          e.target.disabled = true;
+          const body = {agent, key: box.querySelector('.kv-key').value};
+          const pv = box.querySelector('.pv');
+          if (pv) body.provider = pv.value.trim();
+          const res = await fetch(BASE + '/auth/apikey', {method: 'POST',
+            headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
+          const data = await res.json();
+          box.querySelector('.out').innerHTML = res.ok
+            ? '<div class="notice" style="background:var(--muted)">Saved.</div>'
+            : '<div class="notice err">' + esc(data.error) + '</div>';
+          e.target.disabled = false;
+          if (res.ok) setTimeout(load, 600);
+        };
+      };
+    }
+
+    for (const b of document.querySelectorAll('.signin')) {
+      b.onclick = async () => {
+        const agent = b.dataset.agent;
+        b.disabled = true;
+        const box = $('agent-' + agent);
+        box.innerHTML = '<div class="skeleton" style="width:70%"></div>';
+        const res = await fetch(BASE + '/auth/signin', {method: 'POST',
+          headers: {'content-type': 'application/json'}, body: JSON.stringify({agent})});
+        const started = await res.json();
+        if (!res.ok) {
+          box.innerHTML = '<div class="notice err">' + esc(started.error) + '</div>';
+          b.disabled = false; return;
+        }
+        const poll = async () => {
+          const st = await (await fetch(BASE + '/auth/session?id=' + started.id)).json();
+          if (st.state === 'done') {
+            box.innerHTML = '<div class="notice" style="background:var(--muted)">Signed in.</div>';
+            b.disabled = false; load(); return;
+          }
+          if (st.state === 'failed' || st.state === 'cancelled') {
+            box.innerHTML = '<div class="notice err">' + esc(st.error || 'Sign-in stopped') + '</div>';
+            b.disabled = false; return;
+          }
+          if (st.url) {
+            box.innerHTML =
+              '<p class="meta" style="margin:8px 0 0">Open this on any device and approve:</p>' +
+              '<div class="link">' + esc(st.url) + '</div>' +
+              '<div class="controls"><a href="' + esc(st.url) + '" target="_blank" rel="noopener">' +
+              '<button class="ghost tiny">Open</button></a>' +
+              (st.code ? '<span class="meta">Confirm code <strong>' + esc(st.code) + '</strong></span>' : '') +
+              '<button class="ghost tiny cancel">Cancel</button></div>' +
+              (st.qr ? '<div class="qr">' + st.qr + '</div>' : '') +
+              (st.needsCode ? '<div class="controls" style="margin-top:8px">' +
+                 '<input class="codein" placeholder="Paste the code from your browser" style="flex:1 1 180px" />' +
+                 '<button class="tiny sendcode">Submit</button></div>' : '');
+            const send = box.querySelector('.sendcode');
+            if (send) send.onclick = async () => {
+              send.disabled = true;
+              await fetch(BASE + '/auth/code', {method: 'POST',
+                headers: {'content-type': 'application/json'},
+                body: JSON.stringify({id: started.id, code: box.querySelector('.codein').value})});
+            };
+            box.querySelector('.cancel').onclick = async () => {
+              await fetch(BASE + '/auth/cancel', {method: 'POST',
+                headers: {'content-type': 'application/json'}, body: JSON.stringify({id: started.id})});
+            };
+          }
+          setTimeout(poll, 2000);
+        };
+        poll();
+      };
+    }
 
     for (const b of document.querySelectorAll('.revoke')) {
       b.onclick = async () => {
@@ -427,7 +683,8 @@ if (document.getElementById('mint')) {
 }
 </script></body></html>`;
 
-const ROUTES = ["/login", "/status", "/pair", "/revoke"];
+const ROUTES = ["/login", "/status", "/pair", "/revoke",
+  "/auth/apikey", "/auth/signin", "/auth/session", "/auth/code", "/auth/cancel"];
 
 /**
  * Work out which prefix this request arrived under, and which route it wants.
@@ -488,6 +745,53 @@ const server = createServer(async (req, res) => {
     }
 
     if (route === "/status") return sendJson(res, 200, await status());
+
+    if (req.method === "POST" && route === "/auth/apikey") {
+      try {
+        const input = JSON.parse((await readBody(req)) || "{}");
+        return sendJson(res, 200, await setApiKey(input.agent, input.key, input.provider));
+      } catch (error) {
+        return sendJson(res, 400, { error: String(error?.message ?? error) });
+      }
+    }
+
+    if (req.method === "POST" && route === "/auth/signin") {
+      try {
+        const input = JSON.parse((await readBody(req)) || "{}");
+        return sendJson(res, 200, publicSession(startSignin(input.agent)));
+      } catch (error) {
+        return sendJson(res, 400, { error: String(error?.message ?? error) });
+      }
+    }
+
+    if (route === "/auth/session") {
+      const session = sessions.get(new URL(req.url ?? "/", "http://x").searchParams.get("id"));
+      if (!session) return sendJson(res, 404, { error: "no such session" });
+      return sendJson(res, 200, publicSession(session));
+    }
+
+    if (req.method === "POST" && route === "/auth/code") {
+      const input = JSON.parse((await readBody(req)) || "{}");
+      const session = sessions.get(input.id);
+      if (!session) return sendJson(res, 404, { error: "no such session" });
+      try {
+        session.child.stdin.write(`${String(input.code ?? "").trim()}\n`);
+        session.state = "submitted";
+        return sendJson(res, 200, publicSession(session));
+      } catch (error) {
+        return sendJson(res, 400, { error: String(error?.message ?? error) });
+      }
+    }
+
+    if (req.method === "POST" && route === "/auth/cancel") {
+      const input = JSON.parse((await readBody(req)) || "{}");
+      const session = sessions.get(input.id);
+      if (session) {
+        session.state = "cancelled";
+        try { session.child.kill(); } catch {}
+      }
+      return sendJson(res, 200, { ok: true });
+    }
 
     if (req.method === "POST" && route === "/revoke") {
       try {

@@ -189,6 +189,50 @@ esac
 check "the minted link is live on the running server" \
   "docker exec -u t3 $NAME t3 auth pairing list --json 2>/dev/null | grep -q orchestration:operate"
 
+# Agent authentication, driven the way the page drives it.
+printf '\nAgent authentication\n'
+auth_post() { docker exec "$NAME" sh -c "curl -sS -b /tmp/jar -H 'content-type: application/json' -d '$1' http://127.0.0.1:3774$2"; }
+
+codex_key_stored() {
+  auth_post '{"agent":"codex","key":"sk-smoke-test-key"}' /auth/apikey | grep -q '"ok":true' &&
+  docker exec -u t3 "$NAME" codex login status 2>&1 | grep -q "API key"
+}
+check "an API key signs Codex in" codex_key_stored
+
+opencode_key_stored() {
+  auth_post '{"agent":"opencode","provider":"deepseek","key":"sk-smoke"}' /auth/apikey | grep -q '"ok":true' &&
+  docker exec -u t3 "$NAME" sh -c 'grep -q deepseek ~/.local/share/opencode/auth.json'
+}
+check "an API key is written for OpenCode" opencode_key_stored
+
+check "an unknown agent is refused" \
+  "auth_post '{\"agent\":\"bogus\",\"key\":\"x\"}' /auth/apikey | grep -q error"
+
+# Claude renders its URL as an OSC-8 hyperlink wrapped over several lines;
+# scraping the visible text yields a truncated URL missing the PKCE challenge
+# and state, which would send you to a sign-in page that cannot complete.
+claude_url_complete() {
+  local id
+  id="$(auth_post '{"agent":"claude"}' /auth/signin | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+  [ -n "$id" ] || return 1
+  sleep 14
+  docker exec "$NAME" sh -c "curl -sS -b /tmp/jar 'http://127.0.0.1:3774/auth/session?id=$id'" \
+    | grep -q 'code_challenge' &&
+  docker exec "$NAME" sh -c "curl -sS -b /tmp/jar 'http://127.0.0.1:3774/auth/session?id=$id'" \
+    | grep -q '"state":"awaiting-code"'
+}
+check "Claude sign-in captures a complete OAuth URL" claude_url_complete
+
+grok_device_code() {
+  local id
+  id="$(auth_post '{"agent":"grok"}' /auth/signin | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+  [ -n "$id" ] || return 1
+  sleep 12
+  docker exec "$NAME" sh -c "curl -sS -b /tmp/jar 'http://127.0.0.1:3774/auth/session?id=$id'" \
+    | grep -q 'accounts.x.ai'
+}
+check "Grok sign-in captures a device URL" grok_device_code
+
 # The page's script is built inside a template literal, so an escape can be
 # eaten on the way out and leave the browser with JavaScript that does not
 # parse - which looks like a page that simply never loads its data. Written as

@@ -121,8 +121,13 @@ if [ "$T3_PRINT_PAIRING_ON_START" = "1" ]; then
   # after the listener opens.
   (
     for _ in $(seq 1 60); do
-      if curl -fsS "http://127.0.0.1:${T3CODE_PORT}/.well-known/t3/environment" \
+      # --max-time is load-bearing: the server accepts connections before it
+      # answers, so a probe fired during startup hangs indefinitely and this
+      # loop never reaches a second iteration.
+      if curl -fsS --max-time 3 \
+           "http://127.0.0.1:${T3CODE_PORT}/.well-known/t3/environment" \
            >/dev/null 2>&1; then
+        log "pairing link for this environment (use this one, not the banner):"
         t3-pair || log "could not mint a startup pairing link"
         exit 0
       fi
@@ -138,6 +143,10 @@ if [ -n "${T3_PUBLIC_URL:-}" ]; then
 else
   log "T3_PUBLIC_URL is unset; run 't3-pair --base-url https://your.host' to pair"
 fi
+# The server's own banner follows, advertising its bridge address and a token
+# that lives five minutes. Both are useless from outside the container.
+log "note: the token in the server banner below expires in 5 minutes and is"
+log "      addressed to this container - use t3-pair for a link that lasts"
 
 exec t3 serve \
   --host "$T3CODE_HOST" \

@@ -86,6 +86,30 @@ paste the URL into **Add environment**.
 `t3-pair` reads `T3_PUBLIC_URL`; override per invocation with
 `t3-pair --base-url https://other.host --ttl 7d --label "my phone"`.
 
+**Ignore the server's own startup banner.** It advertises the container's bridge
+address, and its token is issued with a five-minute TTL, so it has almost always
+expired by the time you have a tunnel up. `t3-pair` replaces both.
+
+### Pairing without a shell in the container
+
+If your host panel makes `docker exec` awkward, set `T3_PRINT_PAIRING_ON_START=1`
+alongside `T3_PUBLIC_URL`. Every start then mints a fresh 30-day link and writes
+it to the container log, where any panel's log viewer will show it:
+
+```
+[t3code] pairing link for this environment (use this one, not the banner):
+Pairing URL: https://t3.example.com/pair#token=XZB9QYQQUXFB
+Expires:     2026-10-09T07:36:14.314Z
+```
+
+Set `T3_PAIR_TTL` to change how long those links last. Note that this puts a
+credential in your logs — fine if only you can read them, otherwise pair on
+demand instead.
+
+Pairing is per device and one-time, but you only do it **once per device**: the
+resulting session lives in `state.sqlite` on the `/home/t3` volume, so it
+survives restarts and image upgrades.
+
 ### Getting a public URL
 
 Pick one:
@@ -212,9 +236,11 @@ the only boundary. Some consequences worth being deliberate about:
 
 ## Troubleshooting
 
-**The pairing link does not work.** Check that it uses your public address and
-not `172.x`/`192.0.2.x` — if it does, `T3_PUBLIC_URL` is unset. Links are
-one-time; mint a fresh one per device.
+**The pairing link does not work, or "Invalid pairing token".** Three causes,
+in order of likelihood. The token came from the server's startup banner, which
+expires five minutes after boot — use `t3-pair`. Or the link uses `172.x` /
+`192.0.2.x`, meaning `T3_PUBLIC_URL` is unset. Or the token was already
+redeemed: they are one-time, so mint a fresh one per device.
 
 **A provider is missing in Settings → Providers.** It has to be enabled per
 environment, and signed in on the server. `t3-doctor` shows both.

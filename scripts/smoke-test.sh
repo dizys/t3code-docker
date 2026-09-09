@@ -17,7 +17,7 @@ check() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else no "$1"; fi; }
 
 STATE_MOUNT=""
 cleanup() {
-  docker rm -f "$NAME" "${NAME}-mount" >/dev/null 2>&1 || true
+  docker rm -f "$NAME" "${NAME}-mount" "${NAME}-boot" >/dev/null 2>&1 || true
   if [ -n "$STATE_MOUNT" ]; then
     sudo rm -rf "$STATE_MOUNT" 2>/dev/null || rm -rf "$STATE_MOUNT" 2>/dev/null || true
   fi
@@ -144,6 +144,31 @@ else
   no "root-owned volume mounted at the state dir is adopted"
   docker logs "${NAME}-mount" 2>&1 | tail -15
 fi
+
+# T3_PRINT_PAIRING_ON_START is the only way to pair without a shell in the
+# container, so it has to actually reach the log.
+printf '\nStartup pairing link\n'
+docker rm -f "${NAME}-boot" >/dev/null 2>&1 || true
+docker run -d --name "${NAME}-boot" \
+  -e "T3_PUBLIC_URL=${PUBLIC_URL}" \
+  -e T3_PRINT_PAIRING_ON_START=1 \
+  "$IMAGE" >/dev/null
+boot_ok=0
+for _ in $(seq 1 40); do
+  if docker logs "${NAME}-boot" 2>&1 | grep -q "Pairing URL: ${PUBLIC_URL}/pair#token="; then
+    boot_ok=1
+    break
+  fi
+  [ "$(docker inspect -f '{{.State.Running}}' "${NAME}-boot" 2>/dev/null)" = true ] || break
+  sleep 3
+done
+if [ "$boot_ok" = 1 ]; then
+  ok "T3_PRINT_PAIRING_ON_START logs a usable pairing link"
+else
+  no "T3_PRINT_PAIRING_ON_START logs a usable pairing link"
+  docker logs "${NAME}-boot" 2>&1 | tail -15
+fi
+docker rm -f "${NAME}-boot" >/dev/null 2>&1 || true
 
 printf '\n%d passed, %d failed\n\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

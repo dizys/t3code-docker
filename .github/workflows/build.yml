@@ -55,7 +55,7 @@ jobs:
           load: true
           tags: t3code:${{ matrix.target }}
           cache-from: type=gha,scope=${{ matrix.target }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=min,scope=${{ matrix.target }}
 
       - name: Smoke test
         run: scripts/smoke-test.sh t3code:${{ matrix.target }}
@@ -91,13 +91,18 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
-          flavor: |
-            latest=${{ matrix.target == 'full' }}
-            suffix=${{ matrix.target == 'slim' && '-slim' || '' }},onlatest=false
+          # `flavor: suffix` would apply to every tag, turning the bare `slim`
+          # tag into `slim-slim`. Spell each one out instead.
+          #   full -> :full :latest :1.2.3 :1.2 :1.2.3-full
+          #   slim -> :slim :1.2.3-slim :1.2-slim
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=${{ matrix.target }}
+            type=semver,pattern={{version}},suffix=-${{ matrix.target }}
+            type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.target }}
+            type=raw,value=latest,enable=${{ matrix.target == 'full' }}
+            type=semver,pattern={{version}},enable=${{ matrix.target == 'full' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ matrix.target == 'full' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6

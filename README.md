@@ -234,4 +234,5 @@ pieces are shaped the way they are.
 
 ## License
 
-MIT. T3 Code and the harness CLIs are covered by their own licenses.
+MIT — see [LICENSE](LICENSE). T3 Code and the harness CLIs are covered by their
+own licenses; this repository packages them, it does not relicense them.

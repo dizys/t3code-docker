@@ -15,7 +15,13 @@ ok()   { printf '  \033[32mPASS\033[0m %s\n' "$1"; pass=$((pass+1)); }
 no()   { printf '  \033[31mFAIL\033[0m %s\n' "$1"; fail=$((fail+1)); }
 check() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else no "$1"; fi; }
 
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
+STATE_MOUNT=""
+cleanup() {
+  docker rm -f "$NAME" "${NAME}-mount" >/dev/null 2>&1 || true
+  if [ -n "$STATE_MOUNT" ]; then
+    sudo rm -rf "$STATE_MOUNT" 2>/dev/null || rm -rf "$STATE_MOUNT" 2>/dev/null || true
+  fi
+}
 trap cleanup EXIT
 
 printf '\nSmoke-testing %s\n\n' "$IMAGE"
@@ -115,6 +121,29 @@ check "state dir is owned by the t3 user" \
   "[ \"\$(docker exec $NAME stat -c %U /home/t3/.t3)\" = t3 ]"
 check "root exec does not leave root-owned state" \
   "! docker exec $NAME find /home/t3/.t3 -user root -print -quit | grep -q ."
+
+# A volume mounted directly at the state dir arrives root-owned while its
+# parent still looks correct. The entrypoint has to notice and adopt it, or the
+# server dies on `mkdir userdata` with nothing but an EACCES stack trace.
+STATE_MOUNT="$(mktemp -d)"
+sudo chown 0:0 "$STATE_MOUNT" 2>/dev/null || chown 0:0 "$STATE_MOUNT" 2>/dev/null || true
+docker run -d --name "${NAME}-mount" -v "$STATE_MOUNT:/home/t3/.t3" "$IMAGE" >/dev/null
+mounted_ok=0
+for _ in $(seq 1 40); do
+  if docker exec "${NAME}-mount" curl -fsS --max-time 3 \
+       "http://127.0.0.1:3773/.well-known/t3/environment" >/dev/null 2>&1; then
+    mounted_ok=1
+    break
+  fi
+  [ "$(docker inspect -f '{{.State.Running}}' "${NAME}-mount" 2>/dev/null)" = true ] || break
+  sleep 3
+done
+if [ "$mounted_ok" = 1 ]; then
+  ok "root-owned volume mounted at the state dir is adopted"
+else
+  no "root-owned volume mounted at the state dir is adopted"
+  docker logs "${NAME}-mount" 2>&1 | tail -15
+fi
 
 printf '\n%d passed, %d failed\n\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -225,6 +225,13 @@ build that skipped `build-essential`/`python3` produces this. Rebuild.
 **Files in my repo are owned by the wrong user.** Set `PUID`/`PGID` to `id -u` /
 `id -g` on the host and recreate the container.
 
+**`EACCES: permission denied, mkdir '/home/t3/.t3/userdata'`.** A volume is
+mounted at the state directory and the container could not take ownership of it.
+The container adopts such a mount on startup, but only when it starts as root —
+if your platform forces a `user:` setting, it has no way to, and it will say so
+in the log. Either drop that setting and select the user with `PUID`/`PGID`, or
+`chown` the host directory to that uid before mounting it.
+
 **Chromium crashes.** Give it shared memory: `shm_size: 1gb` (compose already
 does) and keep `--no-sandbox`, which `t3-browser-mcp` passes.
 

@@ -37,13 +37,18 @@ if [ "$(id -u)" -eq 0 ]; then
 
   mkdir -p "$T3CODE_HOME" "$T3_WORKSPACE"
 
-  # A freshly created named volume comes up root-owned; so does ~ after a
-  # remap. Re-owning the home is cheap relative to how confusing a
-  # permission-denied SQLite open is.
-  if [ "$remapped" -eq 1 ] || [ "$(stat -c %u "$T3_HOME")" != "$PUID" ]; then
-    log "taking ownership of ${T3_HOME}"
-    chown -R "$PUID:$PGID" "$T3_HOME"
-  fi
+  # A freshly created volume comes up root-owned; so does ~ after a remap.
+  # Test each directory the server writes rather than inferring from the home
+  # directory's uid: a volume mounted directly at the state dir arrives
+  # root-owned while its parent still looks perfectly correct, and the server
+  # then dies on `mkdir userdata` with nothing but an EACCES stack trace.
+  for dir in "$T3_HOME" "$T3CODE_HOME"; do
+    mkdir -p "$dir"
+    if [ "$remapped" -eq 1 ] || ! gosu "$T3_USER" test -w "$dir"; then
+      log "taking ownership of ${dir}"
+      chown -R "$PUID:$PGID" "$dir"
+    fi
+  done
 
   # /workspace is the user's own tree. Only adopt it when it is empty or
   # already root-owned; never rewrite ownership across somebody's repos.
@@ -71,7 +76,18 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 # --- unprivileged half -------------------------------------------------------
-mkdir -p "$T3CODE_HOME"
+# Reached either by the step-down above, or directly because the container was
+# started with a `user:` setting. In the latter case nothing can fix ownership,
+# so say what is wrong instead of letting the server fail on its first write.
+if ! mkdir -p "$T3CODE_HOME" 2>/dev/null || [ ! -w "$T3CODE_HOME" ]; then
+  log "ERROR: ${T3CODE_HOME} is not writable by uid $(id -u):$(id -g)."
+  log "       A volume is probably mounted there owned by another user."
+  log "       Fix it either way:"
+  log "         - let the container start as root so it can adopt the volume"
+  log "           itself, and select the user with PUID/PGID; or"
+  log "         - chown the host directory to uid ${PUID} before mounting it."
+  exit 1
+fi
 
 if [ "${1:-}" != "t3-serve" ]; then
   exec "$@"

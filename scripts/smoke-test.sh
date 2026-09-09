@@ -169,6 +169,13 @@ case "$setup_pair" in
 esac
 check "the minted link is live on the running server" \
   "docker exec -u t3 $NAME t3 auth pairing list --json 2>/dev/null | grep -q orchestration:operate"
+
+# A proxy routing a path prefix here forwards it intact. Serving the page only
+# at / turned that into a bare "unauthorized", which reads as a wrong password.
+check "serves the page under an unconfigured path prefix" \
+  "docker exec $NAME curl -fsS http://127.0.0.1:3774/__setup | grep -qi '<!doctype html>'"
+check "and its routes work under that prefix" \
+  "docker exec $NAME sh -c \"curl -sS -c /tmp/j2 -d 'key=$SETUP_KEY' -o /dev/null http://127.0.0.1:3774/__setup/login && curl -fsS -b /tmp/j2 http://127.0.0.1:3774/__setup/status | grep -q publicUrl\""
 rm -f "$SETUP_JAR"
 
 printf '\nStartup pairing link\n'

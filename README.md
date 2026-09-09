@@ -90,15 +90,10 @@ not touch your threads, projects or provider logins.
 
 ### Exposing it through one hostname
 
-Two ports normally means two public hostnames. To avoid that, mount the setup UI
-under a path prefix and route by path instead:
-
-```
-T3_SETUP_BASE_PATH=/__setup
-```
-
-Then point one hostname at both services — with Cloudflare Tunnel, two public
-hostname entries on the same domain:
+Two ports normally means two public hostnames. To avoid that, route by path —
+the setup UI works under any prefix without being told about it, since the
+request carries the prefix already. With Cloudflare Tunnel, two public hostname
+entries on the same domain:
 
 | Hostname | Path | Service |
 | --- | --- | --- |
@@ -106,7 +101,9 @@ hostname entries on the same domain:
 | `t3.example.com` | *(none)* | `http://127.0.0.1:3773` |
 
 Order matters: the more specific path rule has to come first. The setup UI is
-then at `https://t3.example.com/__setup`, and T3 Code keeps the root.
+then at `https://t3.example.com/__setup`, and T3 Code keeps the root. No
+container configuration is needed for this; `T3_SETUP_BASE_PATH` exists only to
+pin the prefix explicitly if you want to reject every other path.
 
 Leaving it on a second hostname works just as well, and keeping it off the
 public internet entirely — reachable only over your LAN or tailnet — is the

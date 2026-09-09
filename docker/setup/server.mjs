@@ -170,7 +170,7 @@ const readBody = async (req) => {
   return Buffer.concat(chunks).toString("utf8");
 };
 
-const page = (authed) => `<!doctype html>
+const page = (authed, mount) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>T3 Code setup</title>
@@ -217,7 +217,7 @@ ${
 <p style="margin:0;color:var(--mut)">Do this inside T3 Code once paired — its setup flow opens a terminal
 on this machine with the right command ready to run. You do not need a shell in the container.</p></div>`
     : `<div class="card"><h2>Setup key</h2>
-<form method="POST" action="${BASE_PATH}/login" class="row">
+<form method="POST" action="${mount}/login" class="row">
   <input type="password" name="key" placeholder="T3_SETUP_KEY" autofocus style="flex:1" />
   <button>Unlock</button>
 </form>
@@ -226,7 +226,7 @@ on this machine with the right command ready to run. You do not need a shell in 
 }
 </main>
 <script>
-const BASE = ${JSON.stringify(BASE_PATH)};
+const BASE = ${JSON.stringify(mount)};
 if (document.getElementById('mint')) {
   const out = document.getElementById('out');
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -294,33 +294,59 @@ if (document.getElementById('mint')) {
 }
 </script></body></html>`;
 
+const ROUTES = ["/login", "/status", "/pair", "/revoke"];
+
+/**
+ * Work out which prefix this request arrived under, and which route it wants.
+ *
+ * A reverse proxy that routes by path (a Cloudflare Tunnel sending /__setup*
+ * here, say) forwards the prefix intact. Requiring the operator to also declare
+ * that prefix as an environment variable duplicates knowledge the request
+ * already carries - and getting it wrong produced a bare "unauthorized", which
+ * looks like a password problem rather than a routing one. So infer it, and
+ * keep T3_SETUP_BASE_PATH only as an override.
+ */
+const resolve = (pathname) => {
+  if (BASE_PATH && (pathname === BASE_PATH || pathname.startsWith(`${BASE_PATH}/`))) {
+    return { mount: BASE_PATH, route: pathname.slice(BASE_PATH.length) || "/" };
+  }
+  for (const route of ROUTES) {
+    if (pathname === route) return { mount: "", route };
+    if (pathname.endsWith(route)) {
+      return { mount: pathname.slice(0, -route.length), route };
+    }
+  }
+  // Anything else is a request for the page itself, whatever path it came in on.
+  return { mount: pathname.replace(/\/+$/, ""), route: "/" };
+};
+
 const server = createServer(async (req, res) => {
   const ip = req.socket.remoteAddress ?? "?";
   const raw = new URL(req.url ?? "/", "http://localhost");
-  // Strip the mount prefix so the app can be served from any path.
-  let path = raw.pathname;
-  if (BASE_PATH && (path === BASE_PATH || path.startsWith(`${BASE_PATH}/`))) {
-    path = path.slice(BASE_PATH.length) || "/";
-  }
-  const url = { pathname: path };
+  const { mount, route } = resolve(raw.pathname);
   const authed = keyMatches(cookieFrom(req));
 
   try {
-    if (req.method === "POST" && url.pathname === "/login") {
+    // Don't answer asset probes with the page.
+    if (route === "/" && /\.[a-z0-9]{1,5}$/i.test(raw.pathname)) {
+      return sendJson(res, 404, { error: "not found" });
+    }
+
+    if (req.method === "POST" && route === "/login") {
       const body = new URLSearchParams(await readBody(req));
       if (!keyMatches(body.get("key"))) {
         await throttle(ip);
-        return send(res, 303, "", { location: `${BASE_PATH}/` });
+        return send(res, 303, "", { location: `${mount}/` });
       }
       failures.delete(ip);
       return send(res, 303, "", {
-        location: `${BASE_PATH}/`,
-        "set-cookie": `${COOKIE}=${encodeURIComponent(KEY)}; HttpOnly; SameSite=Strict; Path=${BASE_PATH || "/"}; Max-Age=86400`,
+        location: `${mount}/`,
+        "set-cookie": `${COOKIE}=${encodeURIComponent(KEY)}; HttpOnly; SameSite=Strict; Path=${mount || "/"}; Max-Age=86400`,
       });
     }
 
-    if (url.pathname === "/") {
-      return send(res, 200, page(authed), { "content-type": "text/html; charset=utf-8" });
+    if (route === "/") {
+      return send(res, 200, page(authed, mount), { "content-type": "text/html; charset=utf-8" });
     }
 
     if (!authed) {
@@ -328,9 +354,9 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 401, { error: "unauthorized" });
     }
 
-    if (url.pathname === "/status") return sendJson(res, 200, await status());
+    if (route === "/status") return sendJson(res, 200, await status());
 
-    if (req.method === "POST" && url.pathname === "/revoke") {
+    if (req.method === "POST" && route === "/revoke") {
       try {
         return sendJson(res, 200, await revoke(JSON.parse((await readBody(req)) || "{}")));
       } catch (error) {
@@ -338,7 +364,7 @@ const server = createServer(async (req, res) => {
       }
     }
 
-    if (req.method === "POST" && url.pathname === "/pair") {
+    if (req.method === "POST" && route === "/pair") {
       const input = JSON.parse((await readBody(req)) || "{}");
       try {
         return sendJson(res, 200, await mintPairing(input));

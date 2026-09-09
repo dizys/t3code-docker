@@ -30,6 +30,9 @@ services:
       # demand. Leave empty and one is generated at boot and printed to the log.
       T3_SETUP_KEY: ${T3_SETUP_KEY:-}
       T3_SETUP_ENABLED: ${T3_SETUP_ENABLED:-1}
+      # Serve the setup UI under a path prefix, so one public hostname can
+      # route e.g. /__setup* here instead of needing a second subdomain.
+      T3_SETUP_BASE_PATH: ${T3_SETUP_BASE_PATH:-}
     volumes:
       # State, provider credentials, shell history - everything under ~.
       - t3-home:/home/t3

@@ -21,6 +21,9 @@ const KEY = process.env.T3_SETUP_KEY ?? "";
 const T3_PORT = process.env.T3CODE_PORT ?? "3773";
 const PUBLIC_URL = (process.env.T3_PUBLIC_URL ?? "").replace(/\/+$/, "");
 const COOKIE = "t3setup";
+// Lets a single public hostname route a path prefix here instead of needing a
+// second subdomain: e.g. Cloudflare Tunnel sending /__setup* to this port.
+const BASE_PATH = (process.env.T3_SETUP_BASE_PATH ?? "").replace(/\/+$/, "");
 
 if (!KEY) {
   console.error("[setup] T3_SETUP_KEY is empty; refusing to start");
@@ -94,20 +97,32 @@ const status = async () => {
       signedIn: h.cred ? existsSync(h.cred) : null,
     });
   }
-  let pairings = [];
-  try {
-    const { stdout } = await t3(["auth", "pairing", "list", "--json"]);
-    const json = stdout.slice(stdout.indexOf("["));
-    pairings = JSON.parse(json);
-  } catch {
-    pairings = [];
-  }
   return {
     server: await health(),
     publicUrl: PUBLIC_URL || null,
     harnesses,
-    pairings,
+    pairings: await listJson(["auth", "pairing", "list", "--json"]),
+    sessions: await listJson(["auth", "session", "list", "--json"]),
   };
+};
+
+/** `t3 auth` prefixes JSON with log chatter; take the array and nothing else. */
+const listJson = async (args) => {
+  try {
+    const { stdout } = await t3(args);
+    const start = stdout.indexOf("[");
+    if (start < 0) return [];
+    return JSON.parse(stdout.slice(start));
+  } catch {
+    return [];
+  }
+};
+
+const revoke = async ({ kind, id }) => {
+  if (kind !== "session" && kind !== "pairing") throw new Error("unknown kind");
+  if (!/^[A-Za-z0-9-]{1,64}$/.test(String(id ?? ""))) throw new Error("bad id");
+  await t3(["auth", kind, "revoke", String(id)]);
+  return { ok: true };
 };
 
 const mintPairing = async ({ ttl, label }) => {
@@ -196,11 +211,13 @@ ${
 </div>
 <div id="out"></div></div>
 <div class="card"><h2>Environment</h2><div id="status">Loading…</div></div>
+<div class="card"><h2>Connected clients</h2><div id="clients">Loading…</div></div>
+<div class="card"><h2>Unredeemed links</h2><div id="links">Loading…</div></div>
 <div class="card"><h2>Signing in your agents</h2>
 <p style="margin:0;color:var(--mut)">Do this inside T3 Code once paired — its setup flow opens a terminal
 on this machine with the right command ready to run. You do not need a shell in the container.</p></div>`
     : `<div class="card"><h2>Setup key</h2>
-<form method="POST" action="/login" class="row">
+<form method="POST" action="${BASE_PATH}/login" class="row">
   <input type="password" name="key" placeholder="T3_SETUP_KEY" autofocus style="flex:1" />
   <button>Unlock</button>
 </form>
@@ -209,13 +226,14 @@ on this machine with the right command ready to run. You do not need a shell in 
 }
 </main>
 <script>
+const BASE = ${JSON.stringify(BASE_PATH)};
 if (document.getElementById('mint')) {
   const out = document.getElementById('out');
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   document.getElementById('mint').onclick = async (e) => {
     e.target.disabled = true; out.innerHTML = '<p style="color:var(--mut)">Minting…</p>';
     try {
-      const res = await fetch('/pair', {method:'POST', headers:{'content-type':'application/json'},
+      const res = await fetch(BASE + '/pair', {method:'POST', headers:{'content-type':'application/json'},
         body: JSON.stringify({ttl: document.getElementById('ttl').value, label: document.getElementById('label').value})});
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'failed');
@@ -230,7 +248,7 @@ if (document.getElementById('mint')) {
     e.target.disabled = false;
   };
   const load = async () => {
-    const s = await (await fetch('/status')).json();
+    const s = await (await fetch(BASE + '/status')).json();
     const row = (k, v) => '<tr><td>' + k + '</td><td style="text-align:right">' + v + '</td></tr>';
     let html = '<table>';
     html += row('Server', s.server.ok ? '<span class="ok">running ' + esc(s.server.version) + '</span>' : '<span class="bad">' + esc(s.server.detail) + '</span>');
@@ -241,8 +259,36 @@ if (document.getElementById('mint')) {
         : h.signedIn === false ? '<span class="warn">not signed in</span>'
         : '<span style="color:var(--mut)">installed</span>');
     }
-    html += row('Unredeemed links', String(s.pairings.length));
     document.getElementById('status').innerHTML = html + '</table>';
+
+    const when = (v) => v ? new Date(v).toLocaleString() : '—';
+    const revokeBtn = (kind, id) =>
+      '<button class="sec revoke" data-kind="' + kind + '" data-id="' + esc(id) + '">Revoke</button>';
+
+    document.getElementById('clients').innerHTML = s.sessions.length
+      ? '<table>' + s.sessions.map((c) =>
+          '<tr><td>' + esc(c.client?.label || c.subject || c.sessionId) +
+          '<br><span style="color:var(--mut);font-size:12px">' +
+          (c.connected ? '<span class="ok">connected</span>' : 'last seen ' + when(c.lastConnectedAt)) +
+          ' · expires ' + when(c.expiresAt) + '</span></td>' +
+          '<td style="text-align:right">' + revokeBtn('session', c.sessionId) + '</td></tr>').join('') + '</table>'
+      : '<p style="margin:0;color:var(--mut)">No paired devices yet.</p>';
+
+    document.getElementById('links').innerHTML = s.pairings.length
+      ? '<table>' + s.pairings.map((l) =>
+          '<tr><td>' + esc(l.label || 'unlabelled') +
+          '<br><span style="color:var(--mut);font-size:12px">expires ' + when(l.expiresAt) + '</span></td>' +
+          '<td style="text-align:right">' + revokeBtn('pairing', l.id) + '</td></tr>').join('') + '</table>'
+      : '<p style="margin:0;color:var(--mut)">None outstanding.</p>';
+
+    for (const b of document.querySelectorAll('.revoke')) {
+      b.onclick = async () => {
+        b.disabled = true;
+        await fetch(BASE + '/revoke', {method:'POST', headers:{'content-type':'application/json'},
+          body: JSON.stringify({kind: b.dataset.kind, id: b.dataset.id})});
+        load();
+      };
+    }
   };
   load();
 }
@@ -250,7 +296,13 @@ if (document.getElementById('mint')) {
 
 const server = createServer(async (req, res) => {
   const ip = req.socket.remoteAddress ?? "?";
-  const url = new URL(req.url ?? "/", "http://localhost");
+  const raw = new URL(req.url ?? "/", "http://localhost");
+  // Strip the mount prefix so the app can be served from any path.
+  let path = raw.pathname;
+  if (BASE_PATH && (path === BASE_PATH || path.startsWith(`${BASE_PATH}/`))) {
+    path = path.slice(BASE_PATH.length) || "/";
+  }
+  const url = { pathname: path };
   const authed = keyMatches(cookieFrom(req));
 
   try {
@@ -258,12 +310,12 @@ const server = createServer(async (req, res) => {
       const body = new URLSearchParams(await readBody(req));
       if (!keyMatches(body.get("key"))) {
         await throttle(ip);
-        return send(res, 303, "", { location: "/" });
+        return send(res, 303, "", { location: `${BASE_PATH}/` });
       }
       failures.delete(ip);
       return send(res, 303, "", {
-        location: "/",
-        "set-cookie": `${COOKIE}=${encodeURIComponent(KEY)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`,
+        location: `${BASE_PATH}/`,
+        "set-cookie": `${COOKIE}=${encodeURIComponent(KEY)}; HttpOnly; SameSite=Strict; Path=${BASE_PATH || "/"}; Max-Age=86400`,
       });
     }
 
@@ -277,6 +329,14 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/status") return sendJson(res, 200, await status());
+
+    if (req.method === "POST" && url.pathname === "/revoke") {
+      try {
+        return sendJson(res, 200, await revoke(JSON.parse((await readBody(req)) || "{}")));
+      } catch (error) {
+        return sendJson(res, 400, { error: String(error?.message ?? error) });
+      }
+    }
 
     if (req.method === "POST" && url.pathname === "/pair") {
       const input = JSON.parse((await readBody(req)) || "{}");

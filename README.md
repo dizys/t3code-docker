@@ -80,7 +80,36 @@ a QR code built against your public address, valid for as long as you choose.
 The page also shows whether the server is healthy, whether `T3_PUBLIC_URL` is
 set, and which agents are signed in.
 
+Beyond pairing it is a small management surface: connected clients with a
+**Revoke** button each, outstanding unredeemed links with the same, and the
+environment status above. Revoking a client's session drops that device; it does
+not touch your threads, projects or provider logins.
+
 `T3_SETUP_ENABLED=0` turns it off once you are set up.
+
+### Exposing it through one hostname
+
+Two ports normally means two public hostnames. To avoid that, mount the setup UI
+under a path prefix and route by path instead:
+
+```
+T3_SETUP_BASE_PATH=/__setup
+```
+
+Then point one hostname at both services — with Cloudflare Tunnel, two public
+hostname entries on the same domain:
+
+| Hostname | Path | Service |
+| --- | --- | --- |
+| `t3.example.com` | `__setup*` | `http://127.0.0.1:3774` |
+| `t3.example.com` | *(none)* | `http://127.0.0.1:3773` |
+
+Order matters: the more specific path rule has to come first. The setup UI is
+then at `https://t3.example.com/__setup`, and T3 Code keeps the root.
+
+Leaving it on a second hostname works just as well, and keeping it off the
+public internet entirely — reachable only over your LAN or tailnet — is the
+safest option of the three.
 
 **Treat the key like a password.** Anything it can do, a pairing link can do —
 the difference is that it can issue them repeatedly. The port is loopback-only

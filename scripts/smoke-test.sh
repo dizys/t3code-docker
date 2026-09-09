@@ -15,6 +15,11 @@ fail=0
 ok()   { printf '  \033[32mPASS\033[0m %s\n' "$1"; pass=$((pass+1)); }
 no()   { printf '  \033[31mFAIL\033[0m %s\n' "$1"; fail=$((fail+1)); }
 check() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else no "$1"; fi; }
+# The setup service runs under a restart loop, so a single probe can land in the
+# gap and fail a release build for no reason. Retry the ones that only talk to
+# it; a genuine outage is caught separately by the crash-loop assertion below.
+retry() { local n=$1; shift; local i; for i in $(seq 1 "$n"); do
+  if eval "$*" >/dev/null 2>&1; then return 0; fi; sleep 2; done; return 1; }
 
 STATE_MOUNT=""
 cleanup() {
@@ -172,6 +177,10 @@ docker rm -f "${NAME}-anon" >/dev/null 2>&1 || true
 # and without a restart, so it has to work unattended.
 printf '\nSetup service\n'
 SETUP_JAR="$(mktemp)"
+# Gate the section on the service actually answering, so the first assertion
+# is not the one that discovers it is still starting.
+retry 30 "docker exec $NAME curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:3774/" \
+  || no "setup service never answered"
 check "refuses an unauthenticated request" \
   "[ \"\$(docker exec $NAME curl -sS -o /dev/null -w '%{http_code}' \
      http://127.0.0.1:3774/status)\" = 401 ]"
@@ -251,9 +260,16 @@ check "the script it serves to the browser parses" browser_script_parses
 # A proxy routing a path prefix here forwards it intact. Serving the page only
 # at / turned that into a bare "unauthorized", which reads as a wrong password.
 check "serves the page under an unconfigured path prefix" \
-  "docker exec $NAME curl -fsS http://127.0.0.1:3774/__setup | grep -qi '<!doctype html>'"
+  "retry 5 \"docker exec $NAME curl -fsS --max-time 5 http://127.0.0.1:3774/__setup | grep -qi '<!doctype html>'\""
 check "and its routes work under that prefix" \
-  "docker exec $NAME sh -c \"curl -sS -c /tmp/j2 -d 'key=$SETUP_KEY' -o /dev/null http://127.0.0.1:3774/__setup/login && curl -fsS -b /tmp/j2 http://127.0.0.1:3774/__setup/status | grep -q publicUrl\""
+  "retry 5 \"docker exec $NAME sh -c \\\"curl -sS --max-time 5 -c /tmp/j2 -d 'key=$SETUP_KEY' -o /dev/null http://127.0.0.1:3774/__setup/login && curl -fsS --max-time 5 -b /tmp/j2 http://127.0.0.1:3774/__setup/status | grep -q publicUrl\\\"\""
+
+# Retrying above would hide a service that is actually crash-looping, so assert
+# separately that it started once and stayed up.
+setup_stayed_up() {
+  ! docker logs "$NAME" 2>&1 | grep -q "setup service exited"
+}
+check "the setup service did not crash-loop" setup_stayed_up
 rm -f "$SETUP_JAR"
 
 printf '\nStartup pairing link\n'

@@ -261,6 +261,8 @@ const findCode = (text) => (text.match(/\b[A-Z0-9]{4,6}-[A-Z0-9]{4,6}\b/) ?? [nu
 
 const sessions = new Map();
 const SESSION_TTL_MS = 15 * 60 * 1000;
+const SUBMIT_TTL_MS = 90 * 1000;
+const TERMINAL_STATES = new Set(["done", "failed", "cancelled"]);
 
 const startSignin = (agentId) => {
   const agent = AGENTS[agentId];
@@ -303,6 +305,16 @@ const startSignin = (agentId) => {
     if (session.url && session.state === "starting") {
       session.state = session.needsCode ? "awaiting-code" : "awaiting-browser";
     }
+    // A rejected code does not end the process: `claude setup-token` prints the
+    // error and offers "Press Enter to retry", so waiting for an exit waits for
+    // ever. Take the verdict from the output instead. The message itself is a
+    // half-redrawn TUI frame, so say something useful rather than quoting it.
+    if (session.state === "submitted" && /OAuth error|Press Enter to retry/i.test(session.output)) {
+      session.state = "failed";
+      session.error = "That code was not accepted. Copy the whole value from the "
+        + "address bar, including everything after the #, and try again.";
+      try { child.kill(); } catch {}
+    }
   };
   child.stdout.on("data", absorb);
   child.stderr.on("data", absorb);
@@ -310,7 +322,11 @@ const startSignin = (agentId) => {
   child.on("close", (code) => {
     // Either way the CLI may have written credentials, so re-probe next time.
     forgetSignInState();
-    if (session.state === "cancelled") return;
+    // A verdict already reached wins. We kill the child ourselves once the
+    // output says the code was rejected, and `script` reports that kill as a
+    // clean exit - which used to overwrite "failed" with "done" and tell
+    // someone they were signed in when they had just been turned away.
+    if (TERMINAL_STATES.has(session.state)) return;
     session.state = code === 0 ? "done" : "failed";
     if (code !== 0 && !session.error) {
       session.error = session.output.trim().split("\n").slice(-3).join(" ").slice(0, 300)
@@ -326,6 +342,18 @@ const startSignin = (agentId) => {
       session.error = "Timed out waiting for the browser step.";
     }
   }, SESSION_TTL_MS).unref?.();
+  // The browser step has a deadline; the exchange after it had none, so a CLI
+  // that neither finished nor complained left the panel spinning for ever.
+  const watchSubmitted = setInterval(() => {
+    const live = sessions.get(id);
+    if (!live || live.state !== "submitted") return;
+    if (Date.now() - (live.submittedAt ?? Date.now()) < SUBMIT_TTL_MS) return;
+    try { live.child.kill(); } catch {}
+    live.state = "failed";
+    live.error = "The CLI never answered after the code was sent. Try again.";
+  }, 5000);
+  watchSubmitted.unref?.();
+  child.on("close", () => clearInterval(watchSubmitted));
   return session;
 };
 
@@ -854,8 +882,13 @@ const server = createServer(async (req, res) => {
       const session = sessions.get(input.id);
       if (!session) return sendJson(res, 404, { error: "no such session" });
       try {
-        session.child.stdin.write(`${String(input.code ?? "").trim()}\n`);
+        // A carriage return, not a newline. These prompts run the terminal in
+        // raw mode, where Enter arrives as CR; an LF is accepted as part of the
+        // text and the prompt just sits there. The characters showed up as
+        // asterisks and nothing ever happened.
+        session.child.stdin.write(`${String(input.code ?? "").trim()}\r`);
         session.state = "submitted";
+        session.submittedAt = Date.now();
         return sendJson(res, 200, publicSession(session));
       } catch (error) {
         return sendJson(res, 400, { error: String(error?.message ?? error) });

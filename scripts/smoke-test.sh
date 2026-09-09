@@ -283,6 +283,36 @@ claude_url_complete() {
 }
 check "Claude sign-in captures a complete OAuth URL" claude_url_complete
 
+# Capturing the URL is half the flow; the code has to get back in. That prompt
+# runs the terminal in raw mode, where Enter arrives as CR - an LF is taken as
+# part of the pasted text and the prompt just sits there, which is what left the
+# panel saying "Submitting" for ever. A rejected code is the only exchange that
+# can be driven without an account, and it proves the same thing: the CLI read
+# the line, tried it, and answered. Stuck on "submitted" means it never did.
+claude_code_reaches_the_prompt() {
+  local id state
+  id="$(auth_post '{"agent":"claude"}' /auth/signin | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+  [ -n "$id" ] || return 1
+  sleep 14
+  auth_post "{\"id\":\"$id\",\"code\":\"bogusCode123#bogusState456\"}" /auth/code >/dev/null
+  state=submitted
+  for _ in $(seq 1 20); do
+    state="$(docker exec "$NAME" sh -c "curl -sS -b /tmp/jar 'http://127.0.0.1:3774/auth/session?id=$id'" \
+      | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+    [ "$state" != "submitted" ] && break
+    sleep 2
+  done
+  # And the verdict has to stick. The child is killed once its output says the
+  # code was rejected, and `script` reports that kill as a clean exit, which
+  # flipped the session to "done" a moment later - telling someone they were
+  # signed in when they had just been turned away. Re-read after it settles.
+  sleep 6
+  state="$(docker exec "$NAME" sh -c "curl -sS -b /tmp/jar 'http://127.0.0.1:3774/auth/session?id=$id'" \
+    | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+  [ "$state" = "failed" ]
+}
+check "a pasted code reaches the Claude prompt" claude_code_reaches_the_prompt
+
 # Codex's default login starts a callback server on localhost:1455, which is
 # unreachable from a browser on any other machine - the redirect lands on the
 # user's own localhost. Any sign-in URL naming localhost is broken by

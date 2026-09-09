@@ -120,10 +120,17 @@ RUN set -eux; \
 ARG INSTALL_CURSOR=true
 ENV CURSOR_HOME=/opt/cursor
 ENV PATH=/opt/cursor/.local/bin:$PATH
+# Downloaded to a file rather than piped: `curl ... | bash` reports bash's exit
+# status, so a failed download installs nothing and still succeeds. The test at
+# the end is the real guard - every other toolchain here proves itself by
+# running --version, and this one silently did not.
 RUN set -eux; \
     if [ "$INSTALL_CURSOR" = "true" ]; then \
       mkdir -p "$CURSOR_HOME"; \
-      HOME="$CURSOR_HOME" sh -c 'curl https://cursor.com/install -fsS | bash'; \
+      curl -fsSL https://cursor.com/install -o /tmp/cursor-install.sh; \
+      HOME="$CURSOR_HOME" bash /tmp/cursor-install.sh; \
+      rm -f /tmp/cursor-install.sh; \
+      test -x "$CURSOR_HOME/.local/bin/cursor-agent"; \
       chown -R t3:t3 "$CURSOR_HOME"; \
     fi
 

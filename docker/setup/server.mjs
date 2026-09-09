@@ -262,8 +262,10 @@ select{cursor:pointer}
 .kv{display:flex;justify-content:space-between;gap:16px;padding:7px 0;
   border-top:1px solid var(--border);font-size:13px}
 .kv:first-child{border-top:0}
-.kv dt{color:var(--muted-foreground);margin:0}
-.kv dd{margin:0;text-align:right;font-weight:500}
+.kv dt{color:var(--muted-foreground);margin:0;flex:none}
+/* A public URL is easily longer than the space left for it; let it wrap
+   rather than run off the edge of the card. */
+.kv dd{margin:0;text-align:right;font-weight:500;min-width:0;overflow-wrap:anywhere}
 dl{margin:0}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;
   vertical-align:1px;background:currentColor}
@@ -409,7 +411,7 @@ if (document.getElementById('mint')) {
     $('status').innerHTML = '<dl>' + rows.map(([k, v]) =>
       '<div class="kv"><dt>' + k + '</dt><dd>' + v + '</dd></div>').join('') + '</dl>' +
       (s.publicUrl ? '' : '<div class="notice warn">Without T3_PUBLIC_URL, pairing links ' +
-        'point at this container\'s own address and no device can reach them.</div>');
+        "point at this container's own address and no device can reach them.</div>");
 
     for (const b of document.querySelectorAll('.revoke')) {
       b.onclick = async () => {
@@ -424,6 +426,32 @@ if (document.getElementById('mint')) {
   setInterval(load, 15000);
 }
 </script></body></html>`;
+
+const ROUTES = ["/login", "/status", "/pair", "/revoke"];
+
+/**
+ * Work out which prefix this request arrived under, and which route it wants.
+ *
+ * A reverse proxy that routes by path (a Cloudflare Tunnel sending /__setup*
+ * here, say) forwards the prefix intact. Requiring the operator to also declare
+ * that prefix as an environment variable duplicates knowledge the request
+ * already carries - and getting it wrong produced a bare "unauthorized", which
+ * looks like a password problem rather than a routing one. So infer it, and
+ * keep T3_SETUP_BASE_PATH only as an override.
+ */
+const resolve = (pathname) => {
+  if (BASE_PATH && (pathname === BASE_PATH || pathname.startsWith(`${BASE_PATH}/`))) {
+    return { mount: BASE_PATH, route: pathname.slice(BASE_PATH.length) || "/" };
+  }
+  for (const route of ROUTES) {
+    if (pathname === route) return { mount: "", route };
+    if (pathname.endsWith(route)) {
+      return { mount: pathname.slice(0, -route.length), route };
+    }
+  }
+  // Anything else is a request for the page itself, whatever path it came in on.
+  return { mount: pathname.replace(/\/+$/, ""), route: "/" };
+};
 
 const server = createServer(async (req, res) => {
   const ip = req.socket.remoteAddress ?? "?";

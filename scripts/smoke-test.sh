@@ -147,8 +147,6 @@ else
   docker logs "${NAME}-mount" 2>&1 | tail -15
 fi
 
-# T3_PRINT_PAIRING_ON_START is the only way to pair without a shell in the
-# container, so it has to actually reach the log.
 # The setup service is the only way to pair without a shell in the container
 # and without a restart, so it has to work unattended.
 printf '\nSetup service\n'
@@ -169,6 +167,21 @@ case "$setup_pair" in
 esac
 check "the minted link is live on the running server" \
   "docker exec -u t3 $NAME t3 auth pairing list --json 2>/dev/null | grep -q orchestration:operate"
+
+# The page's script is built inside a template literal, so an escape can be
+# eaten on the way out and leave the browser with JavaScript that does not
+# parse - which looks like a page that simply never loads its data. Written as
+# a function rather than an eval string: the nested quoting this needs is
+# exactly the kind that dies inside eval, taking the whole run with it.
+browser_script_parses() {
+  docker exec "$NAME" sh -c '
+    curl -sS -c /tmp/j3 -d "key='"$SETUP_KEY"'" -o /dev/null http://127.0.0.1:3774/login
+    curl -sS -b /tmp/j3 http://127.0.0.1:3774/ \
+      | sed -n "/<script>/,/<\/script>/p" | sed "1d;\$d" > /tmp/page.js
+    test -s /tmp/page.js && node --check /tmp/page.js
+  '
+}
+check "the script it serves to the browser parses" browser_script_parses
 
 # A proxy routing a path prefix here forwards it intact. Serving the page only
 # at / turned that into a bare "unauthorized", which reads as a wrong password.

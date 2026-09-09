@@ -34,6 +34,12 @@ cp .env.example .env      # then edit T3_PUBLIC_URL, PUID/PGID, T3_WORKSPACE_HOS
 docker compose up -d --build
 ```
 
+Prebuilt images are published to `ghcr.io/dizys/t3code-docker` — `:latest` and
+`:full` for the full image, `:slim` for the smaller one. They are **linux/amd64
+only** for now; on arm64, build locally with `scripts/build.sh`. To run a
+published image instead of building, set `T3_IMAGE` in `.env` and drop
+`--build`.
+
 Sign a harness in (needs a TTY, and must not run as root — `t3-login` handles
 the second part for you):
 

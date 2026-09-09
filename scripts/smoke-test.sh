@@ -164,13 +164,28 @@ check "a written credential lands on the state volume" \
 # from inside; only the mount source distinguishes a throwaway anonymous volume.
 docker rm -f "${NAME}-anon" >/dev/null 2>&1 || true
 docker run -d --name "${NAME}-anon" -e T3_SETUP_KEY=x "$IMAGE" >/dev/null
-anon_ok=0
-for _ in $(seq 1 20); do
-  if docker logs "${NAME}-anon" 2>&1 | grep -q "is an anonymous volume"; then anon_ok=1; break; fi
+# The entrypoint always prints exactly one persistence verdict, so wait for any
+# of them rather than only the one we want. A wrong verdict then fails at once
+# with the line it printed, and a container that died fails with its exit code,
+# instead of burning the whole timeout in silence the way this used to.
+anon_verdict=""
+for _ in $(seq 1 30); do
+  anon_verdict="$(docker logs "${NAME}-anon" 2>&1 | grep -m1 \
+    -e 'is an anonymous volume' -e 'credentials persist on' -e 'is not on a mount at all' || true)"
+  [ -n "$anon_verdict" ] && break
+  [ "$(docker inspect -f '{{.State.Running}}' "${NAME}-anon" 2>/dev/null)" = true ] || break
   sleep 3
 done
-[ "$anon_ok" = 1 ] && ok "an anonymous volume is called out as not durable" \
-  || no "an anonymous volume is called out as not durable"
+case "$anon_verdict" in
+  *'is an anonymous volume'*)
+    ok "an anonymous volume is called out as not durable" ;;
+  *)
+    no "an anonymous volume is called out as not durable"
+    printf '    verdict: %s\n' "${anon_verdict:-<none printed>}"
+    printf '    container: %s\n' \
+      "$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' "${NAME}-anon" 2>/dev/null || echo unknown)"
+    docker logs "${NAME}-anon" 2>&1 | tail -15 ;;
+esac
 docker rm -f "${NAME}-anon" >/dev/null 2>&1 || true
 
 # The setup service is the only way to pair without a shell in the container

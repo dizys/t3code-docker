@@ -18,7 +18,7 @@ check() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else no "$1"; fi; }
 
 STATE_MOUNT=""
 cleanup() {
-  docker rm -f "$NAME" "${NAME}-mount" "${NAME}-boot" >/dev/null 2>&1 || true
+  docker rm -f "$NAME" "${NAME}-mount" "${NAME}-boot" "${NAME}-anon" >/dev/null 2>&1 || true
   if [ -n "$STATE_MOUNT" ]; then
     sudo rm -rf "$STATE_MOUNT" 2>/dev/null || rm -rf "$STATE_MOUNT" 2>/dev/null || true
   fi
@@ -146,6 +146,27 @@ else
   no "root-owned volume mounted at the state dir is adopted"
   docker logs "${NAME}-mount" 2>&1 | tail -15
 fi
+
+# Agent sign-ins default to $HOME, which is only persisted if the whole home is
+# mounted. Anchoring them under the state directory is what makes "sign in once"
+# true for a deployment that only mounted .t3.
+printf '\nCredential persistence\n'
+check "agent credentials are anchored on the state volume" \
+  "docker exec $NAME sh -c '[ \"\$(readlink /home/t3/.claude)\" = /home/t3/.t3/agents/.claude ]'"
+check "a written credential lands on the state volume" \
+  "docker exec -u t3 $NAME sh -c 'echo x > ~/.codex/auth.json && test -f /home/t3/.t3/agents/.codex/auth.json'"
+# The Dockerfile declares VOLUME, so an unmounted deployment still looks mounted
+# from inside; only the mount source distinguishes a throwaway anonymous volume.
+docker rm -f "${NAME}-anon" >/dev/null 2>&1 || true
+docker run -d --name "${NAME}-anon" -e T3_SETUP_KEY=x "$IMAGE" >/dev/null
+anon_ok=0
+for _ in $(seq 1 20); do
+  if docker logs "${NAME}-anon" 2>&1 | grep -q "is an anonymous volume"; then anon_ok=1; break; fi
+  sleep 3
+done
+[ "$anon_ok" = 1 ] && ok "an anonymous volume is called out as not durable" \
+  || no "an anonymous volume is called out as not durable"
+docker rm -f "${NAME}-anon" >/dev/null 2>&1 || true
 
 # The setup service is the only way to pair without a shell in the container
 # and without a restart, so it has to work unattended.

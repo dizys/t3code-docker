@@ -18,6 +18,7 @@ T3_HOME=/home/t3
 : "${T3_ALLOW_SUDO:=0}"
 : "${T3_SETUP_ENABLED:=1}"
 : "${T3_SETUP_PORT:=3774}"
+: "${T3_PERSIST_AGENT_CREDENTIALS:=1}"
 export T3CODE_HOME T3CODE_HOST T3CODE_PORT T3_WORKSPACE T3_SETUP_PORT
 
 # --- privileged half: fix uids, then re-exec as the unprivileged user --------
@@ -117,6 +118,81 @@ register_projects() {
 }
 
 register_projects
+
+# Agent credentials default to $HOME - ~/.claude, ~/.codex and friends - which
+# only survives a recreate if the whole home is mounted. The state directory is
+# the one path every deployment mounts, so anchor them there and link them back.
+# Whatever you mounted, signing in once stays signed in.
+AGENT_DIRS=".claude .codex .cursor .grok .config/opencode .local/share/opencode"
+
+persist_agent_credentials() {
+  [ "$T3_PERSIST_AGENT_CREDENTIALS" = "1" ] || return 0
+  local store="${T3CODE_HOME}/agents" src dst
+  mkdir -p "$store"
+  for rel in $AGENT_DIRS; do
+    src="${T3_HOME}/${rel}"
+    dst="${store}/$(printf '%s' "$rel" | tr '/' '_')"
+    [ -L "$src" ] && continue
+    mkdir -p "$dst" "$(dirname "$src")"
+    if [ -d "$src" ]; then
+      # Anything signed in before this existed comes along rather than being
+      # silently orphaned behind the new link.
+      cp -a "$src/." "$dst/" 2>/dev/null || true
+      rm -rf "$src"
+      log "moved ${rel} onto the state volume"
+    fi
+    ln -sfn "$dst" "$src"
+  done
+}
+
+# Field 4 of mountinfo is the mount's source, which is the only way from inside
+# a container to tell a bind mount from a named volume from an anonymous one.
+# That distinction matters: the Dockerfile declares VOLUME, so /home/t3 is
+# always a mount and always looks persistent - but an anonymous volume survives
+# a restart and is replaced on recreate, taking every agent sign-in with it.
+covering_mount() {
+  awk -v path="$1" '
+    $5 == "/" { next }
+    path == $5 || index(path, $5 "/") == 1 {
+      if (length($5) > length(point)) { point = $5; root = $4 }
+    }
+    END { if (point != "") print point "\t" root }
+  ' /proc/self/mountinfo
+}
+
+report_persistence() {
+  local line point root
+  line="$(covering_mount "$T3CODE_HOME")"
+  point="${line%%	*}"
+  root="${line##*	}"
+
+  if [ -z "$line" ]; then
+    log "WARNING: ${T3CODE_HOME} is not on a mount at all. Nothing survives this"
+    log "         container. Mount a volume at ${T3_HOME}."
+    return
+  fi
+
+  case "$root" in
+    /var/lib/docker/volumes/*/_data)
+      local name="${root#/var/lib/docker/volumes/}"
+      name="${name%/_data}"
+      if printf '%s' "$name" | grep -qE '^[0-9a-f]{64}$'; then
+        log "WARNING: ${point} is an anonymous volume. It survives a restart, but"
+        log "         recreating this container creates a new one and every agent"
+        log "         sign-in, thread and project is lost. Mount a named volume"
+        log "         or a host directory at ${T3_HOME} instead."
+      else
+        log "state and agent credentials persist on volume '${name}' (${point})"
+      fi
+      ;;
+    *)
+      log "state and agent credentials persist on ${root} (${point})"
+      ;;
+  esac
+}
+
+persist_agent_credentials
+report_persistence
 
 # The setup service exists for one job: minting a pairing link on demand,
 # without a shell in the container and without a restart. Everything after

@@ -295,8 +295,28 @@ Environment variables (all optional except where noted):
 
 Volumes:
 
-- `/home/t3` — state, provider credentials, shell history. Back this up.
+- `/home/t3` — state, agent credentials, shell history. Back this up.
 - `/workspace` — your repositories.
+
+Agent sign-ins normally land in `~/.claude`, `~/.codex`, `~/.cursor`, `~/.grok`
+and OpenCode's XDG directories, which only persist if the whole home is mounted.
+The container anchors them under `$T3CODE_HOME/agents` and links them back, so
+signing in once holds even for a deployment that mounted only the state
+directory. Set `T3_PERSIST_AGENT_CREDENTIALS=0` to leave them where the CLIs put
+them.
+
+**Watch for anonymous volumes.** Because the image declares `VOLUME`, running
+with no `-v` still gives you a mount, and it still looks persistent from inside
+— but recreating the container makes a fresh one and every sign-in, thread and
+project goes with the old one. The container detects this and says so at boot:
+
+```
+[t3code] WARNING: /home/t3 is an anonymous volume. It survives a restart, but
+[t3code]          recreating this container creates a new one and every agent
+[t3code]          sign-in, thread and project is lost.
+```
+
+A named volume or a host directory reports the opposite, naming what it found.
 
 Helper commands inside the container: `t3-pair`, `t3-login`, `t3-doctor`,
 `t3-browser-mcp`. All of them step down from root automatically, so plain

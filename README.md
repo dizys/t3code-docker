@@ -35,8 +35,10 @@ docker compose up -d --build
 ```
 
 Prebuilt images are published to `ghcr.io/dizys/t3code-docker` — `:latest` and
-`:full` for the full image, `:slim` for the smaller one. They are **linux/amd64
-only** for now; on arm64, build locally with `scripts/build.sh`. To run a
+`:full` for the full image, `:slim` for the smaller one. They are multi-arch
+manifests covering `linux/amd64` and `linux/arm64`, with each architecture built
+*and* smoke-tested on its own native runner, so `docker pull` resolves to the
+right one on an ARM server. (`v0.1.0` predates this and is amd64-only.) To run a
 published image instead of building, set `T3_IMAGE` in `.env` and drop
 `--build`.
 

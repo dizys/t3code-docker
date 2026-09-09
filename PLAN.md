@@ -347,8 +347,9 @@ re-runs the checks (16 assertions on `slim`, 33 on `full`, all passing).
       returns a public link. Caddy TLS lives behind `--profile tls`.
 - [x] **M6 — Docs.** README covers the server → HTTPS → `t3-pair` → phone path.
 - [x] **M7 — CI.** `.github/workflows/build.yml`: shellcheck + compose lint,
-      builds both targets, runs the smoke test, and publishes multi-arch images
-      to GHCR on a tag.
+      builds both targets on native amd64 and arm64 runners, runs the smoke test
+      on each, and on a tag pushes per-architecture images by digest and stitches
+      them into one manifest list per target.
 
 ## 11. What changed while building it
 

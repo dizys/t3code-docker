@@ -26,13 +26,22 @@ jobs:
       - name: Compose file is valid
         run: docker compose config >/dev/null
 
+  # Both architectures build and smoke-test on their own native runner. ARM
+  # runners are free for public repositories; emulating this under QEMU would
+  # mean a rustup toolchain install and a node-pty compile through translation.
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     needs: lint
     strategy:
       fail-fast: false
       matrix:
         target: [slim, full]
+        platform: [amd64, arm64]
+        include:
+          - platform: amd64
+            runner: ubuntu-latest
+          - platform: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -47,29 +56,40 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build ${{ matrix.target }}
+      - name: Build ${{ matrix.target }} (${{ matrix.platform }})
         uses: docker/build-push-action@v6
         with:
           context: .
           target: ${{ matrix.target }}
+          platforms: linux/${{ matrix.platform }}
           load: true
           tags: t3code:${{ matrix.target }}
-          cache-from: type=gha,scope=${{ matrix.target }}
-          cache-to: type=gha,mode=min,scope=${{ matrix.target }}
+          cache-from: type=gha,scope=${{ matrix.target }}-${{ matrix.platform }}
+          cache-to: type=gha,mode=min,scope=${{ matrix.target }}-${{ matrix.platform }}
 
       - name: Smoke test
         run: scripts/smoke-test.sh t3code:${{ matrix.target }}
 
+  # Push one image per architecture by digest, then stitch them into a single
+  # manifest list in `merge`. Pulling ghcr.io/<repo>:full then resolves to
+  # whichever architecture the host actually is.
   publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     needs: build
     permissions:
       contents: read
       packages: write
     strategy:
+      fail-fast: false
       matrix:
         target: [slim, full]
+        platform: [amd64, arm64]
+        include:
+          - platform: amd64
+            runner: ubuntu-latest
+          - platform: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -90,9 +110,62 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: linux/${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.target }}-${{ matrix.platform }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest='${{ steps.build.outputs.digest }}'
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.target }}-${{ matrix.platform }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        target: [slim, full]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.target }}-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
           # `flavor: suffix` would apply to every tag, turning the bare `slim`
           # tag into `slim-slim`. Spell each one out instead.
-          #   full -> :full :latest :1.2.3 :1.2 :1.2.3-full
+          #   full -> :full :latest :1.2.3 :1.2 :1.2.3-full :1.2-full
           #   slim -> :slim :1.2.3-slim :1.2-slim
           flavor: latest=false
           tags: |
@@ -103,17 +176,17 @@ jobs:
             type=semver,pattern={{version}},enable=${{ matrix.target == 'full' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ matrix.target == 'full' }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: ${{ matrix.target }}
-          # amd64 only for now. arm64 has never been built: under QEMU it means
-          # emulating a rustup toolchain install and a node-pty compile, which
-          # is slow enough to risk the job timing out. Add linux/arm64 back once
-          # it has been proven on a native runner.
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.target }}
+      - name: Create the manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE }}@sha256:%s ' *)
+
+      - name: Verify both architectures are present
+        run: |
+          tag="$(jq -cr '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          docker buildx imagetools inspect "$tag" | tee /tmp/inspect.txt
+          for want in linux/amd64 linux/arm64; do
+            grep -q "$want" /tmp/inspect.txt || { echo "missing $want in $tag" >&2; exit 1; }
+          done

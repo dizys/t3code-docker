@@ -384,7 +384,35 @@ Things the plan did not anticipate, found by building rather than reading:
 - **Playwright is the default browser MCP,** with chrome-devtools available;
   both are smoke-tested.
 
-## 13. Still open
+## 13. The setup service (added after first real deployments)
+
+Running this on a panel-managed host surfaced a class of friction the original
+plan missed entirely: everything before first contact assumed a shell in the
+container.
+
+The decisive finding is that **T3 Code's own welcome flow already solves the
+hard part**. It checks which agents are installed and signed in, and opens a
+terminal *on the environment server* with the right command ready to run — and
+terminals run in this container. So agent sign-in and project import never
+needed `docker exec`. What could not happen inside T3 Code was the one step that
+gets you *to* T3 Code: minting a pairing link.
+
+So the image runs a second process on port 3774 covering only that, plus the
+management around it — connected clients and outstanding links, each revocable.
+
+| Decision | Choice | Why |
+| --- | --- | --- |
+| In-image or sidecar | In-image | A sidecar would need the state volume, the `t3` binary and a matching uid, all of which are already here. Its only edge is isolation, which the key provides more cheaply |
+| Supervision | Background restart loop under tini | `t3 serve` stays the `exec`'d foreground process, so the container's exit status tracks the thing that matters. A supervisor would report its own health instead |
+| Auth | Pre-shared `T3_SETUP_KEY` | Solves the bootstrap problem cleanly: the secret arrives out of band, from the panel where the operator already is. Constant-time compare, growing delay on failures |
+| One port or two | Two, with `T3_SETUP_BASE_PATH` | Serving both on one port needs a proxy in front of T3's long-lived WebSocket, where a bug breaks the product. Path-prefix mounting lets the *tunnel* route instead |
+| Scope | Pairing and client management only | Anything more duplicates T3 Code's UI, which does it better |
+
+**The trade-off, stated plainly:** unlike a pairing link, the setup key is a
+*standing* ability to mint access. It is loopback-only in compose, and
+`T3_SETUP_ENABLED=0` removes it once setup is done.
+
+## 14. Still open
 
 - Antigravity is not installed (Google sign-in happens inside the desktop app,
   and it manages its own runtime). Worth revisiting if it grows a headless path.

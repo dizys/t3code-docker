@@ -42,21 +42,22 @@ right one on an ARM server. (`v0.1.0` predates this and is amd64-only.) To run a
 published image instead of building, set `T3_IMAGE` in `.env` and drop
 `--build`.
 
-Sign a harness in (needs a TTY, and must not run as root — `t3-login` handles
-the second part for you):
+Then open the setup UI on port **3774**, enter your `T3_SETUP_KEY`, and press
+**Create pairing link**. Scan the QR with the T3 Code app, or open the link in a
+browser.
+
+From there you are inside T3 Code, and its own setup flow takes over: it checks
+which agents are installed and signed in, and for each one **opens a terminal on
+this machine with the right command ready to run**. Sign in there. Then enable
+the provider under **Settings → Providers**.
+
+That is the whole path — no shell in the container at any point. `docker exec`
+is a fallback, not the route:
 
 ```bash
-docker compose exec -it t3code t3-login claude
+docker compose exec t3code t3-doctor        # what's installed, signed in, healthy
+docker compose exec -it t3code t3-login claude   # if you prefer a shell to the UI
 ```
-
-Check the state of the world:
-
-```bash
-docker compose exec t3code t3-doctor
-```
-
-Then open T3 Code, go to **Settings → Providers**, and enable the provider you
-signed in.
 
 ## First run: the setup UI
 
@@ -233,13 +234,19 @@ passes it the sandbox flags it needs — but it is the less tested path.
 
 ## Harnesses
 
-| Harness | Sign in | T3 Code provider |
+Sign these in from T3 Code's setup flow, which opens a terminal on this machine
+with the command ready to run. The `t3-login` column is the equivalent if you
+would rather use a shell — it exists because `docker exec` lands as root, and a
+harness signed in as root writes its credentials somewhere the server never
+looks.
+
+| Harness | Provider in T3 Code | Shell equivalent |
 | --- | --- | --- |
-| Claude Code | `t3-login claude` | Claude |
-| Codex | `t3-login codex` | Codex |
-| OpenCode | `t3-login opencode` | OpenCode |
-| Cursor | `t3-login cursor` | Cursor (executable `cursor-agent`) |
-| Grok Build | `t3-login grok` | Grok Build |
+| Claude Code | Claude | `t3-login claude` |
+| Codex | Codex | `t3-login codex` |
+| OpenCode | OpenCode | `t3-login opencode` |
+| Cursor | Cursor (executable `cursor-agent`) | `t3-login cursor` |
+| Grok Build | Grok Build | `t3-login grok` |
 
 Antigravity is not installed: it signs in through Google inside the desktop app
 and manages its own runtime.
@@ -247,6 +254,25 @@ and manages its own runtime.
 **DeepSeek** has no T3 Code driver. Reach it through OpenCode — see
 [`examples/opencode/`](examples/opencode/) — or by pointing a provider instance's
 environment variables at a compatible endpoint.
+
+## How long things last
+
+Three different clocks, which is one more than is comfortable:
+
+| | Lifetime | When it runs out |
+| --- | --- | --- |
+| The server's **startup banner** token | **5 minutes** | Ignore it entirely; it also names the container's own address |
+| A **pairing link** | `T3_PAIR_TTL`, default 30 days | Mint another. Single-use, so one per device anyway |
+| A paired **client session** | **30 days** | The device re-pairs |
+
+The session clock is the one that matters, and nothing in the server slides it
+forward on use. So expect to re-pair each device about monthly — a few seconds
+in the setup UI. To avoid it entirely, use **T3 Connect**, which renews client
+credentials rather than expiring them.
+
+None of this touches your data: threads, projects, provider logins and history
+live in `state.sqlite` on the `/home/t3` volume. Re-pairing drops you straight
+back into everything.
 
 ## Configuration
 
@@ -261,7 +287,13 @@ Environment variables (all optional except where noted):
 | `T3_WORKSPACE` | `/workspace` | Scanned for projects |
 | `T3_AUTO_ADD_PROJECTS` | `1` | Register each git checkout under the workspace |
 | `T3_PRINT_PAIRING_ON_START` | `0` | Mint and log a pairing link on boot |
+| `T3_PAIR_TTL` | `30d` | How long links from `t3-pair` stay redeemable |
+| `T3_SETUP_ENABLED` | `1` | Run the setup UI |
+| `T3_SETUP_KEY` | *(generated)* | Password for the setup UI. Set it to keep it stable. |
+| `T3_SETUP_PORT` | `3774` | Setup UI port inside the container |
+| `T3_SETUP_BASE_PATH` | — | Mount the setup UI under a path, e.g. `/__setup` |
 | `T3_ALLOW_SUDO` | `0` | Give agents passwordless sudo in the container |
+| `DEEPSEEK_API_KEY` | — | Used by the DeepSeek-through-OpenCode example |
 | `PUID` / `PGID` | `1000` | Own the workspace bind mount correctly |
 
 Volumes:

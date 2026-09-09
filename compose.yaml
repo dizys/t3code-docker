@@ -33,6 +33,7 @@ services:
       # Serve the setup UI under a path prefix, so one public hostname can
       # route e.g. /__setup* here instead of needing a second subdomain.
       T3_SETUP_BASE_PATH: ${T3_SETUP_BASE_PATH:-}
+      T3_PAIR_TTL: ${T3_PAIR_TTL:-30d}
     volumes:
       # State, provider credentials, shell history - everything under ~.
       - t3-home:/home/t3

@@ -92,7 +92,7 @@ CLIs rather than reading about them:
 
 | Agent | Sign in | API key |
 | --- | --- | --- |
-| Claude Code | `setup-token` — shows a URL, takes the code back | — |
+| Claude Code | `auth login` — shows a URL, takes the code back | — |
 | Codex | device code — `login --device-auth` | stored via `login --with-api-key` |
 | OpenCode | — | pick a provider, key written to its `auth.json` |
 | Cursor | browser flow, polls to completion | — |

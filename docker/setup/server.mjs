@@ -310,7 +310,10 @@ import { writeFile, mkdir, readFile } from "node:fs/promises";
 
 const AGENTS = {
   claude: { name: "Claude Code",
-    signin: { argv: ["claude", "setup-token"], pty: true, expectsCode: true } },
+    // `setup-token` mints a 1-year CI token and prints it; `auth login` is the
+    // sign-in that actually leaves this container authenticated, which is what
+    // the panel reports and what the agents then use.
+    signin: { argv: ["claude", "auth", "login"], pty: true, expectsCode: true } },
   codex: { name: "Codex",
     apiKey: { kind: "stdin", argv: ["codex", "login", "--with-api-key"] },
     // Plain `codex login` starts a callback server on localhost:1455, which a
@@ -432,18 +435,34 @@ const startSignin = (agentId) => {
       session.error = "Timed out waiting for the browser step.";
     }
   }, SESSION_TTL_MS).unref?.();
-  // The browser step has a deadline; the exchange after it had none, so a CLI
-  // that neither finished nor complained left the panel spinning for ever.
-  const watchSubmitted = setInterval(() => {
+  // Waiting for the process to exit is the wrong finish line. These CLIs are
+  // terminal UIs: several print their result and stay up. The question is not
+  // "did it exit" but "is this agent signed in now", and we already have a way
+  // to ask that, so ask it - and keep the deadline for the case where nothing
+  // ever becomes true.
+  const harness = HARNESSES.find((h) => h.id === agentId);
+  // Only a transition counts. Someone signing in again while already signed in
+  // - to switch accounts, say - would otherwise see the attempt declared done
+  // before they had touched it.
+  let wasSignedIn = null;
+  if (harness) signedInState(harness).then((v) => { wasSignedIn = v; }).catch(() => {});
+  const watchSession = setInterval(async () => {
     const live = sessions.get(id);
-    if (!live || live.state !== "submitted") return;
+    if (!live || TERMINAL_STATES.has(live.state)) return;
+    if (harness && wasSignedIn !== true && (await signedInState(harness)) === true) {
+      try { live.child.kill(); } catch {}
+      live.state = "done";
+      forgetSignInState();
+      return;
+    }
+    if (live.state !== "submitted") return;
     if (Date.now() - (live.submittedAt ?? Date.now()) < SUBMIT_TTL_MS) return;
     try { live.child.kill(); } catch {}
     live.state = "failed";
-    live.error = "The CLI never answered after the code was sent. Try again.";
-  }, 5000);
-  watchSubmitted.unref?.();
-  child.on("close", () => clearInterval(watchSubmitted));
+    live.error = "The CLI never reported being signed in after the code was sent.";
+  }, 4000);
+  watchSession.unref?.();
+  child.on("close", () => clearInterval(watchSession));
   return session;
 };
 
@@ -685,10 +704,11 @@ ${
 const BASE = ${JSON.stringify(mount)};
 if (document.getElementById('mint')) {
   const $ = (id) => document.getElementById(id);
-  // A sign-in renders into the agent's row. The periodic refresh rebuilds that
-  // list, so it has to leave the row alone while a sign-in is in flight -
-  // otherwise the URL, the QR and the code field vanish mid-flow.
-  let signinActive = null;
+  // Both a sign-in and a key form render into the agent's row, and the periodic
+  // refresh rebuilds that list. It has to leave the row alone while either is
+  // open, or the URL, the QR, the code field - or the key you are halfway
+  // through pasting - vanish under you a few seconds after they appear.
+  let panelActive = null;
   const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   const when = (v) => { if (!v) return '—'; const d = new Date(v);
     return isNaN(d) ? '—' : d.toLocaleString(undefined, {dateStyle:'medium', timeStyle:'short'}); };
@@ -760,7 +780,7 @@ if (document.getElementById('mint')) {
       (s.publicUrl ? '' : '<div class="notice warn">Without T3_PUBLIC_URL, pairing links ' +
         "point at this container's own address and no device can reach them.</div>");
 
-    if (!signinActive) $('agents').innerHTML = '<div class="rows">' + s.harnesses.map((h) => {
+    if (!panelActive) $('agents').innerHTML = '<div class="rows">' + s.harnesses.map((h) => {
       const status = !h.installed ? '<span class="bad">Not installed</span>'
         : h.signedIn === true ? '<span class="ok"><span class="dot"></span>Signed in</span>'
         : h.signedIn === false ? '<span class="warn">Not signed in</span>'
@@ -775,7 +795,7 @@ if (document.getElementById('mint')) {
         '<div style="display:flex;gap:6px">' + actions + '</div></div>';
     }).join('') + '</div>';
 
-    if (signinActive) return;
+    if (panelActive) return;
 
     // The provider list is fetched once and reused: it is the same for every
     // agent row and does not change while the page is open.
@@ -810,11 +830,16 @@ if (document.getElementById('mint')) {
             '<input class="pv-custom" placeholder="Provider id, e.g. deepseek" ' +
             'style="flex:1 1 130px;display:none" />';
         }
+        panelActive = agent;
         $('agent-' + agent).innerHTML =
           '<div class="controls" style="margin-top:8px;flex-wrap:wrap">' + providerField +
           '<input class="kv-key" type="password" placeholder="API key" style="flex:1 1 150px" />' +
-          '<button class="tiny save">Save</button></div><div class="out"></div>';
+          '<button class="tiny save">Save</button>' +
+          '<button class="ghost tiny cancelkey">Cancel</button></div><div class="out"></div>';
         const box = $('agent-' + agent);
+        // Closing is what lets the list start refreshing again, so it needs to
+        // be reachable without saving something.
+        box.querySelector('.cancelkey').onclick = () => { panelActive = null; box.innerHTML = ''; load(); };
         const sel = box.querySelector('.pv');
         const custom = box.querySelector('.pv-custom');
         if (sel) sel.onchange = () => {
@@ -833,7 +858,9 @@ if (document.getElementById('mint')) {
             ? '<div class="notice" style="background:var(--muted)">Saved.</div>'
             : '<div class="notice err">' + esc(data.error) + '</div>';
           e.target.disabled = false;
-          if (res.ok) setTimeout(load, 600);
+          // Leave a failed attempt on screen with the key still in it; only a
+          // success closes the form and lets the list resume.
+          if (res.ok) { panelActive = null; setTimeout(load, 600); }
         };
       };
     }
@@ -851,9 +878,9 @@ if (document.getElementById('mint')) {
           box.innerHTML = '<div class="notice err">' + esc(started.error) + '</div>';
           b.disabled = false; return;
         }
-        signinActive = agent;
+        panelActive = agent;
         const finish = (html) => {
-          signinActive = null;
+          panelActive = null;
           box.innerHTML = html;
           b.disabled = false;
         };

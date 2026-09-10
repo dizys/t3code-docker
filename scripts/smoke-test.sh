@@ -343,6 +343,29 @@ claude_code_reaches_the_prompt() {
 }
 check "a pasted code reaches the Claude prompt" claude_code_reaches_the_prompt
 
+# Waiting for the CLI to exit was the wrong finish line. These are terminal UIs;
+# one that prints its result and stays up is not a failure, but it left the
+# panel on "Submitting" for ever. Completion is "this agent is signed in now",
+# so prove a session notices that with the process still running. Codex is the
+# one whose state can be flipped from outside mid-flow, so use it - signed out
+# first, since only a transition counts.
+signin_finishes_on_transition() {
+  local id state
+  docker exec -u t3 "$NAME" sh -c 'rm -f ~/.codex/auth.json'
+  id="$(auth_post '{"agent":"codex"}' /auth/signin | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+  [ -n "$id" ] || return 1
+  sleep 12
+  auth_post '{"agent":"codex","key":"sk-smoke-transition"}' /auth/apikey | grep -q '"ok":true' || return 1
+  for _ in $(seq 1 10); do
+    state="$(docker exec "$NAME" sh -c "curl -sS -b /tmp/jar 'http://127.0.0.1:3774/auth/session?id=$id'" \
+      | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+    [ "$state" = "done" ] && return 0
+    sleep 3
+  done
+  return 1
+}
+check "a sign-in finishes when the agent becomes signed in" signin_finishes_on_transition
+
 # Codex's default login starts a callback server on localhost:1455, which is
 # unreachable from a browser on any other machine - the redirect lands on the
 # user's own localhost. Any sign-in URL naming localhost is broken by

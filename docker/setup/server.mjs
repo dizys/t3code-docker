@@ -13,8 +13,13 @@ import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { timingSafeEqual, randomBytes } from "node:crypto";
 import { promisify } from "node:util";
+import { readFileSync } from "node:fs";
 
 const run = promisify(execFile);
+
+// Read verbatim rather than embedded in a template literal: see the note at the
+// top of app.js for what that cost twice.
+const CLIENT_JS = readFileSync(new URL("./app.js", import.meta.url), "utf8");
 
 const PORT = Number(process.env.T3_SETUP_PORT ?? 3774);
 const KEY = process.env.T3_SETUP_KEY ?? "";
@@ -561,9 +566,9 @@ const page = (authed, mount) => `<!doctype html>
 <title>T3 Code setup</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111'/%3E%3Ctext x='16' y='22' font-family='ui-monospace,monospace' font-size='16' font-weight='700' fill='%23fff' text-anchor='middle'%3ET3%3C/text%3E%3C/svg%3E">
 <style>
-/* Tokens lifted from T3 Code's own stylesheet (apps/web/src/index.css) so this
-   page does not feel like a different product: its radii, its zinc/neutral
-   ramps, its primary, and its emerald/amber/red semantics. */
+/* Tokens and shape lifted from T3 Code's own stylesheet so this page reads as
+   part of the same product: its zinc ramp, its 0.625rem radius, and its
+   app-chrome/toolbar split between the bar at the top and the content below. */
 :root{
   color-scheme:light dark;
   --background:oklch(99.2% 0 0);
@@ -571,186 +576,270 @@ const page = (authed, mount) => `<!doctype html>
   --card:#fff;
   --muted:oklch(0.985 0 0);
   --muted-foreground:oklch(0.552 0.016 285.938);
+  --subtle-foreground:oklch(0.646 0.014 285.9);
   --border:oklch(0.92 0.004 286.32);
+  --hairline:oklch(0.945 0.003 286.32);
   --input:oklch(0.871 0.006 286.286);
   --primary:oklch(0.488 0.217 264);
   --primary-foreground:#fff;
   --accent:oklch(0.967 0.001 286.375);
+  --chrome:color-mix(in srgb, oklch(99.2% 0 0) 82%, transparent);
   --success-foreground:oklch(0.508 0.118 165.612);
-  --success-surface:color-mix(in srgb, oklch(0.696 0.17 162.48) 10%, transparent);
+  --success-surface:color-mix(in srgb, oklch(0.696 0.17 162.48) 11%, transparent);
   --warning-foreground:oklch(0.555 0.163 48.998);
-  --warning-surface:color-mix(in srgb, oklch(0.769 0.188 70.08) 8%, transparent);
+  --warning-surface:color-mix(in srgb, oklch(0.769 0.188 70.08) 10%, transparent);
   --error:oklch(0.637 0.237 25.331);
   --error-foreground:oklch(0.505 0.213 27.518);
   --error-surface:color-mix(in srgb, oklch(0.637 0.237 25.331) 8%, transparent);
+  --shadow-raised:0 1px 2px oklch(0 0 0/.04), 0 1px 1px oklch(0 0 0/.03);
+  --shadow-pop:0 4px 16px -4px oklch(0 0 0/.10), 0 1px 2px oklch(0 0 0/.04);
   --radius:0.625rem;
   --control-radius:0.5rem;
   --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   --font-mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  /* Agent identity is deliberately low-chroma: it separates five rows at a
+     glance without competing with the saturated colours that carry state. */
+  --id-claude:oklch(0.70 0.075 55);
+  --id-codex:oklch(0.62 0.035 265);
+  --id-opencode:oklch(0.64 0.062 175);
+  --id-cursor:oklch(0.62 0.062 300);
+  --id-grok:oklch(0.60 0.045 230);
 }
 @media (prefers-color-scheme:dark){:root{
   --background:oklch(0.145 0 0);
   --foreground:oklch(0.97 0 0);
-  --card:color-mix(in srgb, oklch(0.145 0 0) 97%, #fff);
-  --muted:rgb(255 255 255/3%);
-  --muted-foreground:color-mix(in srgb, oklch(0.556 0 0) 90%, #fff);
-  --border:rgb(255 255 255/6%);
-  --input:rgb(255 255 255/8%);
+  --card:color-mix(in srgb, oklch(0.145 0 0) 96%, #fff);
+  --muted:rgb(255 255 255/3.5%);
+  --muted-foreground:color-mix(in srgb, oklch(0.556 0 0) 92%, #fff);
+  --subtle-foreground:oklch(0.53 0 0);
+  --border:rgb(255 255 255/7%);
+  --hairline:rgb(255 255 255/5%);
+  --input:rgb(255 255 255/9%);
   --primary:oklch(0.571 0.21 264);
-  --accent:rgb(255 255 255/4%);
+  --accent:rgb(255 255 255/5%);
+  --chrome:color-mix(in srgb, oklch(0.145 0 0) 82%, transparent);
   --success-foreground:oklch(0.765 0.177 163.223);
-  --success-surface:color-mix(in srgb, oklch(0.696 0.17 162.48) 18%, transparent);
+  --success-surface:color-mix(in srgb, oklch(0.696 0.17 162.48) 17%, transparent);
   --warning-foreground:oklch(0.828 0.189 84.429);
-  --warning-surface:color-mix(in srgb, oklch(0.769 0.188 70.08) 16%, transparent);
+  --warning-surface:color-mix(in srgb, oklch(0.769 0.188 70.08) 15%, transparent);
   --error-foreground:oklch(0.704 0.191 22.216);
   --error-surface:color-mix(in srgb, oklch(0.637 0.237 25.331) 16%, transparent);
+  --shadow-raised:0 1px 2px oklch(0 0 0/.30);
+  --shadow-pop:0 8px 28px -8px oklch(0 0 0/.65), 0 1px 2px oklch(0 0 0/.30);
+  --id-claude:oklch(0.72 0.075 55);
+  --id-codex:oklch(0.70 0.030 265);
+  --id-opencode:oklch(0.70 0.060 175);
+  --id-cursor:oklch(0.70 0.060 300);
+  --id-grok:oklch(0.68 0.045 230);
 }}
 *,*::before,*::after{box-sizing:border-box}
 body{margin:0;min-height:100dvh;background:var(--background);color:var(--foreground);
   font-family:var(--font-sans);font-size:14px;line-height:1.5;
-  -webkit-font-smoothing:antialiased;padding:32px 20px 64px}
-main{max-width:760px;margin:0 auto}
-/* The top bar answers "what am I looking at, and is it healthy" before you
-   read a single card - including which image is running, which is the whole
-   point of pulling a new one. */
-.topbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:24px}
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+
+/* --- app chrome ---------------------------------------------------------
+   A real bar rather than a row of text: it stays put while you scroll, which
+   is what keeps "which image am I on" answerable at any point on the page. */
+.chrome{position:sticky;top:0;z-index:10;background:var(--chrome);
+  -webkit-backdrop-filter:saturate(180%) blur(12px);backdrop-filter:saturate(180%) blur(12px);
+  border-bottom:1px solid var(--hairline)}
+.chrome-in{max-width:820px;margin:0 auto;padding:11px 24px;
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .brand{display:flex;align-items:center;gap:9px;min-width:0}
-.mark{width:28px;height:28px;border-radius:8px;background:var(--primary);color:#fff;
-  display:grid;place-items:center;font-size:11px;font-weight:700;letter-spacing:-.02em}
-.brand h1{font-size:15px;font-weight:600;margin:0;letter-spacing:-.015em}
-.brand span{color:var(--muted-foreground);font-size:13px}
-.topbar .spacer{flex:1 1 auto}
-.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
-  border:1px solid var(--border);background:var(--card);color:var(--muted-foreground);
-  font-size:12px;font-weight:500;white-space:nowrap}
-.pill.mono{font-family:var(--font-mono);font-size:11.5px;letter-spacing:-.01em}
-.pill .dot{margin:0}
-.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
-  padding:20px;margin-bottom:14px}
-.card>h2{font-size:15px;font-weight:600;margin:0 0 3px;letter-spacing:-.015em}
-.card>p.hint{margin:0 0 16px;color:var(--muted-foreground);font-size:13px}
-.card>p.hint:last-child{margin-bottom:0}
-/* Devices and unused links are both short reference lists; side by side they
-   stop pushing the things you actually use off the screen. */
-.grid{display:grid;gap:14px;grid-template-columns:1fr}
-.grid>.card{margin-bottom:0}
-@media (min-width:700px){.grid{grid-template-columns:1fr 1fr}}
+.mark{width:26px;height:26px;border-radius:8px;flex:none;
+  background:linear-gradient(160deg,color-mix(in srgb,var(--primary) 88%,#fff),var(--primary));
+  color:#fff;display:grid;place-items:center;font-size:10.5px;font-weight:700;
+  letter-spacing:-.03em;box-shadow:inset 0 1px 0 rgb(255 255 255/.28)}
+.brand h1{font-size:14.5px;font-weight:600;margin:0;letter-spacing:-.015em;white-space:nowrap}
+.brand .sub{color:var(--subtle-foreground);font-size:13px;white-space:nowrap}
+.chrome .spacer{flex:1 1 auto}
+.tag{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:7px;
+  border:1px solid var(--hairline);background:var(--muted);color:var(--muted-foreground);
+  font-size:11.5px;font-weight:500;white-space:nowrap}
+.tag.mono{font-family:var(--font-mono);letter-spacing:-.02em}
+
+main{max-width:820px;margin:0 auto;padding:26px 24px 72px}
+
+/* --- section rhythm -----------------------------------------------------
+   Titles sit outside their surface. Cards then hold content instead of being
+   five labelled boxes of identical weight, which is what made the page read
+   as a form dump rather than a layout. */
+section{margin-bottom:30px}
+section:last-child{margin-bottom:0}
+.head{display:flex;align-items:baseline;gap:10px;margin:0 2px 10px;flex-wrap:wrap}
+.head h2{font-size:12px;font-weight:600;margin:0;letter-spacing:.055em;
+  text-transform:uppercase;color:var(--muted-foreground)}
+.head .note{font-size:12.5px;color:var(--subtle-foreground);margin:0}
+.head .spacer{flex:1 1 auto}
+
+.surface{background:var(--card);border:1px solid var(--border);
+  border-radius:var(--radius);box-shadow:var(--shadow-raised)}
+.surface.pad{padding:18px}
+.lede{margin:0 0 14px;color:var(--muted-foreground);font-size:13px;max-width:62ch}
+.hero{box-shadow:var(--shadow-pop)}
+
+.grid{display:grid;gap:16px 16px;grid-template-columns:1fr;margin-bottom:30px}
+.grid>section{margin-bottom:0}
+@media (min-width:720px){.grid{grid-template-columns:1fr 1fr}}
+
+/* --- controls ----------------------------------------------------------- */
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.controls>.grow{flex:1 1 160px;min-width:0}
+button,select,input{font:inherit;border-radius:var(--control-radius);
+  border:1px solid var(--input);background:var(--card);color:var(--foreground);
+  padding:8px 11px;transition:background .14s ease,border-color .14s ease,
+  box-shadow .14s ease,opacity .14s ease,transform .14s ease}
+input::placeholder{color:var(--subtle-foreground)}
+input:hover:not(:disabled),select:hover:not(:disabled){border-color:var(--muted-foreground)}
+button{border-color:transparent;background:var(--primary);color:var(--primary-foreground);
+  font-weight:550;cursor:pointer;padding:8px 15px;box-shadow:var(--shadow-raised)}
+button:hover:not(:disabled){filter:brightness(1.07)}
+button:active:not(:disabled){transform:translateY(.5px)}
+button.ghost{background:var(--card);color:var(--foreground);border-color:var(--input);
+  box-shadow:none;font-weight:500}
+button.ghost:hover:not(:disabled){background:var(--accent);filter:none}
+button.tiny{padding:5px 10px;font-size:12.5px;border-radius:7px}
+button:disabled{opacity:.55;cursor:default}
+:where(button,select,input,a):focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+select{cursor:pointer}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* --- lists -------------------------------------------------------------- */
+.rows{display:flex;flex-direction:column}
+.row{display:flex;align-items:center;gap:12px;padding:12px 18px;
+  border-top:1px solid var(--hairline);flex-wrap:wrap;transition:background .14s ease}
+.row:first-child{border-top:0}
+.row:hover{background:color-mix(in srgb,var(--accent) 60%,transparent)}
+.row .main{flex:1 1 130px;min-width:0}
+.row .name{font-weight:550;letter-spacing:-.01em}
+.row .meta{color:var(--subtle-foreground);font-size:12.5px;margin-top:1px}
+.row .actions{display:flex;gap:6px;flex:none;margin-left:auto}
+.nameline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* An agent's monogram makes five rows distinguishable before you read them. */
+.mono-tile{width:30px;height:30px;border-radius:9px;flex:none;display:grid;place-items:center;
+  font-size:12px;font-weight:650;letter-spacing:-.02em;color:#fff;
+  background:var(--tile,var(--muted-foreground));
+  box-shadow:inset 0 1px 0 rgb(255 255 255/.22)}
+
 .chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;
-  font-size:12px;font-weight:500;line-height:1.65}
-.chip .dot{margin:0}
+  font-size:11.5px;font-weight:500;line-height:1.7;white-space:nowrap}
 .chip.ok{background:var(--success-surface);color:var(--success-foreground)}
-/* "Not signed in" is the starting state, not a fault - a neutral chip with an
-   amber dot reads as "to do" without five warning blocks shouting at once. */
 .chip.warn{background:var(--muted);color:var(--muted-foreground)}
 .chip.warn .dot{background:var(--warning-foreground)}
 .chip.bad{background:var(--error-surface);color:var(--error-foreground)}
-.chip.idle{background:var(--muted);color:var(--muted-foreground)}
-.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.controls>.grow{flex:1 1 150px;min-width:0}
-button,select,input{font:inherit;border-radius:var(--control-radius);
-  border:1px solid var(--input);background:var(--card);color:var(--foreground);
-  padding:7px 11px;transition:background .12s,border-color .12s,opacity .12s}
-button{border-color:transparent;background:var(--primary);color:var(--primary-foreground);
-  font-weight:550;cursor:pointer;padding:7px 14px}
-button:hover:not(:disabled){opacity:.9}
-button.ghost{background:transparent;color:var(--foreground);border-color:var(--input)}
-button.ghost:hover:not(:disabled){background:var(--accent);opacity:1}
-button.tiny{padding:4px 9px;font-size:12.5px}
-button:disabled{opacity:.5;cursor:default}
-:where(button,select,input,a):focus-visible{outline:2px solid var(--primary);outline-offset:2px}
-select{cursor:pointer}
+.chip.idle{background:var(--muted);color:var(--subtle-foreground)}
+
+/* A panel opens under its row, full width, so acting on one agent never
+   reflows the row you clicked. */
+.panel{flex:1 0 100%;margin-top:2px}
+.panel:empty{display:none}
+.panel-in{background:var(--muted);border:1px solid var(--hairline);
+  border-radius:var(--control-radius);padding:14px;margin-top:10px}
+
+.empty{margin:0;padding:20px 18px;text-align:center;color:var(--subtle-foreground);
+  font-size:13px}
+
+/* --- pairing result ----------------------------------------------------- */
+.result{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-top:14px}
+.result .col{flex:1 1 260px;min-width:0}
 .link{font-family:var(--font-mono);font-size:12.5px;word-break:break-all;
-  background:var(--muted);border:1px solid var(--border);
-  border-radius:var(--control-radius);padding:11px 12px;margin:14px 0 10px;line-height:1.45}
+  background:var(--muted);border:1px solid var(--hairline);
+  border-radius:var(--control-radius);padding:11px 12px;line-height:1.5}
 .qr{background:#fff;border:1px solid var(--border);border-radius:var(--control-radius);
-  padding:12px;display:inline-block;margin-top:12px;line-height:0}
-.qr svg{width:min(212px,58vw);height:auto;display:block;shape-rendering:crispEdges}
-.rows{display:flex;flex-direction:column}
-.row{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--border);
-  flex-wrap:wrap}
-.row:first-child{border-top:0;padding-top:2px}
-.row .main{flex:1 1 190px;min-width:0}
-.row .name{font-weight:550;letter-spacing:-.01em}
-/* Name and state on one line: five agents then scan in a glance instead of
-   ten stacked lines. */
-.nameline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.row .meta{color:var(--muted-foreground);font-size:12.5px;margin-top:2px}
-.row .actions{display:flex;gap:6px;flex:none}
-/* An empty list should read as a deliberate state, not as a card that failed
-   to load. */
-.empty{margin:0;padding:16px;border:1px dashed var(--border);border-radius:var(--control-radius);
-  text-align:center;color:var(--muted-foreground);font-size:13px}
-.kv{display:flex;justify-content:space-between;gap:16px;padding:7px 0;
-  border-top:1px solid var(--border);font-size:13px}
+  padding:10px;line-height:0;flex:none;box-shadow:var(--shadow-raised)}
+.qr svg{width:min(168px,46vw);height:auto;display:block;shape-rendering:crispEdges}
+
+/* --- key/value ---------------------------------------------------------- */
+dl{margin:0}
+.kv{display:flex;justify-content:space-between;gap:16px;padding:11px 18px;
+  border-top:1px solid var(--hairline);font-size:13px}
 .kv:first-child{border-top:0}
 .kv dt{color:var(--muted-foreground);margin:0;flex:none}
-/* A public URL is easily longer than the space left for it; let it wrap
-   rather than run off the edge of the card. */
 .kv dd{margin:0;text-align:right;font-weight:500;min-width:0;overflow-wrap:anywhere}
-dl{margin:0}
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;
-  vertical-align:1px;background:currentColor}
+.kv dd.mono{font-family:var(--font-mono);font-size:12.5px}
+
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;
+  vertical-align:1px;background:currentColor;flex:none}
+.chip .dot,.tag .dot{margin-right:0}
 .ok{color:var(--success-foreground)}
 .warn{color:var(--warning-foreground)}
 .bad{color:var(--error-foreground)}
-.notice{border-radius:var(--control-radius);padding:10px 12px;font-size:13px;margin-top:12px}
+.notice{border-radius:var(--control-radius);padding:10px 12px;font-size:12.5px;margin:12px 18px 14px}
 .notice.err{background:var(--error-surface);color:var(--error-foreground)}
 .notice.warn{background:var(--warning-surface);color:var(--warning-foreground)}
-.skeleton{height:13px;border-radius:4px;background:var(--muted);margin:9px 0}
-.login{max-width:400px;margin:8vh auto 0}
-@media (max-width:520px){body{padding:20px 14px 48px}.card{padding:16px}}
-</style></head><body><main>
-<div class="topbar">
+.skeleton{height:12px;border-radius:5px;background:var(--muted);margin:14px 18px;
+  animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.45}}
+
+/* --- unlock ------------------------------------------------------------- */
+.login{max-width:380px;margin:14vh auto 0}
+.login h2{font-size:16px;font-weight:600;margin:0 0 4px;letter-spacing:-.02em}
+@media (max-width:560px){
+  .chrome-in{padding:10px 16px}
+  main{padding:20px 16px 56px}
+  .surface.pad{padding:15px}
+  .row{padding:12px 15px}
+  .kv{padding:10px 15px}
+}
+</style></head><body>
+<header class="chrome"><div class="chrome-in">
   <div class="brand"><div class="mark">T3</div>
-    <h1>T3 Code</h1><span>&middot; setup</span></div>
+    <h1>T3 Code</h1><span class="sub">setup</span></div>
   <div class="spacer"></div>
-  ${authed ? `<span class="pill mono" id="build" title="Image this container was built from">&mdash;</span>
-  <span class="pill" id="health"><span class="dot" style="background:var(--muted-foreground)"></span>Checking</span>` : ""}
-</div>
+  ${authed ? `<span class="tag mono" id="build" title="Image this container was built from">&mdash;</span>
+  <span class="tag" id="health"><span class="dot" style="background:var(--subtle-foreground)"></span>Checking</span>` : ""}
+</div></header>
+<main>
 ${
   authed
-    ? `<div class="card">
-  <h2>Pair a device</h2>
-  <p class="hint">Creates a single-use link for one device. Scan it with the T3 Code
-  app, or open it in a browser.</p>
-  <div class="controls">
-    <select id="ttl" aria-label="How long the link stays valid">
-      <option value="30d">Valid 30 days</option>
-      <option value="7d">Valid 7 days</option>
-      <option value="1h">Valid 1 hour</option>
-    </select>
-    <input id="label" class="grow" placeholder="Label, e.g. my phone" aria-label="Label" />
-    <button id="mint">Create link</button>
+    ? `<section>
+  <div class="head"><h2>Pair a device</h2></div>
+  <div class="surface hero pad">
+    <p class="lede">Creates a single-use link for one device. Scan it with the T3 Code
+    app, or open it in a browser.</p>
+    <div class="controls">
+      <select id="ttl" aria-label="How long the link stays valid">
+        <option value="30d">Valid 30 days</option>
+        <option value="7d">Valid 7 days</option>
+        <option value="1h">Valid 1 hour</option>
+      </select>
+      <input id="label" class="grow" placeholder="Label, e.g. my phone" aria-label="Label" />
+      <button id="mint">Create link</button>
+    </div>
+    <div id="out" aria-live="polite"></div>
   </div>
-  <div id="out" aria-live="polite"></div>
-</div>
+</section>
 
-<div class="card"><h2>Agents</h2>
-  <p class="hint">Sign in here, or set an API key. Credentials are stored on the
-  state volume, so they survive the container being recreated.</p>
-  <div id="agents"><div class="skeleton" style="width:55%"></div></div>
-</div>
+<section>
+  <div class="head"><h2>Agents</h2>
+    <p class="note">Credentials live on the state volume and survive a recreate.</p></div>
+  <div class="surface"><div id="agents"><div class="skeleton" style="width:44%"></div>
+    <div class="skeleton" style="width:33%"></div></div></div>
+</section>
 
 <div class="grid">
-  <div class="card"><h2>Devices</h2>
-    <p class="hint">Revoking one signs that device out; nothing else is touched.</p>
-    <div id="clients"><div class="skeleton" style="width:60%"></div></div>
-  </div>
+  <section>
+    <div class="head"><h2>Devices</h2>
+      <p class="note" id="devcount"></p></div>
+    <div class="surface"><div id="clients"><div class="skeleton" style="width:56%"></div></div></div>
+  </section>
 
-  <div class="card"><h2>Unused links</h2>
-    <p class="hint">Created but not yet redeemed.</p>
-    <div id="links"><div class="skeleton" style="width:40%"></div></div>
-  </div>
+  <section>
+    <div class="head"><h2>Unused links</h2>
+      <p class="note" id="linkcount"></p></div>
+    <div class="surface"><div id="links"><div class="skeleton" style="width:40%"></div></div></div>
+  </section>
 </div>
 
-<div class="card"><h2>Environment</h2>
-  <p class="hint">How this container is reachable, and what it is running.</p>
-  <div id="status"><div class="skeleton" style="width:70%"></div>
-  <div class="skeleton" style="width:50%"></div></div>
-</div>`
-    : `<div class="login"><div class="card">
+<section>
+  <div class="head"><h2>Environment</h2></div>
+  <div class="surface"><div id="status"><div class="skeleton" style="width:64%"></div>
+    <div class="skeleton" style="width:48%"></div></div></div>
+</section>`
+    : `<div class="login"><div class="surface pad">
   <h2>Setup key</h2>
-  <p class="hint">The value of <code>T3_SETUP_KEY</code> from this container's
+  <p class="lede">The value of <code>T3_SETUP_KEY</code> from this container's
   environment. If you did not set one, it was generated at boot and printed to
   the container log.</p>
   <form method="POST" action="${mount}/login" class="controls">
@@ -761,264 +850,8 @@ ${
 </div></div>`
 }
 </main>
-<script>
-const BASE = ${JSON.stringify(mount)};
-if (document.getElementById('mint')) {
-  const $ = (id) => document.getElementById(id);
-  // Both a sign-in and a key form render into the agent's row, and the periodic
-  // refresh rebuilds that list. It has to leave the row alone while either is
-  // open, or the URL, the QR, the code field - or the key you are halfway
-  // through pasting - vanish under you a few seconds after they appear.
-  let panelActive = null;
-  const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  const when = (v) => { if (!v) return '—'; const d = new Date(v);
-    return isNaN(d) ? '—' : d.toLocaleString(undefined, {dateStyle:'medium', timeStyle:'short'}); };
-
-  $('mint').onclick = async (event) => {
-    const button = event.currentTarget;
-    button.disabled = true;
-    $('out').innerHTML = '<div class="skeleton" style="width:80%"></div>';
-    try {
-      const res = await fetch(BASE + '/pair', {
-        method: 'POST', headers: {'content-type': 'application/json'},
-        body: JSON.stringify({ttl: $('ttl').value, label: $('label').value}),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Could not create a link');
-      $('out').innerHTML =
-        '<div class="link">' + esc(data.pairUrl) + '</div>' +
-        '<div class="controls"><button class="ghost tiny" id="copy">Copy link</button>' +
-        '<a href="' + esc(data.pairUrl) + '" target="_blank" rel="noopener">' +
-        '<button class="ghost tiny">Open</button></a>' +
-        '<span class="meta">Single use &middot; expires ' + esc(when(data.expiresAt)) + '</span></div>' +
-        (data.qr ? '<div class="qr">' + data.qr + '</div>' : '');
-      $('copy').onclick = async (e) => {
-        try { await navigator.clipboard.writeText(data.pairUrl); e.target.textContent = 'Copied'; }
-        catch { e.target.textContent = 'Press ⌘C'; }
-        setTimeout(() => { e.target.textContent = 'Copy link'; }, 1600);
-      };
-      $('label').value = '';
-      load();
-    } catch (error) {
-      $('out').innerHTML = '<div class="notice err">' + esc(error.message) + '</div>';
-    }
-    button.disabled = false;
-  };
-
-  const revokeButton = (kind, id) =>
-    '<button class="ghost tiny revoke" data-kind="' + kind + '" data-id="' + esc(id) + '">Revoke</button>';
-
-  const load = async () => {
-    let s;
-    try { s = await (await fetch(BASE + '/status')).json(); }
-    catch { $('status').innerHTML = '<div class="notice err">Could not read status.</div>'; return; }
-
-    $('clients').innerHTML = s.sessions.length
-      ? '<div class="rows">' + s.sessions.map((c) =>
-          '<div class="row"><div class="main"><div class="name">' +
-          esc(c.client?.label || c.subject || c.sessionId) + '</div><div class="meta">' +
-          (c.connected ? '<span class="ok"><span class="dot"></span>Connected</span>'
-                       : 'Last seen ' + esc(when(c.lastConnectedAt))) +
-          ' &middot; expires ' + esc(when(c.expiresAt)) + '</div></div>' +
-          '<div class="actions">' + revokeButton('session', c.sessionId) + '</div></div>').join('') + '</div>'
-      : '<p class="empty">No devices paired yet. Create a link above.</p>';
-
-    $('links').innerHTML = s.pairings.length
-      ? '<div class="rows">' + s.pairings.map((l) =>
-          '<div class="row"><div class="main"><div class="name">' +
-          esc(l.label || 'Unlabelled') + '</div><div class="meta">Expires ' +
-          esc(when(l.expiresAt)) + '</div></div>' + '<div class="actions">' + revokeButton('pairing', l.id) + '</div></div>').join('') + '</div>'
-      : '<p class="empty">None outstanding.</p>';
-
-    // The top bar carries the two facts worth knowing before anything else:
-    // whether the server is up, and which image this is.
-    const build = s.image && s.image.version
-      ? s.image.version + (s.image.variant ? ' \u00b7 ' + s.image.variant : '')
-      : 'unversioned build';
-    $('build').textContent = build;
-    $('health').className = 'pill';
-    $('health').innerHTML = s.server.ok
-      ? '<span class="dot" style="background:var(--success-foreground)"></span>Running ' +
-        esc(s.server.version)
-      : '<span class="dot" style="background:var(--error-foreground)"></span>Server down';
-
-    const rows = [];
-    rows.push(['Server', s.server.ok
-      ? '<span class="ok"><span class="dot"></span>Running ' + esc(s.server.version) + '</span>'
-      : '<span class="bad"><span class="dot"></span>' + esc(s.server.detail) + '</span>']);
-    rows.push(['Image', build === 'unversioned build'
-      ? '<span class="meta">Not stamped &mdash; built outside CI</span>'
-      : esc(build)]);
-    rows.push(['Public URL', s.publicUrl ? esc(s.publicUrl)
-      : '<span class="warn">Not set</span>']);
-    $('status').innerHTML = '<dl>' + rows.map(([k, v]) =>
-      '<div class="kv"><dt>' + k + '</dt><dd>' + v + '</dd></div>').join('') + '</dl>' +
-      (s.publicUrl ? '' : '<div class="notice warn">Without T3_PUBLIC_URL, pairing links ' +
-        "point at this container's own address and no device can reach them.</div>");
-
-    if (!panelActive) $('agents').innerHTML = '<div class="rows">' + s.harnesses.map((h) => {
-      const status = !h.installed ? '<span class="chip bad">Not installed</span>'
-        : h.signedIn === true ? '<span class="chip ok"><span class="dot"></span>Signed in</span>'
-        : h.signedIn === false ? '<span class="chip warn"><span class="dot"></span>Not signed in</span>'
-        : '<span class="chip idle">Checking\u2026</span>';
-      const actions = !h.installed ? '' :
-        (h.canSignIn ? '<button class="ghost tiny signin" data-agent="' + h.id + '">Sign in</button>' : '') +
-        (h.canSetKey ? '<button class="ghost tiny setkey" data-agent="' + h.id +
-           '" data-kind="' + esc(h.keyKind) + '">API key</button>' : '');
-      return '<div class="row"><div class="main"><div class="nameline">' +
-        '<span class="name">' + esc(h.name) + '</span>' + status + '</div>' +
-        '<div id="agent-' + h.id + '"></div></div>' +
-        '<div class="actions">' + actions + '</div></div>';
-    }).join('') + '</div>';
-
-    if (panelActive) return;
-
-    // The provider list is fetched once and reused: it is the same for every
-    // agent row and does not change while the page is open.
-    let providerList = null;
-    const loadProviders = async () => {
-      if (providerList) return providerList;
-      try {
-        providerList = await (await fetch(BASE + '/providers')).json();
-      } catch (err) {
-        providerList = {providers: [], configured: []};
-      }
-      return providerList;
-    };
-
-    for (const b of document.querySelectorAll('.setkey')) {
-      b.onclick = async () => {
-        const agent = b.dataset.agent;
-        const needsProvider = b.dataset.kind === 'opencode';
-        let providerField = '';
-        if (needsProvider) {
-          b.disabled = true;
-          const {providers, configured} = await loadProviders();
-          b.disabled = false;
-          const done = new Set(configured || []);
-          const opts = (providers || []).map((p) =>
-            '<option value="' + esc(p.id) + '">' + esc(p.name) +
-            (done.has(p.id) ? ' \u2713' : '') + '</option>').join('');
-          providerField =
-            '<select class="pv" style="flex:1 1 100%">' +
-            '<option value="">Choose a provider' + (opts ? '' : ' (catalog unavailable)') + '</option>' +
-            opts + '<option value="__custom">Other - type an id</option></select>' +
-            '<input class="pv-custom" placeholder="Provider id, e.g. deepseek" ' +
-            'style="flex:1 1 130px;display:none" />';
-        }
-        panelActive = agent;
-        $('agent-' + agent).innerHTML =
-          '<div class="controls" style="margin-top:8px;flex-wrap:wrap">' + providerField +
-          '<input class="kv-key" type="password" placeholder="API key" style="flex:1 1 150px" />' +
-          '<button class="tiny save">Save</button>' +
-          '<button class="ghost tiny cancelkey">Cancel</button></div><div class="out"></div>';
-        const box = $('agent-' + agent);
-        // Closing is what lets the list start refreshing again, so it needs to
-        // be reachable without saving something.
-        box.querySelector('.cancelkey').onclick = () => { panelActive = null; box.innerHTML = ''; load(); };
-        const sel = box.querySelector('.pv');
-        const custom = box.querySelector('.pv-custom');
-        if (sel) sel.onchange = () => {
-          const isCustom = sel.value === '__custom';
-          custom.style.display = isCustom ? '' : 'none';
-          if (isCustom) custom.focus();
-        };
-        box.querySelector('.save').onclick = async (e) => {
-          e.target.disabled = true;
-          const body = {agent, key: box.querySelector('.kv-key').value};
-          if (sel) body.provider = sel.value === '__custom' ? custom.value.trim() : sel.value;
-          const res = await fetch(BASE + '/auth/apikey', {method: 'POST',
-            headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
-          const data = await res.json();
-          box.querySelector('.out').innerHTML = res.ok
-            ? '<div class="notice" style="background:var(--muted)">Saved.</div>'
-            : '<div class="notice err">' + esc(data.error) + '</div>';
-          e.target.disabled = false;
-          // Leave a failed attempt on screen with the key still in it; only a
-          // success closes the form and lets the list resume.
-          if (res.ok) { panelActive = null; setTimeout(load, 600); }
-        };
-      };
-    }
-
-    for (const b of document.querySelectorAll('.signin')) {
-      b.onclick = async () => {
-        const agent = b.dataset.agent;
-        b.disabled = true;
-        const box = $('agent-' + agent);
-        box.innerHTML = '<div class="skeleton" style="width:70%"></div>';
-        const res = await fetch(BASE + '/auth/signin', {method: 'POST',
-          headers: {'content-type': 'application/json'}, body: JSON.stringify({agent})});
-        const started = await res.json();
-        if (!res.ok) {
-          box.innerHTML = '<div class="notice err">' + esc(started.error) + '</div>';
-          b.disabled = false; return;
-        }
-        panelActive = agent;
-        const finish = (html) => {
-          panelActive = null;
-          box.innerHTML = html;
-          b.disabled = false;
-        };
-        let painted = false;
-        const poll = async () => {
-          const st = await (await fetch(BASE + '/auth/session?id=' + started.id)).json();
-          if (st.state === 'done') {
-            finish('<div class="notice" style="background:var(--muted)">Signed in.</div>');
-            load(); return;
-          }
-          if (st.state === 'failed' || st.state === 'cancelled') {
-            finish('<div class="notice err">' + esc(st.error || 'Sign-in stopped') + '</div>');
-            return;
-          }
-          // Paint once. Re-rendering on every poll would clear the code field
-          // under whoever is pasting into it.
-          if (st.url && !painted) {
-            painted = true;
-            box.innerHTML =
-              '<p class="meta" style="margin:8px 0 0">Open this on any device and approve:</p>' +
-              '<div class="link">' + esc(st.url) + '</div>' +
-              '<div class="controls"><a href="' + esc(st.url) + '" target="_blank" rel="noopener">' +
-              '<button class="ghost tiny">Open</button></a>' +
-              (st.code ? '<span class="meta">Confirm code <strong>' + esc(st.code) + '</strong></span>' : '') +
-              '<button class="ghost tiny cancel">Cancel</button></div>' +
-              (st.qr ? '<div class="qr">' + st.qr + '</div>' : '') +
-              (st.needsCode ? '<div class="controls" style="margin-top:8px">' +
-                 '<input class="codein" placeholder="Paste the code from your browser" style="flex:1 1 180px" />' +
-                 '<button class="tiny sendcode">Submit</button></div>' : '');
-            const send = box.querySelector('.sendcode');
-            if (send) send.onclick = async () => {
-              send.disabled = true;
-              send.textContent = 'Submitting';
-              await fetch(BASE + '/auth/code', {method: 'POST',
-                headers: {'content-type': 'application/json'},
-                body: JSON.stringify({id: started.id, code: box.querySelector('.codein').value})});
-            };
-            box.querySelector('.cancel').onclick = async () => {
-              await fetch(BASE + '/auth/cancel', {method: 'POST',
-                headers: {'content-type': 'application/json'}, body: JSON.stringify({id: started.id})});
-              finish('<div class="meta">Sign-in cancelled.</div>');
-            };
-          }
-          setTimeout(poll, 2000);
-        };
-        poll();
-      };
-    }
-
-    for (const b of document.querySelectorAll('.revoke')) {
-      b.onclick = async () => {
-        b.disabled = true; b.textContent = 'Revoking';
-        await fetch(BASE + '/revoke', {method: 'POST', headers: {'content-type': 'application/json'},
-          body: JSON.stringify({kind: b.dataset.kind, id: b.dataset.id})});
-        load();
-      };
-    }
-  };
-  load();
-  setInterval(load, 15000);
-}
-</script></body></html>`;
+<script>window.__T3_SETUP_BASE__ = ${JSON.stringify(mount)};</script>
+<script>${CLIENT_JS}</script></body></html>`;
 
 const ROUTES = ["/login", "/status", "/pair", "/revoke",
   "/auth/apikey", "/auth/signin", "/auth/session", "/auth/code", "/auth/cancel",

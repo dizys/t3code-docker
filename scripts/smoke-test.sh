@@ -22,8 +22,11 @@ retry() { local n=$1; shift; local i; for i in $(seq 1 "$n"); do
   if eval "$*" >/dev/null 2>&1; then return 0; fi; sleep 2; done; return 1; }
 
 STATE_MOUNT=""
+PAGE_HTML=""
+CLIENT_JS_COPY=""
 cleanup() {
   docker rm -f "$NAME" "${NAME}-mount" "${NAME}-boot" "${NAME}-anon" "${NAME}-env" >/dev/null 2>&1 || true
+  rm -f "$PAGE_HTML" "$CLIENT_JS_COPY" 2>/dev/null || true
   if [ -n "$STATE_MOUNT" ]; then
     sudo rm -rf "$STATE_MOUNT" 2>/dev/null || rm -rf "$STATE_MOUNT" 2>/dev/null || true
   fi
@@ -410,15 +413,30 @@ check "Grok sign-in captures a device URL" grok_device_code
 # parse - which looks like a page that simply never loads its data. Written as
 # a function rather than an eval string: the nested quoting this needs is
 # exactly the kind that dies inside eval, taking the whole run with it.
-browser_script_parses() {
-  docker exec "$NAME" sh -c '
-    curl -sS -c /tmp/j3 -d "key='"$SETUP_KEY"'" -o /dev/null http://127.0.0.1:3774/login
-    curl -sS -b /tmp/j3 http://127.0.0.1:3774/ \
-      | sed -n "/<script>/,/<\/script>/p" | sed "1d;\$d" > /tmp/page.js
-    test -s /tmp/page.js && node --check /tmp/page.js
-  '
+# The client script used to be embedded in a template literal in server.mjs,
+# which quietly ate escapes on the way out: `/\s+/` reached the browser as
+# `/s+/` and split agent names on the letter s, and an apostrophe once
+# terminated a string mid-sentence. Neither is a syntax error in the result, so
+# parsing it proves nothing. The invariant worth asserting is stronger and
+# simpler: what the browser receives is byte-for-byte the file on disk.
+client_script_is_verbatim() {
+  PAGE_HTML="$(mktemp)"; CLIENT_JS_COPY="$(mktemp)"
+  docker exec "$NAME" sh -c \
+    "curl -sS -c /tmp/j3 -d 'key=$SETUP_KEY' -o /dev/null http://127.0.0.1:3774/login && \
+     curl -sS -b /tmp/j3 http://127.0.0.1:3774/" > "$PAGE_HTML" || return 1
+  docker exec "$NAME" cat /opt/t3-setup/app.js > "$CLIENT_JS_COPY" || return 1
+  python3 - "$PAGE_HTML" "$CLIENT_JS_COPY" <<'PYEOF'
+import re, sys
+page = open(sys.argv[1], encoding="utf-8").read()
+blocks = re.findall(r"<script>(.*?)</script>", page, re.S)
+if not blocks:
+    sys.exit(1)
+sys.exit(0 if blocks[-1].strip() == open(sys.argv[2], encoding="utf-8").read().strip() else 1)
+PYEOF
 }
-check "the script it serves to the browser parses" browser_script_parses
+check "the browser gets the client script verbatim" client_script_is_verbatim
+check "and that script parses" \
+  "docker exec $NAME node --check /opt/t3-setup/app.js"
 
 # A proxy routing a path prefix here forwards it intact. Serving the page only
 # at / turned that into a bare "unauthorized", which reads as a wrong password.

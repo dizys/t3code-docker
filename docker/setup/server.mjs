@@ -20,6 +20,15 @@ const run = promisify(execFile);
 // Read verbatim rather than embedded in a template literal: see the note at the
 // top of app.js for what that cost twice.
 const CLIENT_JS = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+const CONSOLE_CSS = readFileSync(new URL("./console.css", import.meta.url), "utf8");
+
+// Resolve the theme before first paint. Left to the client script, the page
+// flashes light for as long as it takes to parse, which on a phone over a
+// tunnel is long enough to see. Kept tiny and inline for that reason.
+const THEME_BOOT = `(function(){try{var m=localStorage.getItem("t3-console-theme")||"system";` +
+  `var d=m==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):m;` +
+  `document.documentElement.setAttribute("data-theme",d);` +
+  `document.documentElement.setAttribute("data-theme-mode",m);}catch(e){}})();`;
 
 const PORT = Number(process.env.T3_SETUP_PORT ?? 3774);
 const KEY = process.env.T3_SETUP_KEY ?? "";
@@ -270,6 +279,15 @@ const status = async () => {
       variant: process.env.T3_IMAGE_VARIANT || null,
     },
     publicUrl: PUBLIC_URL || null,
+    // The footer states where things live. Read them rather than printing a
+    // plausible-looking default: a wrong path here is worse than no path.
+    paths: {
+      // What you mount is the home directory; the state dir lives inside it.
+      volume: STATE_DIR.replace(/\/\.t3\/?$/, "") || STATE_DIR,
+      state: STATE_DIR,
+      workspace: process.env.T3_WORKSPACE || "/workspace",
+      pairTtl: process.env.T3_PAIR_TTL || "30d",
+    },
     harnesses,
     pairings: await listJson(["auth", "pairing", "list", "--json"]),
     sessions: await listJson(["auth", "session", "list", "--json"]),
@@ -563,312 +581,128 @@ const readBody = async (req) => {
 const page = (authed, mount) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>T3 Code setup</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111'/%3E%3Ctext x='16' y='22' font-family='ui-monospace,monospace' font-size='16' font-weight='700' fill='%23fff' text-anchor='middle'%3ET3%3C/text%3E%3C/svg%3E">
-<style>
-/* Tokens and shape lifted from T3 Code's own stylesheet so this page reads as
-   part of the same product: its zinc ramp, its 0.625rem radius, and its
-   app-chrome/toolbar split between the bar at the top and the content below. */
-:root{
-  color-scheme:light dark;
-  --background:oklch(99.2% 0 0);
-  --foreground:oklch(0.274 0.006 286.033);
-  --card:#fff;
-  --muted:oklch(0.985 0 0);
-  --muted-foreground:oklch(0.552 0.016 285.938);
-  --subtle-foreground:oklch(0.646 0.014 285.9);
-  --border:oklch(0.92 0.004 286.32);
-  --hairline:oklch(0.945 0.003 286.32);
-  --input:oklch(0.871 0.006 286.286);
-  --primary:oklch(0.488 0.217 264);
-  --primary-foreground:#fff;
-  --accent:oklch(0.967 0.001 286.375);
-  --chrome:color-mix(in srgb, oklch(99.2% 0 0) 82%, transparent);
-  --success-foreground:oklch(0.508 0.118 165.612);
-  --success-surface:color-mix(in srgb, oklch(0.696 0.17 162.48) 11%, transparent);
-  --warning-foreground:oklch(0.555 0.163 48.998);
-  --warning-surface:color-mix(in srgb, oklch(0.769 0.188 70.08) 10%, transparent);
-  --error:oklch(0.637 0.237 25.331);
-  --error-foreground:oklch(0.505 0.213 27.518);
-  --error-surface:color-mix(in srgb, oklch(0.637 0.237 25.331) 8%, transparent);
-  --shadow-raised:0 1px 2px oklch(0 0 0/.04), 0 1px 1px oklch(0 0 0/.03);
-  --shadow-pop:0 4px 16px -4px oklch(0 0 0/.10), 0 1px 2px oklch(0 0 0/.04);
-  --radius:0.625rem;
-  --control-radius:0.5rem;
-  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
-  --font-mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
-  /* Agent identity is deliberately low-chroma: it separates five rows at a
-     glance without competing with the saturated colours that carry state. */
-  --id-claude:oklch(0.70 0.075 55);
-  --id-codex:oklch(0.62 0.035 265);
-  --id-opencode:oklch(0.64 0.062 175);
-  --id-cursor:oklch(0.62 0.062 300);
-  --id-grok:oklch(0.60 0.045 230);
-}
-@media (prefers-color-scheme:dark){:root{
-  --background:oklch(0.145 0 0);
-  --foreground:oklch(0.97 0 0);
-  --card:color-mix(in srgb, oklch(0.145 0 0) 96%, #fff);
-  --muted:rgb(255 255 255/3.5%);
-  --muted-foreground:color-mix(in srgb, oklch(0.556 0 0) 92%, #fff);
-  --subtle-foreground:oklch(0.53 0 0);
-  --border:rgb(255 255 255/7%);
-  --hairline:rgb(255 255 255/5%);
-  --input:rgb(255 255 255/9%);
-  --primary:oklch(0.571 0.21 264);
-  --accent:rgb(255 255 255/5%);
-  --chrome:color-mix(in srgb, oklch(0.145 0 0) 82%, transparent);
-  --success-foreground:oklch(0.765 0.177 163.223);
-  --success-surface:color-mix(in srgb, oklch(0.696 0.17 162.48) 17%, transparent);
-  --warning-foreground:oklch(0.828 0.189 84.429);
-  --warning-surface:color-mix(in srgb, oklch(0.769 0.188 70.08) 15%, transparent);
-  --error-foreground:oklch(0.704 0.191 22.216);
-  --error-surface:color-mix(in srgb, oklch(0.637 0.237 25.331) 16%, transparent);
-  --shadow-raised:0 1px 2px oklch(0 0 0/.30);
-  --shadow-pop:0 8px 28px -8px oklch(0 0 0/.65), 0 1px 2px oklch(0 0 0/.30);
-  --id-claude:oklch(0.72 0.075 55);
-  --id-codex:oklch(0.70 0.030 265);
-  --id-opencode:oklch(0.70 0.060 175);
-  --id-cursor:oklch(0.70 0.060 300);
-  --id-grok:oklch(0.68 0.045 230);
-}}
-*,*::before,*::after{box-sizing:border-box}
-body{margin:0;min-height:100dvh;background:var(--background);color:var(--foreground);
-  font-family:var(--font-sans);font-size:14px;line-height:1.5;
-  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-
-/* --- app chrome ---------------------------------------------------------
-   A real bar rather than a row of text: it stays put while you scroll, which
-   is what keeps "which image am I on" answerable at any point on the page. */
-.chrome{position:sticky;top:0;z-index:10;background:var(--chrome);
-  -webkit-backdrop-filter:saturate(180%) blur(12px);backdrop-filter:saturate(180%) blur(12px);
-  border-bottom:1px solid var(--hairline)}
-.chrome-in{max-width:820px;margin:0 auto;padding:11px 24px;
-  display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.brand{display:flex;align-items:center;gap:9px;min-width:0}
-.mark{width:26px;height:26px;border-radius:8px;flex:none;
-  background:linear-gradient(160deg,color-mix(in srgb,var(--primary) 88%,#fff),var(--primary));
-  color:#fff;display:grid;place-items:center;font-size:10.5px;font-weight:700;
-  letter-spacing:-.03em;box-shadow:inset 0 1px 0 rgb(255 255 255/.28)}
-.brand h1{font-size:14.5px;font-weight:600;margin:0;letter-spacing:-.015em;white-space:nowrap}
-.brand .sub{color:var(--subtle-foreground);font-size:13px;white-space:nowrap}
-.chrome .spacer{flex:1 1 auto}
-.tag{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:7px;
-  border:1px solid var(--hairline);background:var(--muted);color:var(--muted-foreground);
-  font-size:11.5px;font-weight:500;white-space:nowrap}
-.tag.mono{font-family:var(--font-mono);letter-spacing:-.02em}
-
-main{max-width:820px;margin:0 auto;padding:26px 24px 72px}
-
-/* --- section rhythm -----------------------------------------------------
-   Titles sit outside their surface. Cards then hold content instead of being
-   five labelled boxes of identical weight, which is what made the page read
-   as a form dump rather than a layout. */
-section{margin-bottom:30px}
-section:last-child{margin-bottom:0}
-.head{display:flex;align-items:baseline;gap:10px;margin:0 2px 10px;flex-wrap:wrap}
-.head h2{font-size:12px;font-weight:600;margin:0;letter-spacing:.055em;
-  text-transform:uppercase;color:var(--muted-foreground)}
-.head .note{font-size:12.5px;color:var(--subtle-foreground);margin:0}
-.head .spacer{flex:1 1 auto}
-
-.surface{background:var(--card);border:1px solid var(--border);
-  border-radius:var(--radius);box-shadow:var(--shadow-raised)}
-.surface.pad{padding:18px}
-.lede{margin:0 0 14px;color:var(--muted-foreground);font-size:13px;max-width:62ch}
-.hero{box-shadow:var(--shadow-pop)}
-
-.grid{display:grid;gap:16px 16px;grid-template-columns:1fr;margin-bottom:30px}
-.grid>section{margin-bottom:0}
-@media (min-width:720px){.grid{grid-template-columns:1fr 1fr}}
-
-/* --- controls ----------------------------------------------------------- */
-.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.controls>.grow{flex:1 1 160px;min-width:0}
-button,select,input{font:inherit;border-radius:var(--control-radius);
-  border:1px solid var(--input);background:var(--card);color:var(--foreground);
-  padding:8px 11px;transition:background .14s ease,border-color .14s ease,
-  box-shadow .14s ease,opacity .14s ease,transform .14s ease}
-input::placeholder{color:var(--subtle-foreground)}
-input:hover:not(:disabled),select:hover:not(:disabled){border-color:var(--muted-foreground)}
-button{border-color:transparent;background:var(--primary);color:var(--primary-foreground);
-  font-weight:550;cursor:pointer;padding:8px 15px;box-shadow:var(--shadow-raised)}
-button:hover:not(:disabled){filter:brightness(1.07)}
-button:active:not(:disabled){transform:translateY(.5px)}
-button.ghost{background:var(--card);color:var(--foreground);border-color:var(--input);
-  box-shadow:none;font-weight:500}
-button.ghost:hover:not(:disabled){background:var(--accent);filter:none}
-button.tiny{padding:5px 10px;font-size:12.5px;border-radius:7px}
-button:disabled{opacity:.55;cursor:default}
-:where(button,select,input,a):focus-visible{outline:2px solid var(--primary);outline-offset:2px}
-select{cursor:pointer}
-@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-
-/* --- lists -------------------------------------------------------------- */
-.rows{display:flex;flex-direction:column}
-.row{display:flex;align-items:center;gap:12px;padding:12px 18px;
-  border-top:1px solid var(--hairline);flex-wrap:wrap;transition:background .14s ease}
-.row:first-child{border-top:0}
-.row:hover{background:color-mix(in srgb,var(--accent) 60%,transparent)}
-.row .main{flex:1 1 130px;min-width:0}
-.row .name{font-weight:550;letter-spacing:-.01em}
-.row .meta{color:var(--subtle-foreground);font-size:12.5px;margin-top:1px}
-.row .actions{display:flex;gap:6px;flex:none;margin-left:auto}
-.nameline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-
-/* An agent's monogram makes five rows distinguishable before you read them. */
-.mono-tile{width:30px;height:30px;border-radius:9px;flex:none;display:grid;place-items:center;
-  font-size:12px;font-weight:650;letter-spacing:-.02em;color:#fff;
-  background:var(--tile,var(--muted-foreground));
-  box-shadow:inset 0 1px 0 rgb(255 255 255/.22)}
-
-.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;
-  font-size:11.5px;font-weight:500;line-height:1.7;white-space:nowrap}
-.chip.ok{background:var(--success-surface);color:var(--success-foreground)}
-.chip.warn{background:var(--muted);color:var(--muted-foreground)}
-.chip.warn .dot{background:var(--warning-foreground)}
-.chip.bad{background:var(--error-surface);color:var(--error-foreground)}
-.chip.idle{background:var(--muted);color:var(--subtle-foreground)}
-
-/* A panel opens under its row, full width, so acting on one agent never
-   reflows the row you clicked. */
-.panel{flex:1 0 100%;margin-top:2px}
-.panel:empty{display:none}
-.panel-in{background:var(--muted);border:1px solid var(--hairline);
-  border-radius:var(--control-radius);padding:14px;margin-top:10px}
-
-.empty{margin:0;padding:20px 18px;text-align:center;color:var(--subtle-foreground);
-  font-size:13px}
-
-/* --- pairing result ----------------------------------------------------- */
-.result{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-top:14px}
-.result .col{flex:1 1 260px;min-width:0}
-.link{font-family:var(--font-mono);font-size:12.5px;word-break:break-all;
-  background:var(--muted);border:1px solid var(--hairline);
-  border-radius:var(--control-radius);padding:11px 12px;line-height:1.5}
-/* Ports. The tile carries the number itself rather than a monogram - a port
-   is already its own label, and nothing else on the page is a number. */
-.mono-tile.port{background:var(--muted);color:var(--muted-foreground);border:1px solid var(--border);
-  font-size:11px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-.portlive{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:6px}
-.porturl{font-family:var(--font-mono);font-size:12.5px;color:var(--primary);
-  word-break:break-all;text-decoration:none}
-.porturl:hover{text-decoration:underline}
-.portlive .qr svg{width:min(104px,30vw)}
-.meta.err{color:var(--error-foreground)}
-a.btn{display:inline-flex;align-items:center;text-decoration:none}
-a.btn.ghost:hover{background:var(--accent)}
-.qr{background:#fff;border:1px solid var(--border);border-radius:var(--control-radius);
-  padding:10px;line-height:0;flex:none;box-shadow:var(--shadow-raised)}
-.qr svg{width:min(168px,46vw);height:auto;display:block;shape-rendering:crispEdges}
-
-/* --- key/value ---------------------------------------------------------- */
-dl{margin:0}
-.kv{display:flex;justify-content:space-between;gap:16px;padding:11px 18px;
-  border-top:1px solid var(--hairline);font-size:13px}
-.kv:first-child{border-top:0}
-.kv dt{color:var(--muted-foreground);margin:0;flex:none}
-.kv dd{margin:0;text-align:right;font-weight:500;min-width:0;overflow-wrap:anywhere}
-.kv dd.mono{font-family:var(--font-mono);font-size:12.5px}
-
-.dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;
-  vertical-align:1px;background:currentColor;flex:none}
-.chip .dot,.tag .dot{margin-right:0}
-.ok{color:var(--success-foreground)}
-.warn{color:var(--warning-foreground)}
-.bad{color:var(--error-foreground)}
-.notice{border-radius:var(--control-radius);padding:10px 12px;font-size:12.5px;margin:12px 18px 14px}
-.notice.err{background:var(--error-surface);color:var(--error-foreground)}
-.notice.warn{background:var(--warning-surface);color:var(--warning-foreground)}
-.skeleton{height:12px;border-radius:5px;background:var(--muted);margin:14px 18px;
-  animation:pulse 1.6s ease-in-out infinite}
-@keyframes pulse{50%{opacity:.45}}
-
-/* --- unlock ------------------------------------------------------------- */
-.login{max-width:380px;margin:14vh auto 0}
-.login h2{font-size:16px;font-weight:600;margin:0 0 4px;letter-spacing:-.02em}
-@media (max-width:560px){
-  .chrome-in{padding:10px 16px}
-  main{padding:20px 16px 56px}
-  .surface.pad{padding:15px}
-  .row{padding:12px 15px}
-  .kv{padding:10px 15px}
-}
-</style></head><body>
-<header class="chrome"><div class="chrome-in">
-  <div class="brand"><div class="mark">T3</div>
-    <h1>T3 Code</h1><span class="sub">setup</span></div>
-  <div class="spacer"></div>
-  ${authed ? `<span class="tag mono" id="build" title="Image this container was built from">&mdash;</span>
-  <span class="tag" id="health"><span class="dot" style="background:var(--subtle-foreground)"></span>Checking</span>` : ""}
-</div></header>
-<main>
+<style>${CONSOLE_CSS}</style>
+<script>${THEME_BOOT}</script>
+</head><body>
+<div class="console-top">
+<header class="tc-chrome">
+  <div class="tc-wrap tc-wrap--wide tc-chrome-in">
+    <div class="tc-brand">
+      <span class="tc-mark" aria-hidden="true"></span>
+      <span class="tc-brand-name">T3 Code</span>
+      <span class="tc-brand-sub">setup</span>
+    </div>
+    <div class="tc-chrome-spacer"></div>
+    ${authed ? `<span class="tc-tag tc-tag--mono" id="build"
+      title="Image this container was built from">&mdash;</span>
+    <span class="tc-health" id="health" role="status" aria-live="polite">Checking&hellip;</span>` : ""}
+    <button type="button" class="tc-iconbtn" id="theme-btn"
+      title="Switch color theme" aria-label="Switch color theme"></button>
+  </div>
+</header>
+${authed ? `<div class="tc-strip"><div class="tc-wrap tc-wrap--wide tc-strip-in" id="strip"></div></div>` : ""}
+</div>
+<main class="tc-wrap tc-wrap--wide tc-main">
 ${
   authed
-    ? `<section>
-  <div class="head"><h2>Pair a device</h2></div>
-  <div class="surface hero pad">
-    <p class="lede">Creates a single-use link for one device. Scan it with the T3 Code
-    app, or open it in a browser.</p>
-    <div class="controls">
-      <select id="ttl" aria-label="How long the link stays valid">
-        <option value="30d">Valid 30 days</option>
-        <option value="7d">Valid 7 days</option>
-        <option value="1h">Valid 1 hour</option>
-      </select>
-      <input id="label" class="grow" placeholder="Label, e.g. my phone" aria-label="Label" />
-      <button id="mint">Create link</button>
-    </div>
-    <div id="out" aria-live="polite"></div>
+    ? `<h1 class="tc-sr">T3 Code setup console</h1>
+<div class="tc-deck">
+  <div class="tc-deck-col">
+
+    <section class="tc-card tc-card--hero">
+      <div class="tc-cardhead">
+        <h2 class="tc-eyebrow">Pair a device</h2>
+        <div class="tc-cardhead-spacer"></div>
+        <p class="tc-cardhead-note">A phone is enough &mdash; no shell, no restart.</p>
+      </div>
+      <div class="tc-cardbody">
+        <p class="tc-lede">Creates a single-use link for one device. Scan it with the
+        T3 Code app, or open it in a browser.</p>
+        <div class="pair-controls">
+          <div class="tc-seg" id="ttl" role="group" aria-label="How long the link stays valid">
+            <button type="button" data-ttl="1h">1 hour</button>
+            <button type="button" data-ttl="7d">7 days</button>
+            <button type="button" data-ttl="30d" aria-pressed="true">30 days</button>
+          </div>
+          <input id="label" class="tc-input grow" placeholder="Label, e.g. my phone"
+            aria-label="Device label" />
+          <button type="button" class="tc-btn tc-btn--primary" id="mint">Create pairing link</button>
+        </div>
+        <div id="out" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section class="tc-card">
+      <div class="tc-cardhead">
+        <h2 class="tc-eyebrow">Agents</h2>
+        <div class="tc-cardhead-spacer"></div>
+        <p class="tc-cardhead-note" id="agent-count"></p>
+      </div>
+      <div class="tc-list" id="agents"><div class="tc-row"><span class="tc-skel"
+        style="width:44%"></span></div><div class="tc-row"><span class="tc-skel"
+        style="width:33%"></span></div></div>
+    </section>
+
   </div>
-</section>
+  <div class="tc-deck-col">
 
-<section>
-  <div class="head"><h2>Agents</h2>
-    <p class="note">Credentials live on the state volume and survive a recreate.</p></div>
-  <div class="surface"><div id="agents"><div class="skeleton" style="width:44%"></div>
-    <div class="skeleton" style="width:33%"></div></div></div>
-</section>
+    <section class="tc-card">
+      <div class="tc-cardhead">
+        <h2 class="tc-eyebrow">Ports</h2>
+        <div class="tc-cardhead-spacer"></div>
+        <p class="tc-cardhead-note" id="portnote"></p>
+      </div>
+      <div class="tc-list" id="ports"><div class="tc-row"><span class="tc-skel"
+        style="width:38%"></span></div></div>
+      <div class="tc-cardfoot" id="portfoot">A published URL is public while it is up.
+        Take it down when you are done.</div>
+    </section>
 
-<section>
-  <div class="head"><h2>Ports</h2>
-    <p class="note" id="portnote">Publish a dev server running in this container.</p></div>
-  <div class="surface"><div id="ports"><div class="skeleton" style="width:38%"></div></div></div>
-</section>
+    <section class="tc-card">
+      <div class="tc-cardhead">
+        <h2 class="tc-eyebrow">Sessions</h2>
+        <div class="tc-cardhead-spacer"></div>
+        <p class="tc-cardhead-note" id="sessioncount"></p>
+      </div>
+      <div class="tc-grouphead">Devices</div>
+      <div class="tc-list" id="clients"><div class="tc-row"><span class="tc-skel"
+        style="width:56%"></span></div></div>
+      <div class="tc-grouphead">Unused links</div>
+      <div class="tc-list" id="links"><div class="tc-row"><span class="tc-skel"
+        style="width:40%"></span></div></div>
+    </section>
 
-<div class="grid">
-  <section>
-    <div class="head"><h2>Devices</h2>
-      <p class="note" id="devcount"></p></div>
-    <div class="surface"><div id="clients"><div class="skeleton" style="width:56%"></div></div></div>
-  </section>
-
-  <section>
-    <div class="head"><h2>Unused links</h2>
-      <p class="note" id="linkcount"></p></div>
-    <div class="surface"><div id="links"><div class="skeleton" style="width:40%"></div></div></div>
-  </section>
+  </div>
 </div>
-
-<section>
-  <div class="head"><h2>Environment</h2></div>
-  <div class="surface"><div id="status"><div class="skeleton" style="width:64%"></div>
-    <div class="skeleton" style="width:48%"></div></div></div>
-</section>`
-    : `<div class="login"><div class="surface pad">
-  <h2>Setup key</h2>
-  <p class="lede">The value of <code>T3_SETUP_KEY</code> from this container's
-  environment. If you did not set one, it was generated at boot and printed to
-  the container log.</p>
-  <form method="POST" action="${mount}/login" class="controls">
-    <input type="password" name="key" class="grow" placeholder="Setup key"
-           autofocus autocomplete="current-password" aria-label="Setup key" />
-    <button>Unlock</button>
+<div class="tc-details" id="details"></div>`
+    : `<section class="tc-card tc-card--pad" style="max-width:34rem;margin:8vh auto 0">
+  <h2 style="font-size:22px;letter-spacing:-.02em;margin:0 0 6px">Unlock the console.
+    <span style="color:var(--muted);font-weight:400;font-size:15px">one key, then you pair</span></h2>
+  <p class="tc-lede" style="margin-bottom:20px">This page is the only door to the setup
+  console. The key is <span class="tc-mono">T3_SETUP_KEY</span> from this container's
+  environment &mdash; set by you, or generated at boot and printed to the log.</p>
+  <form method="POST" action="${mount}/login" class="tc-stack">
+    <div class="tc-field">
+      <label class="tc-label" for="key">Setup key</label>
+      <input class="tc-input tc-input--mono" id="key" name="key" type="password"
+        placeholder="Paste the setup key" autofocus autocomplete="current-password" />
+      <span class="tc-hint">Treat it like a password &mdash; anything it can do, a
+        pairing link can do.</span>
+    </div>
+    <button class="tc-btn tc-btn--primary tc-btn--lg tc-btn--block" type="submit">Unlock console</button>
   </form>
-</div></div>`
+</section>
+<div class="tc-details" style="max-width:34rem;margin:20px auto 0;border:0;padding-top:0">
+  <div class="tc-details-item"><span class="tc-details-value tc-mono">port ${
+    process.env.T3_SETUP_PORT ?? 3774} · setup</span></div>
+  <div class="tc-details-item"><span class="tc-details-value">Credentials never leave
+    this container.</span></div>
+</div>`
 }
 </main>
-<script>window.__T3_SETUP_BASE__ = ${JSON.stringify(mount)};</script>
 <script>${CLIENT_JS}</script></body></html>`;
 
 // ---------------------------------------------------------------------------

@@ -1,29 +1,67 @@
-# t3code-docker
+<div align="center">
 
-Run [T3 Code](https://github.com/pingdotgg/t3code) as a headless server in a
-container, with the agent harnesses and language toolchains already installed.
+<img src="docs/media/banner.png" alt="t3code-docker" width="100%">
+
+<p>
+  <a href="https://github.com/dizys/t3code-docker/actions/workflows/build.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/dizys/t3code-docker/build.yml?branch=main&style=flat-square&label=build"></a>
+  <a href="https://github.com/dizys/t3code-docker/pkgs/container/t3code-docker"><img alt="Image" src="https://img.shields.io/badge/ghcr.io-t3code--docker-2496ED?style=flat-square&logo=docker&logoColor=white"></a>
+  <a href="https://github.com/dizys/t3code-docker/releases"><img alt="Release" src="https://img.shields.io/github/v/tag/dizys/t3code-docker?style=flat-square&label=release&color=2563eb"></a>
+  <img alt="Platforms" src="https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-444?style=flat-square">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-444?style=flat-square"></a>
+</p>
+
+<p><strong>Run <a href="https://github.com/pingdotgg/t3code">T3 Code</a> as a headless server in a container,<br>
+with the agent harnesses and language toolchains already installed.</strong></p>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/setup-dark.png">
+  <img src="docs/media/setup-light.png" alt="The setup page, on desktop and phone" width="100%">
+</picture>
+
+</div>
 
 T3 Code is a control surface for coding agents: the **server** runs the agents,
 git, and your terminals, while the desktop, web, and phone apps are thin clients
 over a single WebSocket. That split is what makes this work — put the server on
 a box somewhere, and a phone is enough to drive it. No laptop in the loop.
 
+This image is the server half, packaged: every agent CLI installed, the
+toolchains they reach for, a headless browser so they can see web pages, and a
+setup page that pairs a device and signs the agents in without a shell.
+
+> [!NOTE]
 > T3 Code is alpha software and moves fast. So does this image.
 
-## What's in the box
+## Highlights
 
-| | `slim` | `full` (default) |
-| --- | :---: | :---: |
-| T3 Code server + web app | ✅ | ✅ |
-| Claude Code, Codex, OpenCode, Grok, Cursor CLIs | ✅ | ✅ |
-| git, git-lfs, gh, ssh, Node, Python | ✅ | ✅ |
-| Go, Rust, clang/cmake, Bun, Deno, uv | — | ✅ |
-| ffmpeg, ImageMagick, psql, redis-cli | — | ✅ |
-| Headless Chromium + browser MCP servers | — | ✅ |
-| Size on disk (pulled) | ~2.7 GB (~1.1 GB) | ~4.9 GB (~2.0 GB) |
+- **A phone is enough.** Pair a device from a web page — QR or link, no terminal.
+- **Agents sign in from the browser.** Every CLI's own flow, driven from the
+  setup page: a URL and a QR to approve on your phone, a field for the code
+  where one comes back. Credentials land on the state volume and survive a
+  recreate.
+- **Batteries included.** Claude Code, Codex, OpenCode, Cursor and Grok; Go,
+  Rust, Node, Bun, Deno, Python, uv, clang; ffmpeg, ImageMagick, psql.
+- **Agents can see.** Headless Chromium plus Playwright and Chrome DevTools MCP
+  servers, wired into every harness.
+- **Multi-arch, and actually tested.** `linux/amd64` and `linux/arm64` each
+  built *and* smoke-tested on their own native runner — 60 assertions against a
+  booted container before anything is published.
+- **The image says what it is.** The setup page shows the release tag it was
+  built from, so a pull can be confirmed rather than assumed.
 
-Neither image contains credentials or model access. You bring harnesses you have
-already paid for and sign them in yourself.
+## Contents
+
+- [Quickstart](#quickstart)
+- [What's in the box](#whats-in-the-box)
+- [First run: the setup UI](#first-run-the-setup-ui)
+- [Connecting a phone](#connecting-a-phone)
+- [Giving agents eyes](#giving-agents-eyes)
+- [Harnesses](#harnesses)
+- [How long things last](#how-long-things-last)
+- [Configuration](#configuration)
+- [Building](#building)
+- [Security](#security)
+- [Troubleshooting](#troubleshooting)
 
 ## Quickstart
 
@@ -58,6 +96,21 @@ is a fallback, not the route:
 docker compose exec t3code t3-doctor        # what's installed, signed in, healthy
 docker compose exec -it t3code t3-login claude   # if you prefer a shell to the UI
 ```
+
+## What's in the box
+
+| | `slim` | `full` (default) |
+| --- | :---: | :---: |
+| T3 Code server + web app | ✅ | ✅ |
+| Claude Code, Codex, OpenCode, Grok, Cursor CLIs | ✅ | ✅ |
+| git, git-lfs, gh, ssh, Node, Python | ✅ | ✅ |
+| Go, Rust, clang/cmake, Bun, Deno, uv | — | ✅ |
+| ffmpeg, ImageMagick, psql, redis-cli | — | ✅ |
+| Headless Chromium + browser MCP servers | — | ✅ |
+| Size on disk (pulled) | ~2.7 GB (~1.1 GB) | ~4.9 GB (~2.0 GB) |
+
+Neither image contains credentials or model access. You bring harnesses you have
+already paid for and sign them in yourself.
 
 ## First run: the setup UI
 
@@ -107,6 +160,10 @@ CLIs rather than reading about them:
 phone in your hand; where the CLI wants the code pasted back, a field appears
 for it. Nothing is typed into a terminal, and the page never becomes one — it
 runs the CLI and reads what it prints.
+
+<p align="center">
+  <img src="docs/media/agent-signin.png" alt="Signing Claude Code in from the setup page" width="100%">
+</p>
 
 The signed-in badge asks each CLI rather than looking for a credentials file, so
 a credential that never touches disk still reads correctly — `ANTHROPIC_API_KEY`
@@ -434,6 +491,22 @@ does) and keep `--no-sandbox`, which `t3-browser-mcp` passes.
 [`PLAN.md`](PLAN.md) records the research this is built on: what was verified
 against the upstream source, what the container has to work around, and why the
 pieces are shaped the way they are.
+
+## Contributing
+
+Issues and pull requests are welcome. Two things worth knowing before you open
+one:
+
+- **`scripts/smoke-test.sh` is the contract.** It boots the image and asserts
+  the things a user would notice if they broke — 60 of them, against a running
+  container. Run it against your build (`./scripts/smoke-test.sh t3code:full`)
+  and add an assertion for whatever you fixed. Most of the assertions in there
+  exist because something shipped broken once.
+- **CI builds and smoke-tests both targets on both architectures** before
+  anything is published, so a change that only works on amd64 will be caught.
+
+Publishing happens on tags only: push `vX.Y.Z` and the workflow builds, tests,
+pushes each architecture by digest, and stitches them into one manifest.
 
 ## License
 

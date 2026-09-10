@@ -64,6 +64,11 @@ jobs:
           platforms: linux/${{ matrix.platform }}
           load: true
           tags: t3code:${{ matrix.target }}
+          # The tag on a release build, the branch otherwise; the setup page
+          # shows it so a pull can be confirmed at a glance.
+          build-args: |
+            IMAGE_VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('{0}@{1}', github.ref_name, github.sha) }}
+            IMAGE_VARIANT=${{ matrix.target }}
           cache-from: type=gha,scope=${{ matrix.target }}-${{ matrix.platform }}
           cache-to: type=gha,mode=min,scope=${{ matrix.target }}-${{ matrix.platform }}
 
@@ -118,6 +123,9 @@ jobs:
           target: ${{ matrix.target }}
           platforms: linux/${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            IMAGE_VERSION=${{ github.ref_name }}
+            IMAGE_VARIANT=${{ matrix.target }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.target }}-${{ matrix.platform }}
 

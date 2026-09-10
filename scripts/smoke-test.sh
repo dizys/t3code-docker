@@ -213,6 +213,20 @@ esac
 check "the minted link is live on the running server" \
   "docker exec -u t3 $NAME t3 auth pairing list --json 2>/dev/null | grep -q orchestration:operate"
 
+# Pulling a new image should be confirmable from the page itself rather than by
+# guessing, so the build is stamped in at the end of the Dockerfile and shown in
+# the top bar. Assert the stamp survives into the running container and names
+# the variant that was actually built.
+version_is_stamped() {
+  local want="${IMAGE##*:}"
+  docker exec "$NAME" sh -c \
+    "curl -sS --max-time 25 -b /tmp/jar http://127.0.0.1:3774/status" | python3 -c "
+import json, sys
+img = json.load(sys.stdin).get('image') or {}
+sys.exit(0 if img.get('version') and img.get('variant') == '$want' else 1)"
+}
+check "the image build is stamped and reported" version_is_stamped
+
 # Agent authentication, driven the way the page drives it.
 printf '\nAgent authentication\n'
 auth_post() { docker exec "$NAME" sh -c "curl -sS -b /tmp/jar -H 'content-type: application/json' -d '$1' http://127.0.0.1:3774$2"; }

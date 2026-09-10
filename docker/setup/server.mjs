@@ -110,7 +110,7 @@ const grokSignedIn = async () => {
   if (process.env.XAI_API_KEY?.trim()) return true;
   let text;
   try {
-    const { stdout, stderr } = await run("grok", ["models"], { timeout: 8000, maxBuffer: 1024 * 1024 });
+    const { stdout, stderr } = await run("grok", ["models"], { timeout: PROBE_TIMEOUT_MS, maxBuffer: 1024 * 1024 });
     text = stdout + stderr;
   } catch (error) {
     text = (error?.stdout ?? "") + (error?.stderr ?? "");
@@ -126,6 +126,12 @@ const grokSignedIn = async () => {
 // sign-in clears this, so the panel never shows a stale verdict after acting.
 let probeCache = { at: 0, value: null };
 const PROBE_TTL_MS = 10_000;
+const PROBE_TIMEOUT_MS = 20_000;
+// Last definite answer per agent. Five CLIs probed at once contend for the box,
+// and the slowest two - Claude and Cursor - can miss the deadline even though
+// each takes well under it alone. A missed deadline is not news about anyone's
+// credentials, so it must not turn a known "Not signed in" into "not readable".
+const lastKnown = new Map();
 const forgetSignInState = () => { probeCache = { at: 0, value: null }; };
 
 const signedInState = async (h) => {
@@ -138,7 +144,7 @@ const signedInState = async (h) => {
   let out;
   try {
     // A hung CLI must not hang the status endpoint.
-    out = await run(bin, args, { timeout: 5000, maxBuffer: 1024 * 1024 });
+    out = await run(bin, args, { timeout: PROBE_TIMEOUT_MS, maxBuffer: 1024 * 1024 });
   } catch (error) {
     // Signed out is how these tools spend most of their life, and both Claude
     // and Codex report it with exit 1 while still printing the answer - so
@@ -156,6 +162,14 @@ const signedInState = async (h) => {
   }
 };
 
+/** signedInState, but a probe that could not answer keeps the last real one. */
+const stableSignedIn = async (h) => {
+  const now = await signedInState(h);
+  if (now === null) return lastKnown.has(h.id) ? lastKnown.get(h.id) : null;
+  lastKnown.set(h.id, now);
+  return now;
+};
+
 const harnessStatus = async () => {
   if (probeCache.value && Date.now() - probeCache.at < PROBE_TTL_MS) return probeCache.value;
   // In parallel: serially these add up to seconds, and the slowest alone is
@@ -166,7 +180,7 @@ const harnessStatus = async () => {
       id: h.id,
       name: h.name,
       installed,
-      signedIn: installed ? await signedInState(h) : null,
+      signedIn: installed ? await stableSignedIn(h) : null,
       canSignIn: Boolean(AGENTS[h.id]?.signin),
       canSetKey: Boolean(AGENTS[h.id]?.apiKey),
       keyKind: AGENTS[h.id]?.apiKey?.kind ?? null,
@@ -246,6 +260,10 @@ const status = async () => {
   const harnesses = await harnessStatus();
   return {
     server: await health(),
+    image: {
+      version: process.env.T3_IMAGE_VERSION || null,
+      variant: process.env.T3_IMAGE_VARIANT || null,
+    },
     publicUrl: PUBLIC_URL || null,
     harnesses,
     pairings: await listJson(["auth", "pairing", "list", "--json"]),
@@ -559,6 +577,7 @@ const page = (authed, mount) => `<!doctype html>
   --primary-foreground:#fff;
   --accent:oklch(0.967 0.001 286.375);
   --success-foreground:oklch(0.508 0.118 165.612);
+  --success-surface:color-mix(in srgb, oklch(0.696 0.17 162.48) 10%, transparent);
   --warning-foreground:oklch(0.555 0.163 48.998);
   --warning-surface:color-mix(in srgb, oklch(0.769 0.188 70.08) 8%, transparent);
   --error:oklch(0.637 0.237 25.331);
@@ -580,6 +599,7 @@ const page = (authed, mount) => `<!doctype html>
   --primary:oklch(0.571 0.21 264);
   --accent:rgb(255 255 255/4%);
   --success-foreground:oklch(0.765 0.177 163.223);
+  --success-surface:color-mix(in srgb, oklch(0.696 0.17 162.48) 18%, transparent);
   --warning-foreground:oklch(0.828 0.189 84.429);
   --warning-surface:color-mix(in srgb, oklch(0.769 0.188 70.08) 16%, transparent);
   --error-foreground:oklch(0.704 0.191 22.216);
@@ -589,17 +609,42 @@ const page = (authed, mount) => `<!doctype html>
 body{margin:0;min-height:100dvh;background:var(--background);color:var(--foreground);
   font-family:var(--font-sans);font-size:14px;line-height:1.5;
   -webkit-font-smoothing:antialiased;padding:32px 20px 64px}
-main{max-width:640px;margin:0 auto}
-.brand{display:flex;align-items:center;gap:9px;margin-bottom:28px}
-.mark{width:26px;height:26px;border-radius:7px;background:var(--primary);color:#fff;
+main{max-width:760px;margin:0 auto}
+/* The top bar answers "what am I looking at, and is it healthy" before you
+   read a single card - including which image is running, which is the whole
+   point of pulling a new one. */
+.topbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:24px}
+.brand{display:flex;align-items:center;gap:9px;min-width:0}
+.mark{width:28px;height:28px;border-radius:8px;background:var(--primary);color:#fff;
   display:grid;place-items:center;font-size:11px;font-weight:700;letter-spacing:-.02em}
-.brand h1{font-size:14px;font-weight:600;margin:0;letter-spacing:-.01em}
+.brand h1{font-size:15px;font-weight:600;margin:0;letter-spacing:-.015em}
 .brand span{color:var(--muted-foreground);font-size:13px}
+.topbar .spacer{flex:1 1 auto}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+  border:1px solid var(--border);background:var(--card);color:var(--muted-foreground);
+  font-size:12px;font-weight:500;white-space:nowrap}
+.pill.mono{font-family:var(--font-mono);font-size:11.5px;letter-spacing:-.01em}
+.pill .dot{margin:0}
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
   padding:20px;margin-bottom:14px}
-.card>h2{font-size:13px;font-weight:600;margin:0 0 3px;letter-spacing:-.01em}
+.card>h2{font-size:15px;font-weight:600;margin:0 0 3px;letter-spacing:-.015em}
 .card>p.hint{margin:0 0 16px;color:var(--muted-foreground);font-size:13px}
 .card>p.hint:last-child{margin-bottom:0}
+/* Devices and unused links are both short reference lists; side by side they
+   stop pushing the things you actually use off the screen. */
+.grid{display:grid;gap:14px;grid-template-columns:1fr}
+.grid>.card{margin-bottom:0}
+@media (min-width:700px){.grid{grid-template-columns:1fr 1fr}}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;
+  font-size:12px;font-weight:500;line-height:1.65}
+.chip .dot{margin:0}
+.chip.ok{background:var(--success-surface);color:var(--success-foreground)}
+/* "Not signed in" is the starting state, not a fault - a neutral chip with an
+   amber dot reads as "to do" without five warning blocks shouting at once. */
+.chip.warn{background:var(--muted);color:var(--muted-foreground)}
+.chip.warn .dot{background:var(--warning-foreground)}
+.chip.bad{background:var(--error-surface);color:var(--error-foreground)}
+.chip.idle{background:var(--muted);color:var(--muted-foreground)}
 .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .controls>.grow{flex:1 1 150px;min-width:0}
 button,select,input{font:inherit;border-radius:var(--control-radius);
@@ -621,12 +666,20 @@ select{cursor:pointer}
   padding:12px;display:inline-block;margin-top:12px;line-height:0}
 .qr svg{width:min(212px,58vw);height:auto;display:block;shape-rendering:crispEdges}
 .rows{display:flex;flex-direction:column}
-.row{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--border)}
+.row{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--border);
+  flex-wrap:wrap}
 .row:first-child{border-top:0;padding-top:2px}
-.row .main{flex:1;min-width:0}
-.row .name{font-weight:500}
-.row .meta,.empty{color:var(--muted-foreground);font-size:12.5px}
-.empty{margin:0}
+.row .main{flex:1 1 190px;min-width:0}
+.row .name{font-weight:550;letter-spacing:-.01em}
+/* Name and state on one line: five agents then scan in a glance instead of
+   ten stacked lines. */
+.nameline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.row .meta{color:var(--muted-foreground);font-size:12.5px;margin-top:2px}
+.row .actions{display:flex;gap:6px;flex:none}
+/* An empty list should read as a deliberate state, not as a card that failed
+   to load. */
+.empty{margin:0;padding:16px;border:1px dashed var(--border);border-radius:var(--control-radius);
+  text-align:center;color:var(--muted-foreground);font-size:13px}
 .kv{display:flex;justify-content:space-between;gap:16px;padding:7px 0;
   border-top:1px solid var(--border);font-size:13px}
 .kv:first-child{border-top:0}
@@ -647,8 +700,13 @@ dl{margin:0}
 .login{max-width:400px;margin:8vh auto 0}
 @media (max-width:520px){body{padding:20px 14px 48px}.card{padding:16px}}
 </style></head><body><main>
-<div class="brand"><div class="mark">T3</div>
-  <h1>T3 Code</h1><span>&middot; setup</span></div>
+<div class="topbar">
+  <div class="brand"><div class="mark">T3</div>
+    <h1>T3 Code</h1><span>&middot; setup</span></div>
+  <div class="spacer"></div>
+  ${authed ? `<span class="pill mono" id="build" title="Image this container was built from">&mdash;</span>
+  <span class="pill" id="health"><span class="dot" style="background:var(--muted-foreground)"></span>Checking</span>` : ""}
+</div>
 ${
   authed
     ? `<div class="card">
@@ -667,25 +725,28 @@ ${
   <div id="out" aria-live="polite"></div>
 </div>
 
-<div class="card"><h2>Devices</h2>
-  <p class="hint">Paired clients. Revoking one signs that device out; nothing else is touched.</p>
-  <div id="clients"><div class="skeleton" style="width:60%"></div></div>
-</div>
-
-<div class="card"><h2>Unused links</h2>
-  <p class="hint">Created but not yet redeemed.</p>
-  <div id="links"><div class="skeleton" style="width:40%"></div></div>
-</div>
-
-<div class="card"><h2>Environment</h2>
-  <div id="status"><div class="skeleton" style="width:70%"></div>
-  <div class="skeleton" style="width:50%"></div></div>
-</div>
-
 <div class="card"><h2>Agents</h2>
   <p class="hint">Sign in here, or set an API key. Credentials are stored on the
   state volume, so they survive the container being recreated.</p>
   <div id="agents"><div class="skeleton" style="width:55%"></div></div>
+</div>
+
+<div class="grid">
+  <div class="card"><h2>Devices</h2>
+    <p class="hint">Revoking one signs that device out; nothing else is touched.</p>
+    <div id="clients"><div class="skeleton" style="width:60%"></div></div>
+  </div>
+
+  <div class="card"><h2>Unused links</h2>
+    <p class="hint">Created but not yet redeemed.</p>
+    <div id="links"><div class="skeleton" style="width:40%"></div></div>
+  </div>
+</div>
+
+<div class="card"><h2>Environment</h2>
+  <p class="hint">How this container is reachable, and what it is running.</p>
+  <div id="status"><div class="skeleton" style="width:70%"></div>
+  <div class="skeleton" style="width:50%"></div></div>
 </div>`
     : `<div class="login"><div class="card">
   <h2>Setup key</h2>
@@ -759,20 +820,35 @@ if (document.getElementById('mint')) {
           (c.connected ? '<span class="ok"><span class="dot"></span>Connected</span>'
                        : 'Last seen ' + esc(when(c.lastConnectedAt))) +
           ' &middot; expires ' + esc(when(c.expiresAt)) + '</div></div>' +
-          revokeButton('session', c.sessionId) + '</div>').join('') + '</div>'
+          '<div class="actions">' + revokeButton('session', c.sessionId) + '</div></div>').join('') + '</div>'
       : '<p class="empty">No devices paired yet. Create a link above.</p>';
 
     $('links').innerHTML = s.pairings.length
       ? '<div class="rows">' + s.pairings.map((l) =>
           '<div class="row"><div class="main"><div class="name">' +
           esc(l.label || 'Unlabelled') + '</div><div class="meta">Expires ' +
-          esc(when(l.expiresAt)) + '</div></div>' + revokeButton('pairing', l.id) + '</div>').join('') + '</div>'
+          esc(when(l.expiresAt)) + '</div></div>' + '<div class="actions">' + revokeButton('pairing', l.id) + '</div></div>').join('') + '</div>'
       : '<p class="empty">None outstanding.</p>';
+
+    // The top bar carries the two facts worth knowing before anything else:
+    // whether the server is up, and which image this is.
+    const build = s.image && s.image.version
+      ? s.image.version + (s.image.variant ? ' \u00b7 ' + s.image.variant : '')
+      : 'unversioned build';
+    $('build').textContent = build;
+    $('health').className = 'pill';
+    $('health').innerHTML = s.server.ok
+      ? '<span class="dot" style="background:var(--success-foreground)"></span>Running ' +
+        esc(s.server.version)
+      : '<span class="dot" style="background:var(--error-foreground)"></span>Server down';
 
     const rows = [];
     rows.push(['Server', s.server.ok
       ? '<span class="ok"><span class="dot"></span>Running ' + esc(s.server.version) + '</span>'
       : '<span class="bad"><span class="dot"></span>' + esc(s.server.detail) + '</span>']);
+    rows.push(['Image', build === 'unversioned build'
+      ? '<span class="meta">Not stamped &mdash; built outside CI</span>'
+      : esc(build)]);
     rows.push(['Public URL', s.publicUrl ? esc(s.publicUrl)
       : '<span class="warn">Not set</span>']);
     $('status').innerHTML = '<dl>' + rows.map(([k, v]) =>
@@ -781,18 +857,18 @@ if (document.getElementById('mint')) {
         "point at this container's own address and no device can reach them.</div>");
 
     if (!panelActive) $('agents').innerHTML = '<div class="rows">' + s.harnesses.map((h) => {
-      const status = !h.installed ? '<span class="bad">Not installed</span>'
-        : h.signedIn === true ? '<span class="ok"><span class="dot"></span>Signed in</span>'
-        : h.signedIn === false ? '<span class="warn">Not signed in</span>'
-        : '<span class="meta">Sign-in state not readable</span>';
+      const status = !h.installed ? '<span class="chip bad">Not installed</span>'
+        : h.signedIn === true ? '<span class="chip ok"><span class="dot"></span>Signed in</span>'
+        : h.signedIn === false ? '<span class="chip warn"><span class="dot"></span>Not signed in</span>'
+        : '<span class="chip idle">Checking\u2026</span>';
       const actions = !h.installed ? '' :
         (h.canSignIn ? '<button class="ghost tiny signin" data-agent="' + h.id + '">Sign in</button>' : '') +
         (h.canSetKey ? '<button class="ghost tiny setkey" data-agent="' + h.id +
            '" data-kind="' + esc(h.keyKind) + '">API key</button>' : '');
-      return '<div class="row"><div class="main"><div class="name">' + esc(h.name) +
-        '</div><div class="meta">' + status + '</div>' +
+      return '<div class="row"><div class="main"><div class="nameline">' +
+        '<span class="name">' + esc(h.name) + '</span>' + status + '</div>' +
         '<div id="agent-' + h.id + '"></div></div>' +
-        '<div style="display:flex;gap:6px">' + actions + '</div></div>';
+        '<div class="actions">' + actions + '</div></div>';
     }).join('') + '</div>';
 
     if (panelActive) return;

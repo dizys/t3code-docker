@@ -85,6 +85,11 @@ Beyond pairing it is a small management surface: connected clients with a
 **Revoke** button each, outstanding unredeemed links with the same, the
 environment status, and an **Agents** card that signs your coding agents in.
 
+The top bar shows which image is running — `v0.3.3 · full` — alongside the
+server's health, so a pull can be confirmed from the page instead of guessed at.
+It reads a build stamp baked in at image build time; a locally built image says
+`dev`, and one built outside CI reports itself as not stamped.
+
 ### Signing agents in from the page
 
 Each agent gets the actions it actually supports, established by running the

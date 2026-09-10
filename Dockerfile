@@ -161,6 +161,15 @@ EXPOSE 3773 3774
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
     CMD curl -fsS --max-time 4 "http://127.0.0.1:${T3CODE_PORT}/.well-known/t3/environment" >/dev/null || exit 1
 
+# Stamped last so a version change reuses every layer above it. IMAGE_VERSION is
+# the release tag in CI and "dev" for a local build; the setup page shows both so
+# you can tell at a glance which image is actually running.
+ARG IMAGE_VERSION=dev
+ARG IMAGE_VARIANT=slim
+ENV T3_IMAGE_VERSION=${IMAGE_VERSION} \
+    T3_IMAGE_VARIANT=${IMAGE_VARIANT}
+LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
+
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
 CMD ["t3-serve"]
 
@@ -246,3 +255,12 @@ RUN set -eux; \
     chown -R t3:t3 /opt/npm-global
 
 RUN mkdir -p /home/t3/go && chown -R t3:t3 /home/t3
+
+# Stamped last so a version change reuses every layer above it. IMAGE_VERSION is
+# the release tag in CI and "dev" for a local build; the setup page shows both so
+# you can tell at a glance which image is actually running.
+ARG IMAGE_VERSION=dev
+ARG IMAGE_VARIANT=full
+ENV T3_IMAGE_VERSION=${IMAGE_VERSION} \
+    T3_IMAGE_VARIANT=${IMAGE_VARIANT}
+LABEL org.opencontainers.image.version="${IMAGE_VERSION}"

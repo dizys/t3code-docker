@@ -489,6 +489,70 @@ if not blocks:
 sys.exit(0 if blocks[-1].strip() == open(sys.argv[2], encoding="utf-8").read().strip() else 1)
 PYEOF
 }
+printf '\nPorts\n'
+
+# T3 Code fetches cloudflared at runtime when it is missing, which needs egress
+# at the moment you are trying to get connected. Shipping it is only useful if
+# T3 Code actually finds it, so assert the pointer as well as the binary.
+check "cloudflared ships in the image" \
+  "docker exec $NAME cloudflared --version"
+check "T3 Code is pointed at the shipped binary" \
+  "docker exec $NAME sh -c 'test -x \"\$T3CODE_CLOUDFLARED_PATH\"'"
+
+cloudflared_matches_t3() {
+  local want have
+  want="$(docker exec "$NAME" sh -c \
+    "grep -o 'cloudflared/releases/download/[0-9.]*' $T3_BUNDLE | head -1" 2>/dev/null \
+    | sed 's|.*/||')"
+  [ -n "$want" ] || return 0
+  have="$(docker exec "$NAME" cloudflared --version 2>/dev/null | awk '{print $3}')"
+  CF_WANT="$want"; CF_HAVE="$have"
+  [ "$want" = "$have" ]
+}
+if cloudflared_matches_t3; then
+  ok "cloudflared ${CF_HAVE:-?} is the release T3 Code asks for"
+else
+  no "cloudflared is ${CF_HAVE:-?}, T3 Code downloads ${CF_WANT:-?}"
+fi
+
+# A dev server in the container is unreachable from a phone, which is the one
+# device this project assumes you have. These assert the plumbing that fixes
+# that; they deliberately do not open a tunnel, since CI should not depend on
+# reaching Cloudflare's edge.
+docker exec -d "$NAME" sh -c \
+  'cd /tmp && python3 -m http.server 3000 --bind 127.0.0.1 >/dev/null 2>&1' || true
+sleep 2
+
+# Nesting quotes through bash -> docker exec -> sh -c -> curl is how you get a
+# test that passes for the wrong reason, so these go through functions.
+# Uses the header the in-container CLIs authenticate with, which is the same
+# key and the same check the page's cookie goes through.
+ports_api() {
+  docker exec "$NAME" curl -sS -H "x-t3-setup-key: $SETUP_KEY" \
+    "http://127.0.0.1:3774/ports"
+}
+expose_api() {
+  docker exec "$NAME" curl -sS -H "x-t3-setup-key: $SETUP_KEY" \
+    -H "content-type: application/json" \
+    -d "{\"port\":$1}" "http://127.0.0.1:3774/ports/expose"
+}
+port_3000_listed() { ports_api | tr -d " " | grep -q "\"listening\":\[3000"; }
+reserved_port_refused() { expose_api 3774 | grep -q "T3 Code itself"; }
+bad_port_refused() { expose_api 99999 | grep -q "between 1 and 65535"; }
+
+check "a listening port is discovered" port_3000_listed
+check "the ports API needs the key" \
+  "docker exec $NAME sh -c 'curl -sS http://127.0.0.1:3774/ports | grep -q unauthorized'"
+check "publishing T3 Code's own port is refused" reserved_port_refused
+check "a nonsense port is refused" bad_port_refused
+
+# The point of routing the CLI through the same API is that the two cannot
+# disagree. Assert that they see the same port rather than trusting it.
+check "t3-expose reports what the API reports" \
+  "docker exec $NAME t3-expose | grep -q '^3000'"
+check "cloudflared's own metrics port is not offered as a user port" \
+  "docker exec $NAME t3-expose | grep -cq 'not published'"
+
 check "the browser gets the client script verbatim" client_script_is_verbatim
 check "and that script parses" \
   "docker exec $NAME node --check /opt/t3-setup/app.js"

@@ -94,6 +94,25 @@ RUN set -eux; \
     fi; \
     echo "gh $installed"
 
+# Cloudflare Tunnel. T3 Code has managed-tunnel support built in and fetches
+# this binary at runtime when it is missing - which needs working egress at
+# exactly the moment someone is trying to get connected, and writes into the
+# state volume on first use. Ship it instead, pinned to the release T3 Code
+# asks for, and point T3 Code at it so it never downloads its own. It is also
+# what `t3-expose` and the setup page's Ports panel use to publish a dev server.
+ARG CLOUDFLARED_VERSION=2026.5.2
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) cfarch=amd64 ;; \
+      arm64) cfarch=arm64 ;; \
+      *) echo "no cloudflared build for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /usr/local/bin/cloudflared \
+      "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${cfarch}"; \
+    chmod 0755 /usr/local/bin/cloudflared; \
+    cloudflared --version
+ENV T3CODE_CLOUDFLARED_PATH=/usr/local/bin/cloudflared
+
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 # The base image ships a `node` user on uid 1000. Reclaim it for `t3` so the

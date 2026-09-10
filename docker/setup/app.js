@@ -310,6 +310,113 @@ if (document.getElementById('mint')) {
       };
     }
   };
+  // ---------------------------------------------------------------------
+  // Ports
+  //
+  // Polled separately from the rest of the page and on a shorter interval: a
+  // tunnel takes a few seconds to be handed a hostname, and a port appearing
+  // moments after a dev server starts is the whole point. This calls the same
+  // /ports API t3-expose calls, so publishing from a terminal shows up here
+  // without anything having to tell the page about it.
+  // ---------------------------------------------------------------------
+  const portsEl = $('ports');
+  const portNote = $('portnote');
+  let portsBusy = new Set();
+
+  const loadPorts = async () => {
+    let data;
+    try {
+      data = await (await fetch(BASE + '/ports')).json();
+    } catch { return; }
+
+    if (data.available === false) {
+      portNote.textContent = 'cloudflared is not in this image, so publishing is off.';
+      portsEl.innerHTML = '<div class="empty">Nothing to publish to.</div>';
+      return;
+    }
+
+    const tunnels = new Map((data.tunnels || []).map((t) => [t.port, t]));
+    const ports = [...new Set([...(data.listening || []), ...tunnels.keys()])]
+      .sort((a, b) => a - b);
+    const open = [...tunnels.values()].filter((t) => t.state === 'open').length;
+    portNote.textContent = ports.length
+      ? (open ? open + ' published' : 'Publish a dev server running in this container.')
+      : 'Publish a dev server running in this container.';
+
+    if (!ports.length) {
+      portsEl.innerHTML = '<div class="empty">Nothing is listening yet.<br>'
+        + 'Start a dev server and it will appear here.</div>';
+      return;
+    }
+
+    portsEl.innerHTML = ports.map((port) => {
+      const t = tunnels.get(port);
+      const state = t ? t.state : 'idle';
+      const busy = portsBusy.has(port);
+
+      let right;
+      if (state === 'open') {
+        right = '<div class="actions">'
+          + '<a class="btn ghost tiny" href="' + esc(t.url) + '" target="_blank" rel="noopener">Open</a>'
+          + '<button class="ghost tiny unexpose" data-port="' + port + '">Stop</button></div>';
+      } else if (state === 'starting' || busy) {
+        right = '<div class="actions"><button class="ghost tiny" disabled>Publishing</button></div>';
+      } else {
+        right = '<div class="actions"><button class="ghost tiny expose" data-port="'
+          + port + '">Publish</button></div>';
+      }
+
+      let detail;
+      if (state === 'open') {
+        // The URL is the payload here: monospace, selectable, and a QR beside
+        // it because the device you want it on is usually not this one.
+        detail = '<div class="portlive">'
+          + '<a class="porturl" href="' + esc(t.url) + '" target="_blank" rel="noopener">'
+          + esc(t.url) + '</a>'
+          + (t.qr ? '<div class="qr">' + t.qr + '</div>' : '') + '</div>';
+      } else if (state === 'failed') {
+        detail = '<div class="meta err">' + esc(t.error || 'the tunnel failed') + '</div>';
+      } else if (state === 'starting') {
+        detail = '<div class="meta">Waiting for a public hostname\u2026</div>';
+      } else {
+        detail = '<div class="meta">Listening in the container</div>';
+      }
+
+      return '<div class="row"><div class="mono-tile port">' + port + '</div>'
+        + '<div class="main"><div class="nameline"><span class="name">Port '
+        + port + '</span></div>' + detail + '</div>' + right + '</div>';
+    }).join('');
+
+    for (const b of portsEl.querySelectorAll('.expose')) {
+      b.onclick = async () => {
+        const port = Number(b.dataset.port);
+        portsBusy.add(port);
+        b.disabled = true; b.textContent = 'Publishing';
+        try {
+          await fetch(BASE + '/ports/expose', {
+            method: 'POST', headers: {'content-type': 'application/json'},
+            body: JSON.stringify({port}),
+          });
+        } finally {
+          portsBusy.delete(port);
+        }
+        loadPorts();
+      };
+    }
+    for (const b of portsEl.querySelectorAll('.unexpose')) {
+      b.onclick = async () => {
+        b.disabled = true; b.textContent = 'Stopping';
+        await fetch(BASE + '/ports/unexpose', {
+          method: 'POST', headers: {'content-type': 'application/json'},
+          body: JSON.stringify({port: Number(b.dataset.port)}),
+        });
+        loadPorts();
+      };
+    }
+  };
+
   load();
+  loadPorts();
   setInterval(load, 15000);
+  setInterval(loadPorts, 4000);
 }

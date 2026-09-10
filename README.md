@@ -43,6 +43,10 @@ setup page that pairs a device and signs the agents in without a shell.
   Rust, Node, Bun, Deno, Python, uv, clang; ffmpeg, ImageMagick, psql.
 - **Agents can see.** Headless Chromium plus Playwright and Chrome DevTools MCP
   servers, wired into every harness.
+- **Show your dev server to your phone.** A port listening in the container is
+  reachable from nowhere. Publish it from the setup page or with `t3-expose
+  3000` and get a public https URL and a QR code - no DNS, no certificate, no
+  port forwarding. Both routes drive the same API, so neither can go stale.
 - **Multi-arch, and actually tested.** `linux/amd64` and `linux/arm64` each
   built *and* smoke-tested on their own native runner — 60 assertions against a
   booted container before anything is published.
@@ -55,6 +59,7 @@ setup page that pairs a device and signs the agents in without a shell.
 - [What's in the box](#whats-in-the-box)
 - [First run: the setup UI](#first-run-the-setup-ui)
 - [Connecting a phone](#connecting-a-phone)
+- [Publishing a port](#publishing-a-port)
 - [Giving agents eyes](#giving-agents-eyes)
 - [Harnesses](#harnesses)
 - [How long things last](#how-long-things-last)
@@ -107,6 +112,7 @@ docker compose exec -it t3code t3-login claude   # if you prefer a shell to the 
 | Go, Rust, clang/cmake, Bun, Deno, uv | — | ✅ |
 | ffmpeg, ImageMagick, psql, redis-cli | — | ✅ |
 | Headless Chromium + browser MCP servers | — | ✅ |
+| cloudflared, for publishing a port | ✅ | ✅ |
 | Size on disk (pulled) | ~2.7 GB (~1.1 GB) | ~4.9 GB (~2.0 GB) |
 
 Neither image contains credentials or model access. You bring harnesses you have
@@ -311,6 +317,52 @@ this image does not ship it.)
 **Nothing at all.** On a trusted LAN you can set `T3_BIND_ADDR=0.0.0.0` and
 `T3_PUBLIC_URL=http://<server-lan-ip>:3773`. The pairing token travels in the
 clear, so do not do this on a network you do not control.
+
+## Publishing a port
+
+Start a dev server in the container - yourself in a T3 Code terminal, or an
+agent doing it for you - and it listens on a port that nothing outside the
+container can reach. Not the phone in your hand, not the browser on your
+laptop. Docker's own answer is to publish the port when the container starts,
+which means predicting the port before you know it, and still leaves you
+without TLS or a route in from outside your LAN.
+
+So the setup page has a **Ports** panel. It lists what is listening, including
+servers bound to `127.0.0.1`, which is the usual default and the case that most
+needs help. Press **Publish** and you get a public `https://` URL and a QR code
+to open it on another device:
+
+<p align="center">
+  <img src="docs/media/ports-panel.png" alt="The Ports panel, listing what is listening in the container" width="100%">
+</p>
+
+The same thing from a terminal:
+
+```bash
+t3-expose 3000        # publish it; prints the URL and a QR code
+t3-expose             # what is listening, and what is published
+t3-expose stop 3000   # take it down
+```
+
+`t3-expose` is a client of the setup server's `/ports` API - the same API the
+panel calls - not a second implementation. Publish from the terminal and the
+panel shows it; press Stop in the panel and the terminal agrees. There is one
+place tunnels are started, so the two cannot drift apart.
+
+Underneath is a [Cloudflare quick
+tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/):
+no account, no DNS record, no certificate. `cloudflared` ships in the image
+pinned to the release T3 Code itself asks for, which also stops T3 Code
+downloading its own copy at runtime for its managed tunnels.
+
+Two things worth knowing:
+
+- **The URL is public while it is published.** It is random and unguessable,
+  and it stops working the moment you take it down, but anyone holding it can
+  reach that port. Publish a dev server, not your database.
+- **It needs egress to Cloudflare's edge** - outbound UDP 7844, or HTTP/2 to
+  `argotunnel.com`. On a network that blocks both, publishing fails with that
+  message rather than handing you a URL that answers 530.
 
 ## Giving agents eyes
 

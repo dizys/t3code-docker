@@ -208,6 +208,16 @@ start_setup_service() {
     log "    Set T3_SETUP_KEY yourself to keep it stable across recreates."
   fi
   export T3_SETUP_KEY
+  # `docker exec` and the terminals T3 Code opens inherit the image environment,
+  # not this shell's exports, so a generated key would be invisible to t3-expose
+  # and friends. Drop it where they can read it - same directory, same owner,
+  # and the state volume is already where credentials live.
+  key_file="${T3CODE_HOME}/setup-key"
+  if [ -w "$(dirname "$key_file")" ] || [ -w "$key_file" ] 2>/dev/null; then
+    printf '%s\n' "$T3_SETUP_KEY" > "$key_file" 2>/dev/null || true
+    chmod 0600 "$key_file" 2>/dev/null || true
+    chown "${PUID:-1000}:${PGID:-1000}" "$key_file" 2>/dev/null || true
+  fi
 
   (
     while :; do

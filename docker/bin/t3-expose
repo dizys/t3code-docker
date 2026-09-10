@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Publish a port from inside this container to a public https URL.
+#
+# A dev server started here listens on a port nothing outside the container can
+# reach - not your phone, not your iPad, not the browser on your laptop. This
+# hands it a Cloudflare quick tunnel instead: a public URL and a QR code, no
+# DNS, no certificate, no port forwarding.
+#
+#   t3-expose 3000            publish port 3000
+#   t3-expose                 show what is listening and what is published
+#   t3-expose stop 3000       take it down
+#
+# This is a client of the setup server's /ports API, not a second
+# implementation - the same API the setup page's Ports panel calls. Whatever
+# you do here shows up there, and whatever you do there shows up here.
+set -euo pipefail
+
+if [ "$(id -u)" -eq 0 ] && command -v gosu >/dev/null 2>&1 && id t3 >/dev/null 2>&1; then
+  exec gosu t3 "$0" "$@"
+fi
+
+SETUP_PORT="${T3_SETUP_PORT:-3774}"
+API="http://127.0.0.1:${SETUP_PORT}"
+STATE_DIR="${T3CODE_HOME:-${HOME:-/home/t3}/.t3}"
+
+# The entrypoint exports the key, but `docker exec` and the terminals T3 Code
+# opens do not inherit that, so fall back to the copy on the state volume.
+key="${T3_SETUP_KEY:-}"
+if [ -z "$key" ] && [ -r "${STATE_DIR}/setup-key" ]; then
+  key="$(cat "${STATE_DIR}/setup-key")"
+fi
+if [ -z "$key" ]; then
+  echo "t3-expose: no setup key found." >&2
+  echo "           Set T3_SETUP_KEY, or check ${STATE_DIR}/setup-key exists." >&2
+  exit 1
+fi
+
+api() {
+  local method="$1" path="$2" body="${3:-}"
+  if [ -n "$body" ]; then
+    curl -fsS --max-time 20 -X "$method" -H "x-t3-setup-key: ${key}" \
+      -H 'content-type: application/json' -d "$body" "${API}${path}"
+  else
+    curl -fsS --max-time 20 -X "$method" -H "x-t3-setup-key: ${key}" "${API}${path}"
+  fi
+}
+
+unreachable() {
+  echo "t3-expose: cannot reach the setup server on ${API}." >&2
+  echo "           It runs alongside T3 Code; check the container logs." >&2
+  exit 1
+}
+
+show_status() {
+  local out
+  out="$(api GET /ports)" || unreachable
+
+  if [ "$(printf '%s' "$out" | jq -r '.available')" != "true" ]; then
+    echo "cloudflared is not in this image, so publishing is disabled."
+    echo
+  fi
+
+  printf '%s' "$out" | jq -r '
+    def pad(n): tostring | . + (" " * (n - length));
+    ([(.listening // [])[], ((.tunnels // [])[] | .port)] | unique) as $ports
+    | (.tunnels // []) as $tunnels
+    | if ($ports | length) == 0 then
+        "Nothing is listening yet. Start a dev server, then: t3-expose <port>"
+      else
+        ("PORT" | pad(8)) + ("PUBLIC URL" | pad(46)) + "STATE",
+        ( $ports[] as $p
+          | ($tunnels | map(select(.port == $p)) | first) as $t
+          | ($p | pad(8))
+            + (($t.url // "-") | pad(46))
+            + ( if $t == null then "not published"
+                elif ($t.error // "") != "" then "\($t.state): \($t.error)"
+                else $t.state end ) ),
+        "",
+        "t3-expose <port> to publish one, t3-expose stop <port> to take it down."
+      end
+  '
+}
+
+case "${1:-}" in
+  ""|list|ls|status) show_status; exit 0 ;;
+  stop|unexpose)
+    port="${2:-}"
+    [ -n "$port" ] || { echo "usage: t3-expose stop <port>" >&2; exit 2; }
+    out="$(api POST /ports/unexpose "{\"port\":${port}}")" || unreachable
+    if [ "$(printf '%s' "$out" | jq -r '.ok // false')" = "true" ]; then
+      printf 'Stopped publishing port %s.\n' "$port"
+    else
+      printf 't3-expose: %s\n' "$(printf '%s' "$out" | jq -r '.error // "failed"')" >&2
+      exit 1
+    fi
+    exit 0 ;;
+  -h|--help|help)
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+port="$1"
+case "$port" in
+  ''|*[!0-9]*) echo "t3-expose: '$port' is not a port number" >&2; exit 2 ;;
+esac
+
+out="$(api POST /ports/expose "{\"port\":${port}}")" || unreachable
+err="$(printf '%s' "$out" | jq -r '.error // ""')"
+if [ -n "$err" ]; then
+  echo "t3-expose: $err" >&2
+  exit 1
+fi
+
+printf 'Publishing port %s' "$port"
+url=""
+# cloudflared takes a moment to be handed a hostname; poll rather than guess.
+for _ in $(seq 1 40); do
+  sleep 1
+  printf '.'
+  line="$(api GET /ports | jq -r --argjson p "$port" '
+    (.tunnels // []) | map(select(.port == $p)) | first
+    | if . == null then "|" else "\(.state)|\(.url // "")|\(.error // "")" end')"
+  case "$line" in
+    open\|*)   url="$(printf '%s' "$line" | cut -d'|' -f2)"; break ;;
+    failed\|*) printf '\n'; echo "t3-expose: $(printf '%s' "$line" | cut -d'|' -f3)" >&2; exit 1 ;;
+  esac
+done
+printf '\n\n'
+
+if [ -z "$url" ]; then
+  echo "t3-expose: the tunnel did not come up in time; run t3-expose to check." >&2
+  exit 1
+fi
+
+printf 'Port %s is live at: %s\n' "$port" "$url"
+printf 'Take it down with:  t3-expose stop %s\n\n' "$port"
+
+if command -v qrencode >/dev/null 2>&1; then
+  qrencode -t ANSIUTF8 -m 2 "$url"
+  printf '\n'
+fi
+
+echo "Anyone with this URL can reach the port while it is published."

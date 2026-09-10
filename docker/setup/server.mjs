@@ -13,7 +13,7 @@ import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { timingSafeEqual, randomBytes } from "node:crypto";
 import { promisify } from "node:util";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 
 const run = promisify(execFile);
 
@@ -746,6 +746,18 @@ select{cursor:pointer}
 .link{font-family:var(--font-mono);font-size:12.5px;word-break:break-all;
   background:var(--muted);border:1px solid var(--hairline);
   border-radius:var(--control-radius);padding:11px 12px;line-height:1.5}
+/* Ports. The tile carries the number itself rather than a monogram - a port
+   is already its own label, and nothing else on the page is a number. */
+.mono-tile.port{background:var(--muted);color:var(--muted-foreground);border:1px solid var(--border);
+  font-size:11px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.portlive{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:6px}
+.porturl{font-family:var(--font-mono);font-size:12.5px;color:var(--primary);
+  word-break:break-all;text-decoration:none}
+.porturl:hover{text-decoration:underline}
+.portlive .qr svg{width:min(104px,30vw)}
+.meta.err{color:var(--error-foreground)}
+a.btn{display:inline-flex;align-items:center;text-decoration:none}
+a.btn.ghost:hover{background:var(--accent)}
 .qr{background:#fff;border:1px solid var(--border);border-radius:var(--control-radius);
   padding:10px;line-height:0;flex:none;box-shadow:var(--shadow-raised)}
 .qr svg{width:min(168px,46vw);height:auto;display:block;shape-rendering:crispEdges}
@@ -818,6 +830,12 @@ ${
     <div class="skeleton" style="width:33%"></div></div></div>
 </section>
 
+<section>
+  <div class="head"><h2>Ports</h2>
+    <p class="note" id="portnote">Publish a dev server running in this container.</p></div>
+  <div class="surface"><div id="ports"><div class="skeleton" style="width:38%"></div></div></div>
+</section>
+
 <div class="grid">
   <section>
     <div class="head"><h2>Devices</h2>
@@ -853,7 +871,182 @@ ${
 <script>window.__T3_SETUP_BASE__ = ${JSON.stringify(mount)};</script>
 <script>${CLIENT_JS}</script></body></html>`;
 
-const ROUTES = ["/login", "/status", "/pair", "/revoke",
+// ---------------------------------------------------------------------------
+// Ports
+//
+// A dev server started inside the container - by the user in a T3 Code terminal
+// or by an agent - listens on a port nothing outside the container can reach.
+// The whole premise here is that a phone is enough, so "now SSH in and forward
+// a port" is not an answer. cloudflared publishes it instead: one click, a
+// public https URL, and a QR code to open it on the device in your hand.
+//
+// This module is the only place tunnels are started or stopped. `t3-expose`
+// does not run cloudflared itself - it calls this API - so the terminal and the
+// page cannot hold different ideas about what is exposed.
+// ---------------------------------------------------------------------------
+
+const CLOUDFLARED = process.env.T3CODE_CLOUDFLARED_PATH || "cloudflared";
+const STATE_DIR = process.env.T3CODE_HOME || `${process.env.HOME || "/home/t3"}/.t3`;
+const EXPOSED_FILE = `${STATE_DIR}/exposed-ports.json`;
+
+// Ports that belong to the container's own plumbing rather than to anything a
+// user started. Exposing the setup page itself would be a foot-gun.
+const RESERVED = new Set([PORT, Number(process.env.T3CODE_PORT ?? 3773)]);
+
+/** Ports currently in LISTEN state, whatever interface they bound to. */
+const listeningPorts = async () => {
+  // A dev server bound to 127.0.0.1 is the normal case and the one that most
+  // needs a tunnel, so loopback-only listeners are included deliberately.
+  // -p names the owning process, which is how cloudflared's own metrics
+  // listener gets filtered out: publishing a port opened a second "port" in
+  // this list, which is confusing and not something anyone would want to expose.
+  const { stdout } = await run("ss", ["-H", "-l", "-t", "-n", "-p"]).catch(() => ({ stdout: "" }));
+  const found = new Map();
+  for (const line of stdout.split("\n")) {
+    if (/"cloudflared"/.test(line)) continue;
+    const local = line.trim().split(/\s+/)[3];
+    if (!local) continue;
+    const port = Number(local.slice(local.lastIndexOf(":") + 1));
+    if (!Number.isInteger(port) || port <= 0 || RESERVED.has(port)) continue;
+    // ss lists one row per bound address; a server on :: and 0.0.0.0 is one port.
+    found.set(port, (found.get(port) ?? 0) + 1);
+  }
+  return [...found.keys()].sort((a, b) => a - b);
+};
+
+/** port -> { port, state, url, error, startedAt, child } */
+const tunnels = new Map();
+
+const publicTunnel = ({ port, state, url, error, startedAt, qr }) =>
+  ({ port, state, url: url ?? null, error: error ?? null,
+     startedAt: startedAt ?? null, qr: qr ?? null });
+
+// Written for anything that wants to read the state without asking the server -
+// a status line, a doctor check, a human with `cat`. The API is the source of
+// truth; this file only ever mirrors it.
+const persistExposed = () => {
+  try {
+    const live = [...tunnels.values()]
+      .filter((t) => t.state === "open")
+      .map(({ port, url, startedAt }) => ({ port, url, startedAt }));
+    writeFileSync(EXPOSED_FILE, `${JSON.stringify({ exposed: live }, null, 2)}\n`, { mode: 0o600 });
+  } catch { /* the state volume may be read-only; the API still works */ }
+};
+
+const QUICK_TUNNEL_URL = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
+
+// cloudflared retries a blocked edge forever rather than exiting, so without
+// this a firewalled network shows a spinner that never resolves and a CLI that
+// times out saying nothing useful. Its own precheck already knows: it reports
+// hard_fail when neither QUIC nor HTTP/2 can reach the edge. Say so instead.
+const EDGE_UNREACHABLE = /precheck complete.*hard_fail=true/i;
+// A hostname is assigned before any connection to the edge is established, so
+// the URL alone is not proof the tunnel carries traffic - on a network that
+// blocks the edge you get a name that answers 530. cloudflared logs this line
+// when a connection is actually up, and T3 Code watches for the same one.
+const EDGE_REGISTERED = /Registered tunnel connection/i;
+const EDGE_MESSAGE =
+  "cannot reach the Cloudflare edge from this network - it needs outbound "
+  + "UDP 7844, or HTTP/2 to argotunnel.com";
+
+const startTunnel = (rawPort) => {
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("port must be between 1 and 65535");
+  }
+  if (RESERVED.has(port)) {
+    throw new Error(`port ${port} belongs to T3 Code itself`);
+  }
+  const existing = tunnels.get(port);
+  if (existing && existing.state !== "failed") return existing;
+
+  const child = spawn(CLOUDFLARED, [
+    "tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${port}`,
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+
+  const tunnel = { port, state: "starting", url: null, error: null, startedAt: Date.now(), child };
+  tunnels.set(port, tunnel);
+
+  // cloudflared prints the assigned hostname to stderr, banner-style. Watch both
+  // streams rather than guessing which release writes where.
+  const watch = (chunk) => {
+    const text = String(chunk);
+    const match = text.match(QUICK_TUNNEL_URL);
+    if (match) tunnel.url ??= match[0];
+    if (EDGE_REGISTERED.test(text)) tunnel.registered = true;
+
+    // Open means both: a hostname to hand out, and a connection to carry it.
+    if (tunnel.url && tunnel.registered && tunnel.state !== "open") {
+      tunnel.state = "open";
+      persistExposed();
+      // Rendered here rather than in the browser for the same reason pairing
+      // does it: qrencode is already in the image, and the device that needs
+      // to scan this is rarely the one showing the page.
+      run("qrencode", ["-t", "SVG", "-m", "1", "-o", "-", tunnel.url])
+        .then(({ stdout }) => { tunnel.qr = stdout; })
+        .catch(() => { tunnel.qr = null; });
+    }
+    tunnel.log = `${(tunnel.log ?? "") + text}`.slice(-4000);
+
+    if (tunnel.state === "starting" && EDGE_UNREACHABLE.test(tunnel.log)) {
+      tunnel.state = "failed";
+      tunnel.error = EDGE_MESSAGE;
+      try { tunnel.child.kill(); } catch { /* already gone */ }
+      persistExposed();
+    }
+  };
+  child.stdout.on("data", watch);
+  child.stderr.on("data", watch);
+
+  child.on("exit", (code) => {
+    // A tunnel we stopped on purpose is already gone from the map.
+    if (tunnels.get(port) !== tunnel) return;
+    if (tunnel.state === "failed") return;   // already diagnosed above
+    tunnel.state = "failed";
+    tunnel.error = tunnel.url
+      ? `tunnel closed unexpectedly (exit ${code})`
+      : firstUsefulLine(tunnel.log) || `cloudflared exited ${code}`;
+    tunnel.url = null;
+    persistExposed();
+  });
+  child.on("error", (error) => {
+    tunnel.state = "failed";
+    tunnel.error = String(error?.message ?? error);
+    persistExposed();
+  });
+
+  return tunnel;
+};
+
+// cloudflared is chatty; surface the line that actually says what went wrong.
+const firstUsefulLine = (log) => {
+  for (const line of String(log ?? "").split("\n")) {
+    const text = line.replace(/^\S+Z\s+/, "").trim();
+    if (/ERR|error|failed|refused/i.test(text)) return text.slice(0, 200);
+  }
+  return "";
+};
+
+const stopTunnel = (rawPort) => {
+  const port = Number(rawPort);
+  const tunnel = tunnels.get(port);
+  if (!tunnel) return { ok: false, error: `port ${port} is not exposed` };
+  tunnels.delete(port);
+  try { tunnel.child.kill("SIGTERM"); } catch { /* already gone */ }
+  persistExposed();
+  return { ok: true, port };
+};
+
+const portsStatus = async () => ({
+  // `available` means cloudflared can run at all; the page says so plainly
+  // rather than letting every Expose click fail with the same opaque error.
+  available: existsSync(CLOUDFLARED) || CLOUDFLARED === "cloudflared",
+  listening: await listeningPorts(),
+  tunnels: [...tunnels.values()].map(publicTunnel),
+});
+
+const ROUTES = ["/login", "/status", "/pair", "/revoke", "/ports",
+  "/ports/expose", "/ports/unexpose",
   "/auth/apikey", "/auth/signin", "/auth/session", "/auth/code", "/auth/cancel",
   "/providers"];
 
@@ -885,7 +1078,10 @@ const server = createServer(async (req, res) => {
   const ip = req.socket.remoteAddress ?? "?";
   const raw = new URL(req.url ?? "/", "http://localhost");
   const { mount, route } = resolve(raw.pathname);
-  const authed = keyMatches(cookieFrom(req));
+  // The page sends a cookie; the in-container CLIs send a header. Same key,
+  // same comparison - so `t3-expose` and the page are the same client as far
+  // as this server is concerned, and neither can act on state the other cannot.
+  const authed = keyMatches(cookieFrom(req)) || keyMatches(req.headers["x-t3-setup-key"]);
 
   try {
     // Don't answer asset probes with the page.
@@ -916,6 +1112,27 @@ const server = createServer(async (req, res) => {
     }
 
     if (route === "/status") return sendJson(res, 200, await status());
+
+    if (req.method === "GET" && route === "/ports") {
+      return sendJson(res, 200, await portsStatus());
+    }
+    if (req.method === "POST" && route === "/ports/expose") {
+      try {
+        const input = JSON.parse((await readBody(req)) || "{}");
+        return sendJson(res, 200, publicTunnel(startTunnel(input.port)));
+      } catch (error) {
+        return sendJson(res, 400, { error: String(error?.message ?? error) });
+      }
+    }
+    if (req.method === "POST" && route === "/ports/unexpose") {
+      try {
+        const input = JSON.parse((await readBody(req)) || "{}");
+        const result = stopTunnel(input.port);
+        return sendJson(res, result.ok ? 200 : 404, result);
+      } catch (error) {
+        return sendJson(res, 400, { error: String(error?.message ?? error) });
+      }
+    }
 
 
     if (req.method === "GET" && route === "/providers") {

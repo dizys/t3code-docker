@@ -185,13 +185,17 @@ if ($('mint')) {
     };
   }
 
+  const TICK = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none"'
+    + ' stroke="currentColor" stroke-width="3.4" stroke-linecap="round"'
+    + ' stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+
   const STEPS = (active) => {
     const label = ['Link created', 'Device connects', 'Paired'];
     return '<div class="tc-steps">' + label.map((text, i) => {
       const cls = i < active ? ' tc-step--done' : i === active ? ' tc-step--active' : '';
       return (i ? '<span class="tc-step-line"></span>' : '')
         + '<span class="tc-step' + cls + '"><span class="tc-step-mark">'
-        + (i < active ? '✓' : String(i + 1)) + '</span>' + text + '</span>';
+        + (i < active ? TICK : String(i + 1)) + '</span>' + text + '</span>';
     }).join('') + '</div>';
   };
 
@@ -207,8 +211,11 @@ if ($('mint')) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Could not create a link');
       $('out').innerHTML =
-        '<div class="tc-panel"><div class="tc-split"><div class="tc-stack">'
-        + STEPS(1)
+        // The tracker spans the panel rather than sharing a column with the QR:
+        // beside a 168px code it never had the width to stay on one line, and a
+        // connector that spans a line break points at nothing.
+        '<div class="tc-panel">' + STEPS(1)
+        + '<div class="tc-split"><div class="tc-stack">'
         + '<p class="tc-hint">Single use · expires ' + esc(when(data.expiresAt))
         + '. The token lives in the link fragment — treat it as a credential.</p>'
         + '<div class="tc-copyrow">'
@@ -416,7 +423,9 @@ if ($('mint')) {
       }
 
       return '<div class="tc-row">'
-        + '<span class="tc-tile tc-tile--port" aria-hidden="true">' + port + '</span>'
+        + '<span class="tc-tile tc-tile--port'
+        + (String(port).length > 4 ? ' tc-tile--port-wide' : '')
+        + '" aria-hidden="true">' + port + '</span>'
         + '<div class="tc-row-main"><div class="tc-row-nameline">'
         + '<span class="tc-row-name">Port ' + port + '</span>' + chipHtml + '</div>'
         + '<div class="tc-row-meta">' + meta + '</div></div>'

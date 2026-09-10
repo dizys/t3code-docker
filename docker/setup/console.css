@@ -1125,6 +1125,9 @@ a.tc-btn:hover {
   flex: none;
   display: grid;
   place-items: center;
+  /* Without this the inherited line box is taller than the glyph, and the
+     centring centres the box - which left port numerals sitting ~1px high. */
+  line-height: 1;
   border-radius: 9px;
   background: var(--tile, var(--muted));
   color: var(--on-solid);
@@ -1142,6 +1145,15 @@ a.tc-btn:hover {
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
   box-shadow: none;
+}
+
+/* Ports run to five digits - an ephemeral listener is 5 digits far more often
+   than a dev server is 4 - and five at 10.5px overflow the tile, which pushes
+   the number off centre as well as clipping it. Keeping the tile square and
+   shrinking the label keeps the column aligned. */
+.tc-tile--port-wide {
+  font-size: 8.5px;
+  letter-spacing: -0.04em;
 }
 
 .tc-tile--signed {
@@ -1696,3 +1708,20 @@ a.tc-btn:hover {
   .pair-controls .grow { flex-basis: 100%; }
   .pair-controls .tc-btn--primary { width: 100%; }
 }
+
+/* ------------------------------------------------- narrow containers -----
+ * The step tracker is sized for a full-width screen. In a panel beside a QR
+ * code it has roughly 300px, where three labelled steps and two connectors
+ * cannot fit on one line. Measuring the panel rather than the viewport is the
+ * point: the same panel is narrow on a phone and narrow in a desktop column.
+ */
+
+.tc-panel { container-type: inline-size; }
+
+@container (max-width: 430px) {
+  /* Wrapped steps read fine; a connector that spans the break does not. */
+  .tc-steps .tc-step-line { display: none; }
+  .tc-steps { gap: 6px 16px; }
+}
+
+.tc-steps + .tc-split { margin-top: 12px; }

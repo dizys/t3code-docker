@@ -553,6 +553,21 @@ check "t3-expose reports what the API reports" \
 check "cloudflared's own metrics port is not offered as a user port" \
   "docker exec $NAME t3-expose | grep -cq 'not published'"
 
+# Screenshots prove the page renders; they do not prove it is square. This
+# measures the rendered geometry - glyphs off centre in their box, a connector
+# that spans a line break, buttons in one group with different heights - across
+# the viewport matrix. Only the full image carries a browser to do it with.
+console_layout_is_clean() {
+  docker exec "$NAME" test -x /usr/bin/chromium 2>/dev/null || return 0
+  docker cp scripts/ui-audit.js "$NAME:/tmp/ui-audit.js" >/dev/null 2>&1 || return 1
+  docker exec \
+    -e NODE_PATH=/opt/npm-global/lib/node_modules/@playwright/mcp/node_modules \
+    -e CHROME_PATH=/usr/bin/chromium \
+    "$NAME" node /tmp/ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" \
+    >"${UI_AUDIT_LOG:-/dev/null}" 2>&1
+}
+check "the console has no layout defects" console_layout_is_clean
+
 check "the browser gets the client script verbatim" client_script_is_verbatim
 check "and that script parses" \
   "docker exec $NAME node --check /opt/t3-setup/app.js"

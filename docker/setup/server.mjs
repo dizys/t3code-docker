@@ -727,6 +727,22 @@ const EXPOSED_FILE = `${STATE_DIR}/exposed-ports.json`;
 // user started. Exposing the setup page itself would be a foot-gun.
 const RESERVED = new Set([PORT, Number(process.env.T3CODE_PORT ?? 3773)]);
 
+// Ports the kernel hands out at random, which is where T3 Code's own agent
+// probes and other short-lived internals land. They appear and vanish every
+// few seconds, so listing them makes the panel churn and buries the dev server
+// someone actually started. Discovery hides them; `t3-expose <port>` still
+// publishes one by number if you really did start something up there.
+const ephemeralRange = () => {
+  try {
+    const [lo, hi] = readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8")
+      .trim().split(/\s+/).map(Number);
+    if (Number.isInteger(lo) && Number.isInteger(hi) && lo < hi) return [lo, hi];
+  } catch { /* not Linux, or /proc not mounted */ }
+  return [32768, 60999];
+};
+
+const EPHEMERAL = ephemeralRange();
+
 /** Ports currently in LISTEN state, whatever interface they bound to. */
 const listeningPorts = async () => {
   // A dev server bound to 127.0.0.1 is the normal case and the one that most
@@ -742,6 +758,7 @@ const listeningPorts = async () => {
     if (!local) continue;
     const port = Number(local.slice(local.lastIndexOf(":") + 1));
     if (!Number.isInteger(port) || port <= 0 || RESERVED.has(port)) continue;
+    if (port >= EPHEMERAL[0] && port <= EPHEMERAL[1]) continue;
     // ss lists one row per bound address; a server on :: and 0.0.0.0 is one port.
     found.set(port, (found.get(port) ?? 0) + 1);
   }

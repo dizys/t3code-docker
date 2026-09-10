@@ -541,6 +541,23 @@ reserved_port_refused() { expose_api 3774 | grep -q "T3 Code itself"; }
 bad_port_refused() { expose_api 99999 | grep -q "between 1 and 65535"; }
 
 check "a listening port is discovered" port_3000_listed
+
+# T3 Code's own agent probes open short-lived listeners on kernel-assigned
+# ports. Listing them made the panel churn every few seconds and buried the dev
+# server someone actually started, so discovery hides that range - while
+# `t3-expose <port>` still publishes one by number.
+ephemeral_port_hidden() {
+  local lo port
+  lo="$(docker exec "$NAME" sh -c 'cut -f1 /proc/sys/net/ipv4/ip_local_port_range')"
+  port=$((lo + 101))
+  docker exec -d "$NAME" sh -c "cd /tmp && python3 -m http.server $port --bind 127.0.0.1" || return 1
+  sleep 2
+  # it is listening ...
+  docker exec "$NAME" sh -c "ss -Hltn | grep -q ':$port'" || return 1
+  # ... and deliberately not offered as something to publish
+  ! ports_api | tr -d " " | grep -q "\"listening\":\[[^]]*$port"
+}
+check "a kernel-assigned port is not offered for publishing" ephemeral_port_hidden
 check "the ports API needs the key" \
   "docker exec $NAME sh -c 'curl -sS http://127.0.0.1:3774/ports | grep -q unauthorized'"
 check "publishing T3 Code's own port is refused" reserved_port_refused

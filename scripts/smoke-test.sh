@@ -74,6 +74,61 @@ for bin in t3 claude codex opencode grok cursor-agent; do
   check "$bin runs" "docker exec $NAME $bin --version"
 done
 
+# T3 Code states the versions it needs in its own bundle, and it enforces them
+# at runtime: too old a `gh` and it reports "GitHub CLI is too old to report
+# sign-in status", too old an OpenCode and it refuses the server outright.
+# Debian's gh (2.46) sat below that floor for a while and made the CLI useless
+# inside T3 Code without anything here noticing, so read the floor back out of
+# the bundle and hold the image to it. If upstream raises a minimum, this fails
+# on the next build rather than in someone's session.
+T3_BUNDLE=/opt/npm-global/lib/node_modules/t3/dist/bin.mjs
+
+# Compares with sort -V: passes when installed >= required.
+version_at_least() {
+  [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]
+}
+
+gh_meets_t3_minimum() {
+  local declared installed
+  declared="$(docker exec "$NAME" sh -c \
+    "grep -o 'Update .gh. to [0-9][0-9.]* or newer' $T3_BUNDLE | head -1" 2>/dev/null \
+    | grep -o '[0-9][0-9.]*' | head -1)"
+  # Fall back to the floor the Dockerfile asserts if the wording moved.
+  [ -n "$declared" ] || declared="$(grep -m1 '^ARG GH_MIN_VERSION=' Dockerfile | cut -d= -f2)"
+  installed="$(docker exec "$NAME" gh --version 2>/dev/null | head -1 | awk '{print $3}')"
+  [ -n "$installed" ] || return 1
+  GH_DECLARED="$declared"; GH_INSTALLED="$installed"
+  version_at_least "$installed" "$declared"
+}
+if gh_meets_t3_minimum; then
+  ok "gh $GH_INSTALLED meets the $GH_DECLARED T3 Code requires"
+else
+  no "gh ${GH_INSTALLED:-?} is below the ${GH_DECLARED:-?} T3 Code requires"
+fi
+
+opencode_meets_t3_minimum() {
+  local declared installed
+  declared="$(docker exec "$NAME" sh -c \
+    "grep -o 'MINIMUM_OPENCODE_VERSION *= *\"[0-9][0-9.]*\"' $T3_BUNDLE | head -1" 2>/dev/null \
+    | grep -o '[0-9][0-9.]*' | head -1)"
+  [ -n "$declared" ] || return 0   # nothing declared upstream, nothing to hold to
+  installed="$(docker exec "$NAME" opencode --version 2>/dev/null | tr -d '\r' | head -1)"
+  [ -n "$installed" ] || return 1
+  OC_DECLARED="$declared"; OC_INSTALLED="$installed"
+  version_at_least "$installed" "$declared"
+}
+if opencode_meets_t3_minimum; then
+  ok "opencode ${OC_INSTALLED:-?} meets the ${OC_DECLARED:-?} T3 Code requires"
+else
+  no "opencode ${OC_INSTALLED:-?} is below the ${OC_DECLARED:-?} T3 Code requires"
+fi
+
+# A freshly built image that immediately asks you to upgrade an agent is a bug
+# in this repo, not in the agent. The pins are what go stale, so assert they
+# were current when the image was built.
+check "the pinned agent versions were current at build time" \
+  "./scripts/bump-versions.sh --check"
+
 printf '\nPairing\n'
 pair_out="$(docker exec "$NAME" t3-pair --no-qr 2>/dev/null || true)"
 case "$pair_out" in

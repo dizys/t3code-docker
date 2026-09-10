@@ -48,7 +48,7 @@ RUN set -eux; \
     apt-get -o Acquire::Retries=8 update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl wget gnupg \
-        git git-lfs openssh-client gh \
+        git git-lfs openssh-client \
         build-essential python3 python3-dev python3-venv pipx \
         tini gosu \
         jq ripgrep fd-find bat sqlite3 \
@@ -67,6 +67,32 @@ RUN set -eux; \
     ln -sf "$(command -v batcat)" /usr/local/bin/bat; \
     git lfs install --system; \
     rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI from GitHub's own apt repository rather than Debian's. Debian
+# trixie ships 2.46, and T3 Code refuses to read sign-in status from anything
+# older than 2.81 - "GitHub CLI is too old to report sign-in status" - which
+# makes the distro package useless for the one job it has here. This is the
+# install method GitHub documents, and it carries both architectures.
+#
+# Deliberately unpinned: the repo keeps only the current version, so a pin
+# would break the build the day it moves. The floor below is what actually
+# matters, and it is asserted rather than assumed.
+ARG GH_MIN_VERSION=2.81.0
+RUN set -eux; \
+    mkdir -p -m 755 /etc/apt/keyrings; \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list; \
+    apt-get -o Acquire::Retries=8 update; \
+    apt-get install -y --no-install-recommends gh; \
+    rm -rf /var/lib/apt/lists/*; \
+    installed="$(gh --version | head -1 | awk '{print $3}')"; \
+    if [ "$(printf '%s\n%s\n' "$GH_MIN_VERSION" "$installed" | sort -V | head -1)" != "$GH_MIN_VERSION" ]; then \
+      echo "gh $installed is below the $GH_MIN_VERSION T3 Code requires" >&2; exit 1; \
+    fi; \
+    echo "gh $installed"
 
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
@@ -91,12 +117,14 @@ RUN mkdir -p /opt/npm-global && chown -R t3:t3 /opt/npm-global
 # ---------------------------------------------------------------------------
 FROM base AS slim
 
-# Pinned so a rebuild is reproducible. `scripts/bump-versions.sh` refreshes them.
+# Pinned so a rebuild is reproducible; `scripts/bump-versions.sh` refreshes them
+# against the registries, and CI opens a PR when one falls behind. Any of these
+# also accepts `latest` as a build arg when you want the newest at build time.
 ARG T3_VERSION=0.0.40
-ARG CLAUDE_CODE_VERSION=2.1.266
-ARG CODEX_VERSION=0.153.4
+ARG CLAUDE_CODE_VERSION=2.1.267
+ARG CODEX_VERSION=0.154.0
 ARG OPENCODE_VERSION=1.18.30
-ARG GROK_VERSION=1.0.24
+ARG GROK_VERSION=1.0.25
 
 # node-pty has no Linux prebuilds and compiles here; build-essential and
 # python3 (installed above) are what make that work.

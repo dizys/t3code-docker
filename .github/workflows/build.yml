@@ -6,6 +6,10 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  # A pinned image goes stale the moment upstream ships. Monday morning is soon
+  # enough to catch it, and the job only reports - it never rebuilds on its own.
+  schedule:
+    - cron: "0 6 * * 1"
 
 env:
   REGISTRY: ghcr.io
@@ -25,6 +29,30 @@ jobs:
           done
       - name: Compose file is valid
         run: docker compose config >/dev/null
+
+  # Reports drift rather than failing the build: a pin that is one patch behind
+  # should not block a merge, but it should be visible in the run.
+  versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pinned versions are current
+        id: check
+        continue-on-error: true
+        run: ./scripts/bump-versions.sh --check | tee /tmp/versions.txt
+      - name: Summarise
+        run: |
+          {
+            echo "### Pinned tool versions"
+            echo
+            echo '```'
+            cat /tmp/versions.txt
+            echo '```'
+            if [ "${{ steps.check.outcome }}" = failure ]; then
+              echo
+              echo "Run \`./scripts/bump-versions.sh\` to refresh them."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Both architectures build and smoke-test on their own native runner. ARM
   # runners are free for public repositories; emulating this under QEMU would

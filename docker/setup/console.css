@@ -1702,6 +1702,18 @@ a.tc-btn:hover {
 .console-top .tc-chrome { position: static; }
 @media (max-width: 560px) { #build { display: none; } }
 
+/* A URL rendered as machine data is still a URL: make it behave like one,
+   without losing the mono voice the data column is set in. */
+.tc-urllink {
+  color: var(--primary);
+  text-decoration: none;
+}
+.tc-urllink:hover { text-decoration: underline; }
+
+/* The design sets this inline on the card's lede; it belongs with the
+   component, or the paragraph sits directly on top of the controls. */
+.tc-cardbody .tc-lede { margin-bottom: 14px; text-wrap: balance; }
+
 .pair-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .pair-controls .grow { flex: 1 1 180px; min-width: 0; }
 @media (max-width: 480px) {

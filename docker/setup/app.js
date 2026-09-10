@@ -288,8 +288,9 @@ if ($('mint')) {
         : '<span class="tc-dot" style="background:var(--err-fg)"></span>' + esc(s.server.detail))
       + readout('Image', '<span class="tc-mono">' + esc(build) + '</span>')
       + readout('Public URL', s.publicUrl
-        ? '<span class="tc-mono tc-truncate" style="max-width:210px">' + esc(s.publicUrl)
-          + '</span><button type="button" class="tc-iconbtn" style="width:22px;height:22px"'
+        ? '<a class="tc-mono tc-truncate tc-urllink" style="max-width:210px" href="'
+          + esc(s.publicUrl) + '" target="_blank" rel="noopener">' + esc(s.publicUrl)
+          + '</a><button type="button" class="tc-iconbtn" style="width:22px;height:22px"'
           + ' data-copy="' + esc(s.publicUrl) + '" data-copy-msg="Public URL copied"'
           + ' aria-label="Copy public URL">' + COPY_ICON + '</button>'
         : '<span class="tc-chip tc-chip--warn" style="height:auto;padding:1px 8px">Not set</span>')
@@ -305,7 +306,8 @@ if ($('mint')) {
       + item('Workspace', '<span class="tc-mono">' + esc(s.paths?.workspace || '—') + '</span>')
       + item('Pair TTL', '<span class="tc-mono">' + esc(s.paths?.pairTtl || '30d')
         + '</span> default')
-      + item('Agent credentials', 'Persisted on the state volume — survive a recreate')
+      + item('Agent credentials', '<span class="tc-mono">'
+        + esc(s.paths?.agents || '—') + '</span>')
       + (s.publicUrl ? '' : item('Pairing',
           '<span style="color:var(--warn-fg)">Without T3_PUBLIC_URL, links point at this '
           + "container's own address and no device can reach them</span>"));
@@ -353,6 +355,10 @@ if ($('mint')) {
 
   const renderSessions = (s) => {
     const links = s.pairings.length;
+    // Next to the button that makes another one, how many are already unredeemed.
+    $('paircount').textContent = links
+      ? links + (links === 1 ? ' link unused' : ' links unused') : '';
+
     $('sessioncount').textContent =
       s.sessions.length + (s.sessions.length === 1 ? ' device' : ' devices')
       + ' · ' + links + (links === 1 ? ' unused link' : ' unused links');
@@ -649,9 +655,16 @@ if ($('mint')) {
     for (const b of document.querySelectorAll('.signin')) {
       b.onclick = async () => {
         const agent = b.dataset.agent;
+        const agentName = b.closest('.tc-row')?.querySelector('.tc-row-name')?.textContent
+          || 'the agent';
         b.disabled = true;
         const box = $('agent-' + agent);
-        box.innerHTML = '<div class="tc-panel"><span class="tc-skel" style="width:70%"></span></div>';
+        // An empty rounded box for the several seconds a CLI takes to produce
+        // a URL reads as a bug. Say what is happening.
+        box.innerHTML = '<div class="tc-panel"><div class="tc-cluster">'
+          + '<span class="tc-spin"></span>'
+          + '<span class="tc-hint">Starting sign-in\u2026 waiting for '
+          + esc(agentName) + ' to return a URL.</span></div></div>';
         const res = await fetch(BASE + '/auth/signin', {
           method: 'POST', headers: {'content-type': 'application/json'},
           body: JSON.stringify({agent}),
@@ -701,10 +714,12 @@ if ($('mint')) {
                    + '<div class="tc-copyrow"><input class="tc-input tc-input--mono codein"'
                    + ' placeholder="Paste the code" />'
                    + '<button type="button" class="tc-btn tc-btn--primary sendcode">Submit</button>'
-                   + '</div></div>' : '')
-              + '<div class="tc-cluster">'
-              + '<button type="button" class="tc-btn tc-btn--ghost tc-btn--sm cancel">Cancel</button>'
-              + '</div></div>'
+                   + '<button type="button" class="tc-btn tc-btn--ghost cancel">Cancel</button>'
+                   + '</div></div>'
+                 : '<div class="tc-cluster">'
+                   + '<button type="button" class="tc-btn tc-btn--ghost tc-btn--sm cancel">'
+                   + 'Cancel</button></div>')
+              + '</div>'
               + (st.qr ? '<div class="tc-qr">' + st.qr + '</div>' : '')
               + '</div></div>';
             const send = box.querySelector('.sendcode');

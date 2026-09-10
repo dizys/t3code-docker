@@ -313,6 +313,7 @@ const status = async () => {
       volume: STATE_DIR.replace(/\/\.t3\/?$/, "") || STATE_DIR,
       state: STATE_DIR,
       workspace: process.env.T3_WORKSPACE || "/workspace",
+      agents: `${STATE_DIR}/agents`,
       pairTtl: process.env.T3_PAIR_TTL || "30d",
     },
     harnesses,
@@ -642,7 +643,7 @@ ${
       <div class="tc-cardhead">
         <h2 class="tc-eyebrow">Pair a device</h2>
         <div class="tc-cardhead-spacer"></div>
-        <p class="tc-cardhead-note">A phone is enough &mdash; no shell, no restart.</p>
+        <p class="tc-cardhead-note" id="paircount"></p>
       </div>
       <div class="tc-cardbody">
         <p class="tc-lede">Creates a single-use link for one device. Scan it with the
@@ -705,18 +706,16 @@ ${
 </div>
 <div class="tc-details" id="details"></div>`
     : `<section class="tc-card tc-card--pad" style="max-width:34rem;margin:8vh auto 0">
-  <h2 style="font-size:22px;letter-spacing:-.02em;margin:0 0 6px">Unlock the console.
-    <span style="color:var(--muted);font-weight:400;font-size:15px">one key, then you pair</span></h2>
-  <p class="tc-lede" style="margin-bottom:20px">This page is the only door to the setup
-  console. The key is <span class="tc-mono">T3_SETUP_KEY</span> from this container's
-  environment &mdash; set by you, or generated at boot and printed to the log.</p>
+  <h2 style="font-size:22px;letter-spacing:-.02em;margin:0 0 6px">Unlock the console</h2>
+  <p class="tc-lede" style="margin-bottom:20px">The key is
+  <span class="tc-mono">T3_SETUP_KEY</span> from this container's environment: set by you,
+  or generated at boot and printed to the container log.</p>
   <form method="POST" action="${mount}/login" class="tc-stack" id="loginform">
     <div class="tc-field">
       <label class="tc-label" for="key">Setup key</label>
       <input class="tc-input tc-input--mono" id="key" name="key" type="password"
         placeholder="Paste the setup key" autofocus autocomplete="current-password" />
-      <span class="tc-hint">Treat it like a password &mdash; anything it can do, a
-        pairing link can do.</span>
+      <span class="tc-hint">This key mints pairing links. Treat it like a password.</span>
     </div>
     <button class="tc-btn tc-btn--primary tc-btn--lg tc-btn--block" type="submit">Unlock console</button>
   </form>

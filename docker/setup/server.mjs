@@ -65,8 +65,17 @@ const throttle = (ip) => {
   return new Promise((r) => setTimeout(r, Math.min(n * 250, 3000)));
 };
 
+// Bounded like the agent probes are. Without a timeout a single stuck
+// subcommand - a locked state database during an upgrade, an agent CLI waiting
+// on something - hangs /status forever, and the whole console sits on
+// skeletons with no way to tell why.
+const T3_TIMEOUT_MS = 15_000;
 const t3 = (args) =>
-  run("t3", args, { env: process.env, maxBuffer: 4 * 1024 * 1024 });
+  run("t3", args, {
+    env: process.env,
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: T3_TIMEOUT_MS,
+  });
 
 const health = async () => {
   try {
@@ -271,9 +280,27 @@ const configuredProviders = async () => {
 };
 
 const status = async () => {
-  const harnesses = await harnessStatus();
+  // Concurrently, and each failure contained: an empty list and "could not
+  // read" are different facts, and reporting the first when the second is true
+  // is how a console tells you a comfortable lie. Whatever answers, answers.
+  const degraded = [];
+  const attempt = async (what, work, fallback) => {
+    try {
+      return await work();
+    } catch (error) {
+      degraded.push({ what, error: String(error?.message ?? error).slice(0, 200) });
+      return fallback;
+    }
+  };
+  const [server, harnesses, pairings, sessions] = await Promise.all([
+    attempt("server health", health, { ok: false, detail: "health check failed" }),
+    attempt("agent probes", harnessStatus, []),
+    attempt("pairing links", () => listJson(["auth", "pairing", "list", "--json"]), []),
+    attempt("paired devices", () => listJson(["auth", "session", "list", "--json"]), []),
+  ]);
+
   return {
-    server: await health(),
+    server,
     image: {
       version: process.env.T3_IMAGE_VERSION || null,
       variant: process.env.T3_IMAGE_VARIANT || null,
@@ -289,21 +316,18 @@ const status = async () => {
       pairTtl: process.env.T3_PAIR_TTL || "30d",
     },
     harnesses,
-    pairings: await listJson(["auth", "pairing", "list", "--json"]),
-    sessions: await listJson(["auth", "session", "list", "--json"]),
+    pairings,
+    sessions,
+    degraded,
   };
 };
 
 /** `t3 auth` prefixes JSON with log chatter; take the array and nothing else. */
 const listJson = async (args) => {
-  try {
-    const { stdout } = await t3(args);
-    const start = stdout.indexOf("[");
-    if (start < 0) return [];
-    return JSON.parse(stdout.slice(start));
-  } catch {
-    return [];
-  }
+  const { stdout } = await t3(args);
+  const start = stdout.indexOf("[");
+  if (start < 0) return [];
+  return JSON.parse(stdout.slice(start));
 };
 
 const revoke = async ({ kind, id }) => {
@@ -585,6 +609,7 @@ const page = (authed, mount) => `<!doctype html>
 <title>T3 Code setup</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111'/%3E%3Ctext x='16' y='22' font-family='ui-monospace,monospace' font-size='16' font-weight='700' fill='%23fff' text-anchor='middle'%3ET3%3C/text%3E%3C/svg%3E">
 <style>${CONSOLE_CSS}</style>
+<script>window.__T3_SETUP_BASE__ = ${JSON.stringify(mount)};</script>
 <script>${THEME_BOOT}</script>
 </head><body>
 <div class="console-top">
@@ -606,6 +631,7 @@ const page = (authed, mount) => `<!doctype html>
 ${authed ? `<div class="tc-strip"><div class="tc-wrap tc-wrap--wide tc-strip-in" id="strip"></div></div>` : ""}
 </div>
 <main class="tc-wrap tc-wrap--wide tc-main">
+${authed ? `<div id="degraded"></div>` : ""}
 ${
   authed
     ? `<h1 class="tc-sr">T3 Code setup console</h1>
@@ -684,7 +710,7 @@ ${
   <p class="tc-lede" style="margin-bottom:20px">This page is the only door to the setup
   console. The key is <span class="tc-mono">T3_SETUP_KEY</span> from this container's
   environment &mdash; set by you, or generated at boot and printed to the log.</p>
-  <form method="POST" action="${mount}/login" class="tc-stack">
+  <form method="POST" action="${mount}/login" class="tc-stack" id="loginform">
     <div class="tc-field">
       <label class="tc-label" for="key">Setup key</label>
       <input class="tc-input tc-input--mono" id="key" name="key" type="password"
@@ -911,6 +937,16 @@ const ROUTES = ["/login", "/status", "/pair", "/revoke", "/ports",
  * looks like a password problem rather than a routing one. So infer it, and
  * keep T3_SETUP_BASE_PATH only as an override.
  */
+// A proxy that rewrites the path is supposed to say so. nginx, Traefik and
+// friends send X-Forwarded-Prefix; when the path itself no longer carries the
+// prefix, that header is the only thing left that knows it.
+const forwardedPrefix = (req) => {
+  const raw = req?.headers?.["x-forwarded-prefix"];
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  return /^\/[\w\-./~]*$/.test(trimmed) ? trimmed : "";
+};
+
 const resolve = (pathname) => {
   if (BASE_PATH && (pathname === BASE_PATH || pathname.startsWith(`${BASE_PATH}/`))) {
     return { mount: BASE_PATH, route: pathname.slice(BASE_PATH.length) || "/" };
@@ -928,7 +964,11 @@ const resolve = (pathname) => {
 const server = createServer(async (req, res) => {
   const ip = req.socket.remoteAddress ?? "?";
   const raw = new URL(req.url ?? "/", "http://localhost");
-  const { mount, route } = resolve(raw.pathname);
+  const resolved = resolve(raw.pathname);
+  const route = resolved.route;
+  // The inferred mount wins when the prefix survived the hop; otherwise fall
+  // back to what the proxy declared.
+  const mount = resolved.mount || forwardedPrefix(req);
   // The page sends a cookie; the in-container CLIs send a header. Same key,
   // same comparison - so `t3-expose` and the page are the same client as far
   // as this server is concerned, and neither can act on state the other cannot.

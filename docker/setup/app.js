@@ -10,12 +10,49 @@
 // Markup here is the `tc-*` component system from docker/setup/console.css;
 // the two are one design and should be changed together.
 //
-// `BASE` is set by a small inline script the page emits before this one.
-const BASE = window.__T3_SETUP_BASE__ || '';
+// Where to send API calls.
+//
+// The server infers its own mount from the path a request arrives on, and
+// passes it here. That works while a reverse proxy forwards the prefix intact;
+// a proxy that *strips* it - Cloudflare and nginx both do this routinely -
+// leaves the server seeing "/" and reporting no mount, and the page then calls
+// /status at the origin root, which the proxy does not route back here. The
+// browser still knows the real path, so fall back to it: the page's own
+// directory is the right base whether the prefix survived the hop or not.
+const pageBase = () => {
+  const path = location.pathname.replace(/\/+$/, '');
+  // A page served at /__setup answers its API at /__setup/status; one served
+  // at the root answers at /status.
+  return /\.[a-z0-9]{1,5}$/i.test(path) ? path.replace(/\/[^/]*$/, '') : path;
+};
+const BASE = window.__T3_SETUP_BASE__ || pageBase();
 
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? '').replace(/[&<>"]/g,
   (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+
+// ---------------------------------------------------------------- unlock --
+// The form is server-rendered, so its action carries whatever mount the server
+// could work out. Behind a proxy that strips the prefix that is the origin
+// root, which the proxy does not route back here - you cannot even sign in.
+// Post it ourselves against the base the browser can see, and reload rather
+// than follow a redirect the server would aim at the same wrong root.
+const loginForm = $('loginform');
+if (loginForm) {
+  loginForm.action = BASE + '/login';
+  loginForm.onsubmit = async (event) => {
+    event.preventDefault();
+    const body = new URLSearchParams(new FormData(loginForm));
+    try {
+      await fetch(BASE + '/login', {
+        method: 'POST', body,
+        headers: {'content-type': 'application/x-www-form-urlencoded'},
+        redirect: 'manual',
+      });
+    } catch { /* fall through to the reload, which will show the form again */ }
+    location.reload();
+  };
+}
 
 // ---------------------------------------------------------------- theme --
 // Three modes, not two: "system" is the default and keeps following the OS.
@@ -470,9 +507,19 @@ if ($('mint')) {
   // --------------------------------------------------------------- load --
   const load = async () => {
     let s;
-    try { s = await (await fetch(BASE + '/status')).json(); }
-    catch {
-      $('strip').innerHTML = '<div class="tc-notice tc-notice--err">Could not read status.</div>';
+    try {
+      const res = await fetch(BASE + '/status');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      s = await res.json();
+    } catch (error) {
+      // Name the URL and the reason. "Could not read status" sent someone
+      // hunting a migration bug when the page was calling the wrong path.
+      $('strip').innerHTML = '<div class="tc-notice tc-notice--err">'
+        + 'Could not read status from <span class="tc-mono">' + esc(BASE + '/status')
+        + '</span> &mdash; ' + esc(error.message) + '.'
+        + (BASE ? '' : ' If this page is served under a path prefix, set '
+            + '<span class="tc-mono">T3_SETUP_BASE_PATH</span>.')
+        + '</div>';
       return;
     }
 
@@ -484,6 +531,16 @@ if ($('mint')) {
       ? '<span class="tc-dot tc-dot--live" style="color:var(--ok-fg)"></span>Running '
         + esc(s.server.version)
       : '<span class="tc-dot" style="background:var(--err-fg)"></span>Server down';
+
+    // A part that could not be read says so, instead of rendering as "none".
+    const note = $('degraded');
+    if (note) {
+      note.innerHTML = (s.degraded || []).length
+        ? '<div class="tc-notice tc-notice--warn">Could not read '
+          + esc(s.degraded.map((d) => d.what).join(', '))
+          + '. Shown below as empty; the container may still be starting.</div>'
+        : '';
+    }
 
     renderStrip(s);
     renderSessions(s);

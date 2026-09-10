@@ -591,6 +591,41 @@ check "and that script parses" \
 
 # A proxy routing a path prefix here forwards it intact. Serving the page only
 # at / turned that into a bare "unauthorized", which reads as a wrong password.
+# A proxy that STRIPS the prefix leaves the server seeing "/" - it cannot infer
+# a mount that is no longer in the path. Then the page called /status at the
+# origin root, which such a proxy does not route back, and the console sat on
+# skeletons saying only "could not read status". Honour the header proxies send
+# for exactly this.
+# Captured rather than piped: this script runs with pipefail, and `grep -q`
+# closes the pipe the moment it matches, so a page big enough not to fit the
+# pipe buffer kills curl with SIGPIPE and the assertion fails for a reason that
+# has nothing to do with what it is testing.
+page_says_mount() {
+  local page
+  page="$(docker exec "$NAME" curl -sS --max-time 10 "$@")" || return 1
+  case "$page" in
+    *"window.__T3_SETUP_BASE__ = \"/__setup\";"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+forwarded_prefix_is_honoured() {
+  page_says_mount -H "x-forwarded-prefix: /__setup" "http://127.0.0.1:3774/"
+}
+check "honours X-Forwarded-Prefix when the proxy strips the path" \
+  forwarded_prefix_is_honoured
+
+# The client's own fallback for proxies that strip and say nothing: the page
+# knows where it was loaded from even when the server does not.
+check "the page falls back to its own path when no mount is known" \
+  "docker exec $NAME grep -q 'pageBase()' /opt/t3-setup/app.js"
+
+# This is the assertion that should have caught the mount going missing: the
+# old one only proved a page came back under a prefix, not that the page was
+# told where it lives. It came back fine while every API call it made went to
+# the origin root.
+mount_is_declared() { page_says_mount "http://127.0.0.1:3774/__setup"; }
+check "and tells the page which prefix it is under" mount_is_declared
+
 check "serves the page under an unconfigured path prefix" \
   "retry 5 \"docker exec $NAME curl -fsS --max-time 5 http://127.0.0.1:3774/__setup | grep -qi '<!doctype html>'\""
 check "and its routes work under that prefix" \

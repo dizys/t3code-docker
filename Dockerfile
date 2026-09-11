@@ -140,7 +140,7 @@ FROM base AS slim
 # against the registries, and CI opens a PR when one falls behind. Any of these
 # also accepts `latest` as a build arg when you want the newest at build time.
 ARG T3_VERSION=0.0.40
-ARG CLAUDE_CODE_VERSION=2.1.267
+ARG CLAUDE_CODE_VERSION=2.1.268
 ARG CODEX_VERSION=0.154.0
 ARG OPENCODE_VERSION=1.18.30
 ARG GROK_VERSION=1.0.25

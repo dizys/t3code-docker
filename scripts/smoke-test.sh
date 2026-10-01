@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Boot the image and assert the things a user would notice if they broke.
 #
-#   scripts/smoke-test.sh [--variant NAME] [image]      (default: t3code:core)
+#   scripts/smoke-test.sh [--variant NAME] [image]      (default: t3code:browser)
 #
 # Capability profiles:
 #   core     default, installer + mise, no baked harnesses/runtimes/browser
@@ -27,7 +27,7 @@ Usage: scripts/smoke-test.sh [--variant NAME] [image]
 
   --variant NAME   core | browser
                    (default: inferred from the image tag; required for digest refs)
-  image            image tag or digest reference (default: t3code:core)
+  image            image tag or digest reference (default: t3code:browser)
 USAGE
 }
 
@@ -40,7 +40,7 @@ while [ $# -gt 0 ]; do
     *) IMAGE="$1"; shift ;;
   esac
 done
-[ -n "$IMAGE" ] || IMAGE="t3code:core"
+[ -n "$IMAGE" ] || IMAGE="t3code:browser"
 
 t3_image_profile_resolve "smoke-test.sh" "$IMAGE" "$VARIANT"
 NAME="t3code-smoke-$$"

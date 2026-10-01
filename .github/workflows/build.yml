@@ -43,7 +43,9 @@ jobs:
       - name: Pinned versions are current
         id: check
         continue-on-error: true
-        run: ./scripts/bump-versions.sh --check | tee /tmp/versions.txt
+        run: |
+          set -o pipefail
+          ./scripts/bump-versions.sh --check | tee /tmp/versions.txt
       - name: Summarise
         run: |
           {
@@ -59,8 +61,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Every target builds and smoke-tests on its own native runner, so a change
-  # that only works on amd64 is caught before it ships. The slower E2E and the
-  # size measurement run on amd64 only. On a release tag both targets push by
+  # that only works on amd64 is caught before it ships. The slower E2E runs on
+  # amd64 for every build, so a release is never its first run; the size
+  # measurement runs on release only. On a release tag both targets push by
   # digest and `merge` stitches the tested digests into the release tags, so
   # nothing is rebuilt between test and publish.
   build:
@@ -153,17 +156,23 @@ jobs:
             scripts/smoke-test.sh --variant "$VARIANT" "t3code:${VARIANT}"
           fi
 
-      # The release gate for the assembled product: install and launch all five
-      # managed harnesses through T3, survive recreation (including offline),
-      # and on `browser` drive real pages through the managed MCP registration.
-      - name: Final-target E2E (native amd64, release only)
-        if: github.ref_type == 'tag' && matrix.platform == 'amd64'
+      # The assembled product: install and launch all five managed harnesses
+      # through T3, survive recreation (including offline), and on `browser`
+      # drive real pages through the managed MCP registration. It installs
+      # mise's latest of each, so it runs on every build rather than first
+      # meeting a new upstream release on the day of a tag.
+      - name: Harness lifecycle E2E (native amd64)
+        if: matrix.platform == 'amd64'
         env:
           VARIANT: ${{ matrix.target }}
           PLATFORM_DIGEST: ${{ steps.platform.outputs.digest }}
         run: |
-          scripts/test-toolchain-e2e.sh --variant "$VARIANT" \
-            "${REGISTRY}/${{ steps.image.outputs.slug }}@${PLATFORM_DIGEST}"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            scripts/test-toolchain-e2e.sh --variant "$VARIANT" \
+              "${REGISTRY}/${{ steps.image.outputs.slug }}@${PLATFORM_DIGEST}"
+          else
+            scripts/test-toolchain-e2e.sh --variant "$VARIANT" "t3code:${VARIANT}"
+          fi
 
       - name: Measure the tested artifact (native amd64, release only)
         if: github.ref_type == 'tag' && matrix.platform == 'amd64'
@@ -270,17 +279,24 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.image.outputs.slug }}
           # `flavor: suffix` would apply to every tag, turning the bare `core`
-          # tag into `core-core`. Spell each one out instead.
-          #   core    -> :core :latest :1.2.3 :1.2 :1.2.3-core :1.2-core
-          #   browser -> :browser :1.2.3-browser :1.2-browser
+          # tag into `core-core`. Spell each one out instead. `browser` is the
+          # successor to `full` and `core` to `slim`, so the old names keep
+          # pulling current images: an upgraded container reinstalls its
+          # agents and toolchains on first start instead of losing them.
+          #   browser -> :browser :full :latest :1.2.3 :1.2
+          #              :1.2.3-browser :1.2-browser :1.2.3-full :1.2-full
+          #   core    -> :core :slim :1.2.3-core :1.2-core :1.2.3-slim :1.2-slim
           flavor: latest=false
           tags: |
             type=raw,value=${{ matrix.target }}
             type=semver,pattern={{version}},suffix=-${{ matrix.target }}
             type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.target }}
-            type=raw,value=latest,enable=${{ matrix.target == 'core' }}
-            type=semver,pattern={{version}},enable=${{ matrix.target == 'core' }}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ matrix.target == 'core' }}
+            type=raw,value=${{ matrix.target == 'browser' && 'full' || 'slim' }}
+            type=semver,pattern={{version}},suffix=-${{ matrix.target == 'browser' && 'full' || 'slim' }}
+            type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.target == 'browser' && 'full' || 'slim' }}
+            type=raw,value=latest,enable=${{ matrix.target == 'browser' }}
+            type=semver,pattern={{version}},enable=${{ matrix.target == 'browser' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ matrix.target == 'browser' }}
 
       - name: Promote the tested digests
         env:

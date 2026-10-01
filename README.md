@@ -11,7 +11,7 @@
 </p>
 
 <p><strong>Run <a href="https://github.com/pingdotgg/t3code">T3 Code</a> as a headless server in a container,<br>
-with agent harnesses and project toolchains installed on demand and kept on the volume.</strong></p>
+with the agent harnesses and language toolchains set up on first start.</strong></p>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/setup-dark.png">
@@ -25,10 +25,10 @@ git, and your terminals, while the desktop, web, and phone apps are thin clients
 over a single WebSocket. That split is what makes this work — put the server on
 a box somewhere, and a phone is enough to drive it. No laptop in the loop.
 
-This image is the server half, packaged: T3 Code, [mise](https://mise.jdx.dev/)
-for project toolchains, agent harnesses you install from the setup page, and a
-`browser` variant with headless Chromium so agents can see web pages. A setup
-page pairs a device and installs and signs in the agents without a shell.
+This image is the server half, packaged: every agent CLI and the toolchains
+they reach for, installed onto your volume the first time it starts, a headless
+browser so they can see web pages, and a setup page that pairs a device and
+signs the agents in without a shell.
 
 > [!NOTE]
 > T3 Code is alpha software and moves fast. So does this image.
@@ -36,15 +36,17 @@ page pairs a device and installs and signs in the agents without a shell.
 ## Highlights
 
 - **A phone is enough.** Pair a device from a web page — QR or link, no terminal.
-- **Agents install from the browser.** Claude Code, Codex, OpenCode, Cursor and
-  Grok install from the setup page or `t3-harness`, at an exact recorded
-  version, and stay on the volume. No agent CLI is baked into the image.
-- **Toolchains on demand.** Go, Rust, Bun, Deno, uv and per-project Node and
-  Python install through mise; clang, CMake, ffmpeg, ImageMagick and psql are
-  in the image.
-- **Agents can see.** The `browser` variant adds headless Chromium plus
-  Playwright and Chrome DevTools MCP servers, wired into Claude Code, Codex
-  and OpenCode.
+- **Agents sign in from the browser.** Every CLI's own flow, driven from the
+  setup page: a URL and a QR to approve on your phone, a field for the code
+  where one comes back. Credentials land on the state volume and survive a
+  recreate.
+- **Batteries included, kept on the volume.** Claude Code, Codex, OpenCode,
+  Cursor and Grok; Go, Rust, Bun, Deno and uv. They install on the first start,
+  in the background, at exact recorded versions - so the image stays small, a
+  pull never resets them, and Update is a button rather than a new image. Node,
+  Python, clang, ffmpeg, ImageMagick and psql are in the image itself.
+- **Agents can see.** Headless Chromium plus Playwright and Chrome DevTools MCP
+  servers, wired into Claude Code, Codex and OpenCode.
 - **Show your dev server to your phone.** A port listening in the container is
   reachable from nowhere. Publish it from the setup page or with `t3-expose
   3000` and get a public https URL and a QR code - no DNS, no certificate, no
@@ -65,7 +67,7 @@ page pairs a device and installs and signs in the agents without a shell.
 - [Publishing a port](#publishing-a-port)
 - [Giving agents eyes](#giving-agents-eyes)
 - [Harnesses](#harnesses)
-- [Project toolchains](#project-toolchains)
+- [Toolchains](#toolchains)
 - [How long things last](#how-long-things-last)
 - [Configuration](#configuration)
 - [Building](#building)
@@ -81,22 +83,23 @@ cp .env.example .env      # then edit T3_PUBLIC_URL, PUID/PGID, T3_WORKSPACE_HOS
 docker compose up -d --build
 ```
 
-Prebuilt images are published to `ghcr.io/dizys/t3code-docker` — `:latest` and
-`:core` for the default image, `:browser` for the Chromium/MCP variant. They are
+Prebuilt images are published to `ghcr.io/dizys/t3code-docker` — `:latest`
+(also `:browser`, and `:full` for anyone still on the old name) for the full
+image, `:core` (also `:slim`) for the same without the browser. They are
 multi-arch manifests covering `linux/amd64` and `linux/arm64`, with each
 architecture built *and* tested on its own native runner, so `docker pull`
 resolves to the right one on an ARM server. (`v0.1.0` predates this and is
 amd64-only.) To run a published image instead of building, set `T3_IMAGE` in
-`.env` and drop `--build`. The historical `:slim` and `:full` tags stay
-pullable and stop receiving updates; see [Upgrading from `slim`/`full`](#upgrading-from-slimfull).
+`.env` and drop `--build`.
 
-Then open the setup UI on port **3774**, enter your `T3_SETUP_KEY`, and press
-**Create pairing link**. Scan the QR with the T3 Code app, or open the link in a
-browser.
+The first start installs the agents and toolchains onto the `/home/t3` volume
+in the background; it takes a minute or two on a decent connection, and the
+setup page shows it happening. Meanwhile open the setup UI on port **3774**,
+enter your `T3_SETUP_KEY`, and press **Create pairing link**. Scan the QR with
+the T3 Code app, or open the link in a browser.
 
-From there you are inside T3 Code, and the setup page's **Agents** card takes
-over: install the harnesses you use (exact versions, on the volume) and sign
-each one in through its own browser flow. Then enable the provider under
+From there you are inside T3 Code. Sign each agent in from the setup page's
+**Agents** card, through its own browser flow, then enable the provider under
 **Settings → Providers**.
 
 That is the whole path — no shell in the container at any point. `docker exec`
@@ -104,28 +107,32 @@ is a fallback, not the route:
 
 ```bash
 docker compose exec t3code t3-doctor             # what's installed, signed in, healthy
-docker compose exec -u t3 t3code t3-harness list # managed harnesses and versions
+docker compose exec t3code t3-harness list       # agents and their exact versions
 docker compose exec -it t3code t3-login claude   # if you prefer a shell to the UI
 ```
 
 ## What's in the box
 
-| | `core` (default) | `browser` |
+| | `browser` (`latest`) | `core` |
 | --- | :---: | :---: |
 | T3 Code server + web app | ✅ | ✅ |
 | git, git-lfs, gh, ssh, Node, Python | ✅ | ✅ |
-| mise, for project toolchains | ✅ | ✅ |
-| Harness installer (`t3-harness`, setup page) | ✅ | ✅ |
-| Claude Code, Codex, OpenCode, Grok, Cursor CLIs | installed on demand | installed on demand |
-| Go, Rust, Bun, Deno, uv, project languages | via mise | via mise |
 | clang/CMake/GDB, ffmpeg, ImageMagick, psql, redis-cli | ✅ | ✅ |
-| Headless Chromium + browser MCP servers | — | ✅ |
+| Claude Code, Codex, OpenCode, Grok, Cursor CLIs | first start | first start |
+| Go, Rust, Bun, Deno, uv | first start | first start |
+| mise, for per-project versions | ✅ | ✅ |
+| Headless Chromium + browser MCP servers | ✅ | — |
 | cloudflared, for publishing a port | ✅ | ✅ |
-| Size on disk (pulled) | ~1.9 GB (~0.7 GB) | ~2.5 GB (~1.0 GB) |
+| Image size (pulled) | ~2.5 GB (~1.0 GB) | ~1.9 GB (~0.7 GB) |
 
-Neither image contains credentials, model access, or agent CLIs. You install the
-harnesses you use and sign them in yourself; they live on the `/home/t3` volume,
-not in the image.
+"First start" means the container installs them onto the `/home/t3` volume the
+first time it runs, in the background, and never again: about 2.5 GB that lives
+on the volume you already keep rather than in every pull. `T3_PREINSTALL`
+narrows it (`agents`, `toolchains`, a list like `claude,codex,go`) or turns it
+off (`none`); anything you leave out is one click away on the setup page.
+
+Neither image contains credentials or model access. You bring harnesses you have
+already paid for and sign them in yourself.
 
 ## First run: the setup UI
 
@@ -153,10 +160,12 @@ agents are signed in.
 
 Beyond pairing it is a small management surface: connected clients with a
 **Revoke** button each, outstanding unredeemed links with the same, the
-environment status, and an **Agents** card that installs, updates, uninstalls,
-and signs your coding agents in.
+environment status, an **Agents** card that signs your coding agents in (and
+installs, updates or removes them), and a **Toolchains** card that does the same
+for Go, Rust, Bun, Deno and uv. While the first start is still installing, a
+banner at the top says what it is on.
 
-The top bar shows which image is running — `v0.5.0 · core` — alongside the
+The top bar shows which image is running — `v0.5.0 · browser` — alongside the
 server's health, so a pull can be confirmed from the page instead of guessed at.
 It reads a build stamp baked in at image build time: the release tag in CI, and
 `dev` for a local build.
@@ -172,23 +181,29 @@ corner that comes back here, so a device that lands on the pairing screen first
 is not a dead end. It appears only on the pairing screens, where no T3 Code
 controls live, and renders nothing when the console is not routed there.
 
-### Installing and signing agents in from the page
+### Signing agents in, and keeping them current, from the page
 
-No agent CLI is baked into the image. Each row of the **Agents** card installs
-the harness you choose, resolves the latest version, records the exact version
-it installed, and points T3 Code at that executable. Update and Uninstall are
-explicit actions on the same row; nothing installs or updates just because a
-poll ran. From a shell:
+The agents are not baked into the image; the first start installs them onto
+the volume. Each row of the **Agents** card shows the exact version installed
+and points T3 Code at that executable, and **Update** and **Uninstall** are
+buttons on the same row: Update moves to the newest release (or one you type),
+and a download carries on in the background with the row showing progress, so
+a slow connection or a tunnel's request timeout does not matter. If an update
+fails, the previous version stays installed and working. Nothing installs or
+updates just because a poll ran. From a shell:
 
 ```bash
-docker compose exec -u t3 t3code t3-harness list
-docker compose exec -u t3 t3code t3-harness install claude
-docker compose exec -u t3 t3code t3-harness update codex
-docker compose exec -u t3 t3code t3-harness uninstall grok
+docker compose exec t3code t3-harness list
+docker compose exec t3code t3-harness update codex
+docker compose exec t3code t3-harness install claude --version 2.1.285
+docker compose exec t3code t3-harness uninstall grok
 ```
 
 Uninstall removes the executable and the T3 Code wiring but keeps credentials
-and user data, so installing again gets you straight back to signed in.
+and user data, so installing again gets you straight back to signed in. An
+agent you uninstall stays uninstalled; the first-start install never brings it
+back. If you set an agent's binary path yourself in T3 Code's provider
+settings, that path is left alone.
 
 Each installed agent gets the sign-in actions it actually supports, established
 by running the CLIs rather than reading about them:
@@ -430,14 +445,13 @@ passes it the sandbox flags it needs — but it is the less tested path.
 
 ## Harnesses
 
-Install the harnesses you use from the setup page's **Agents** card or the
-`t3-harness` CLI, then sign them in from the same page — each one's own flow, a
-URL and a QR to approve on your phone, a field for the code where one comes
-back. They install into `/home/t3/.local/share/mise` at an exact recorded
-version, so they survive a recreate with the rest of the volume. The `t3-login`
-column is the shell equivalent — it exists because `docker exec` lands as root,
-and a harness signed in as root writes its credentials somewhere the server
-never looks.
+All five install on the first start (unless `T3_PREINSTALL` says otherwise)
+into `/home/t3/.local/share/mise`, at an exact recorded version, so they survive
+a recreate with the rest of the volume. Sign them in from the setup page — each
+one's own flow, a URL and a QR to approve on your phone, a field for the code
+where one comes back. The `t3-login` column is the shell equivalent — it exists
+because `docker exec` lands as root, and a harness signed in as root writes its
+credentials somewhere the server never looks.
 
 | Harness | Provider in T3 Code | Shell equivalent |
 | --- | --- | --- |
@@ -454,23 +468,24 @@ and manages its own runtime.
 [`examples/opencode/`](examples/opencode/) — or by pointing a provider instance's
 environment variables at a compatible endpoint.
 
-## Project toolchains
+## Toolchains
 
-The image carries a Node and a Python for its own machinery, and nothing else.
-Go, Rust, Bun, Deno, uv and the versions your projects actually pin install
-through [mise](https://mise.jdx.dev/), into the persistent home — so the image
-stays small and two projects can want two different Node versions:
+Go, Rust (with clippy and rustfmt), Bun, Deno and uv install on the first start
+alongside the agents, through [mise](https://mise.jdx.dev/), into the persistent
+home, and work in every directory. The **Toolchains** card on the setup page
+updates or removes each one, or installs one you left out of `T3_PREINSTALL`.
+Node and Python come with the image.
+
+Projects can still ask for their own versions: mise reads whatever the project
+already declares — `mise.toml`, `.tool-versions`, or idiomatic files like
+`.nvmrc`, `go.mod` and `rust-toolchain.toml` — so two projects can want two
+different Node versions, and an agent that runs `node` in a project directory
+gets that project's Node:
 
 ```bash
 docker compose exec -u t3 t3code mise install        # in a project with mise.toml
 docker compose exec -u t3 t3code mise use node@22    # records the exact version
 ```
-
-mise reads whatever the project already declares — `mise.toml`,
-`.tool-versions`, or idiomatic files like `.nvmrc`, `go.mod` and
-`rust-toolchain.toml`. Terminals opened inside T3 Code get mise activation
-automatically, so an agent that runs `node` in a project directory gets that
-project's Node.
 
 Two policies are worth knowing, both set in `/etc/mise/config.toml`:
 
@@ -479,25 +494,28 @@ Two policies are worth knowing, both set in `/etc/mise/config.toml`:
 - **No silent fallback.** If mise cannot provide a declared tool it fails
   rather than quietly running a different one from `PATH`.
 
-Toolchains land in `/home/t3/.local/share/mise` and survive a recreate with the
-rest of the volume. They are not small — a full set of seven runtimes is around
-2 GB — but that weight sits on the volume you already keep, not in every pull.
+Toolchains land in `/home/t3/.local/share/mise` (Rust's in `~/.rustup` and
+`~/.cargo`) and survive a recreate with the rest of the volume. They are not
+small — the default set is a bit over 1 GB — but that weight sits on the volume
+you already keep, not in every pull.
 
 ### Upgrading from `slim`/`full`
 
-The old targets baked agents and runtimes; `core`/`browser` install them on
-demand. Point `.env` at the new names, recreate, then install what you use:
+The old images baked the agents and runtimes in; `browser` and `core` replace
+`full` and `slim`, and `:full`, `:slim` and `:latest` now point at them, so a
+plain `docker compose pull` is the upgrade. On the first start of the new image
+the agents and toolchains install onto your volume in the background, and your
+state, credentials, threads and projects are untouched — so once the setup page
+says it is done, the agents come back already signed in.
+
+If you build locally, rename the target in `.env`:
 
 ```bash
-T3_IMAGE=ghcr.io/dizys/t3code-docker:latest   # core
-T3_BUILD_TARGET=core                          # or browser
+T3_IMAGE=t3code:browser       # was t3code:full
+T3_BUILD_TARGET=browser       # or core, for what was slim
 ```
 
-Your state, credentials, threads and projects are untouched — they live on the
-`/home/t3` volume. What no longer exists in the image is the agent CLIs and the
-language runtimes, so install those from the setup page's **Agents** card and
-through mise. The `:slim` and `:full` tags keep their last artifacts and are the
-rollback target if you need one.
+The `v0.4.x` tags keep the old baked images if you need to roll back.
 
 ## How long things last
 
@@ -531,6 +549,7 @@ Environment variables (all optional except where noted):
 | `T3_WORKSPACE` | `/workspace` | Scanned for projects |
 | `T3_AUTO_ADD_PROJECTS` | `1` | Register each git checkout under the workspace |
 | `T3_PRINT_PAIRING_ON_START` | `0` | Mint and log a pairing link on boot |
+| `T3_PREINSTALL` | `all` | What the first start installs onto the volume: `all`, `agents`, `toolchains`, ids like `claude,go`, or `none` |
 | `T3_PAIR_TTL` | `30d` | How long links from `t3-pair` stay redeemable |
 | `T3_SETUP_ENABLED` | `1` | Run the setup UI |
 | `T3_SETUP_KEY` | *(generated)* | Password for the setup UI. Set it to keep it stable. |
@@ -546,9 +565,10 @@ Volumes:
   shell history. Back this up.
 - `/workspace` — your repositories.
 
-Installed harnesses and project toolchains live under `/home/t3/.local/share/mise`,
-so they need the whole home mounted. A state-only mount (`/home/t3/.t3`) keeps
-your credentials and threads but loses the tools on recreate.
+Installed harnesses and toolchains live under `/home/t3/.local/share/mise`, so
+they persist with the whole home mounted. A state-only mount (`/home/t3/.t3`)
+keeps your credentials and threads, and the next start simply installs the
+tools again.
 
 Agent sign-ins normally land in `~/.claude`, `~/.codex`, `~/.cursor`, `~/.grok`
 and OpenCode's XDG directories, which only persist if the whole home is mounted.
@@ -577,19 +597,18 @@ automatically, so plain `docker compose exec` is safe.
 ## Building
 
 ```bash
-scripts/build.sh                                 # t3code:core
-scripts/build.sh --target browser
+scripts/build.sh                                 # t3code:browser
+scripts/build.sh --target core
 scripts/build.sh --platform linux/amd64,linux/arm64 --push --tag ghcr.io/you/t3code
-scripts/smoke-test.sh t3code:core                # boots it and checks the contract
+scripts/smoke-test.sh t3code:browser             # boots it and checks the contract
 ```
 
 `--variant` is how the test scripts know what to assert; it is never guessed
 from whether Chromium is present, so a digest reference needs it spelled out
 (`--variant core t3code@sha256:…`).
 
-The `slim` and `full` targets were replaced by `core`/`browser`; their existing
-artifacts stay in the registry and stop receiving updates. See [Upgrading from
-`slim`/`full`](#upgrading-from-slimfull).
+The `browser` and `core` targets replaced `full` and `slim`. See [Upgrading
+from `slim`/`full`](#upgrading-from-slimfull).
 
 Behind a TLS-intercepting proxy, drop the CA PEM into `ca-certs/` and build with
 `--build-arg APT_HTTPS=true`.
@@ -621,7 +640,10 @@ expires five minutes after boot — use `t3-pair`. Or the link uses `172.x` /
 redeemed: they are one-time, so mint a fresh one per device.
 
 **A provider is missing in Settings → Providers.** It has to be enabled per
-environment, and signed in on the server. `t3-doctor` shows both.
+environment, and signed in on the server. `t3-doctor` shows both. On a first
+start, also check the setup page: the agent may still be installing, or the
+install may have failed (no network at boot) - press **Retry** on its row, or
+restart the container and it tries again.
 
 **Terminals do not open.** T3 Code ships `node-pty` prebuilt beside its binary
 in `/opt/t3`; if terminals fail, check `t3-doctor` and the container log rather
@@ -647,18 +669,18 @@ one:
 
 - **`scripts/smoke-test.sh` is the contract.** It boots the image and asserts
   the things a user would notice if you broke, against a running container. Run
-  it against your build (`./scripts/smoke-test.sh t3code:core`) and add an
+  it against your build (`./scripts/smoke-test.sh t3code:browser`) and add an
   assertion for whatever you fixed. Most of the assertions in there exist
   because something shipped broken once.
 - **CI builds and smoke-tests both targets on both architectures** before
   anything is published, so a change that only works on amd64 will be caught.
-  The slower harness-lifecycle E2E and the size measurement run on amd64.
+  The slower harness-lifecycle E2E runs on amd64 for every build.
 
 Publishing happens on tags only: push `vX.Y.Z` and the workflow builds each
 target for each architecture, smoke tests every one against the exact pushed
 digest, runs the harness-lifecycle E2E and measures on amd64, then stitches
-the tested digests into one manifest without rebuilding. `latest` points at
-`core`.
+the tested digests into one manifest without rebuilding. `latest` and `full`
+point at `browser`, `slim` at `core`.
 
 ## License
 

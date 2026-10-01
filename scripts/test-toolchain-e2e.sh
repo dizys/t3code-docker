@@ -24,9 +24,10 @@
 #     managed Claude, Codex and OpenCode, and Chromium drives a real page.
 #
 # Credentialed completion (a real provider sign-in and an agent turn) needs
-# provider accounts and is recorded separately in the integration report; this
-# script proves the credential surfaces, their survival, and that auth is never
-# inferred from a successful launch.
+# provider accounts and is not covered here; this script proves the credential
+# surfaces, their survival, and that auth is never inferred from a successful
+# launch. The first-start preinstall is turned off so every install below is
+# the explicit one under test; scripts/smoke-test.sh covers the preinstall.
 #
 # Versions default to mise's latest, which is what a fresh install resolves;
 # set T3C_E2E_<ID>_VERSION (CLAUDE, CODEX, OPENCODE, GROK, CURSOR) to pin one
@@ -46,7 +47,7 @@ Usage: scripts/test-toolchain-e2e.sh --variant core|browser [--keep] <image>
   --variant NAME   core | browser (required for a digest reference; inferred
                    from a t3code:<variant> tag otherwise)
   --keep           leave the container and volume behind for inspection
-  image            image tag or digest reference (default: t3code:core)
+  image            image tag or digest reference (default: t3code:browser)
 
 Version overrides (empty means mise's latest, resolved and recorded exactly):
   T3C_E2E_CLAUDE_VERSION, T3C_E2E_CODEX_VERSION, T3C_E2E_OPENCODE_VERSION,
@@ -64,7 +65,7 @@ while [ $# -gt 0 ]; do
     *) IMAGE="$1"; shift ;;
   esac
 done
-[ -n "$IMAGE" ] || IMAGE="t3code:core"
+[ -n "$IMAGE" ] || IMAGE="t3code:browser"
 
 case "$VARIANT" in
   ""|core|browser) ;;
@@ -222,7 +223,7 @@ assert_immutable_infrastructure() { # label
 
 recreate() { # extra docker-run arguments...
   docker rm -f "$NAME" >/dev/null 2>&1 || true
-  docker run -d --name "$NAME" -e "T3_SETUP_KEY=${SETUP_KEY}" \
+  docker run -d --name "$NAME" -e "T3_SETUP_KEY=${SETUP_KEY}" -e T3_PREINSTALL=none \
     "$@" -v "${VOLUME}:/home/t3" -v "${WORKSPACE_VOLUME}:/workspace" "$IMAGE" >/dev/null
   wait_usable
 }
@@ -568,22 +569,9 @@ for id in $IDS; do
 done
 
 section "Result"
-source_sha="${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}"
-run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-fork}/actions/runs/${GITHUB_RUN_ID:-local}"
-resolved_json="$(for id in $IDS; do
-  jq -cn --arg id "$id" --arg version "${VERSION[$id]}" --arg t3 "${T3_VERSION[$id]:-}" \
-    '{key:$id, value:{version:$version, t3Version:$t3}}'
-done | jq -s 'from_entries')"
-printf 'T3C_E2E_RESULT %s\n' "$(jq -cn \
-  --arg variant "$VARIANT" --arg image "$IMAGE" --arg sourceSha "$source_sha" \
-  --arg runUrl "$run_url" --argjson resolved "$resolved_json" \
-  --argjson cursorDrift "$cursor_drift" \
-  --arg nodeSelector "$NODE_SELECTOR" --arg projectNode "${project_node_offline:-}" \
-  --argjson passed "$pass" --argjson failed "$fail" \
-  '{variant:$variant, image:$image, sourceSha:$sourceSha, runUrl:$runUrl,
-    resolved:$resolved, cursorDrift:($cursorDrift == 1),
-    projectNode:{selector:$nodeSelector, version:$projectNode},
-    passed:$passed, failed:$failed}')"
-
+for id in $IDS; do
+  info "$id: installed ${VERSION[$id]}, T3 reports ${T3_VERSION[$id]:-?}"
+done
+info "project node (${NODE_SELECTOR}): ${project_node_offline:-?}; cursor self-update drift: $([ "$cursor_drift" = 1 ] && echo yes || echo no)"
 printf '\n%d passed, %d failed\n\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

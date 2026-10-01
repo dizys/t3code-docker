@@ -2,16 +2,22 @@
 //
 // mise writes a single user-wide config and one installs tree, so two installs
 // racing each other can half-write configuration or report a harness runnable
-// while its files are still being extracted. The lock is a file created with
-// O_EXCL, which is atomic on every filesystem the image supports.
+// while its files are still being extracted. The setup server, the first-boot
+// preinstall and `t3-harness` are separate processes, so the lock is a file.
 //
-// A lock left behind by a killed process is detectable, not permanent: the
-// recorded pid must still exist and the lock must be younger than `staleMs`.
-// The reader (including status) never writes, so a stuck lock cannot be
+// The lock is written complete to a private temp file and then hard-linked
+// into place. link(2) fails with EEXIST when the lock exists, so creation is
+// atomic and a reader can never observe a half-written holder.
+//
+// A holder is the pair (pid, process start time). A pid alone is not enough:
+// after a container restart the setup server is usually reborn with the same
+// pid, and a lock left by the killed one would look alive until the age
+// ceiling. The ceiling stays only as a backstop for a holder that is alive but
+// hung. The reader (including status) never writes, so a stuck lock cannot be
 // "cleaned up" into a silent concurrent install.
 import crypto from "node:crypto";
 import path from "node:path";
-import { processAlive as defaultProcessAlive } from "./io.mjs";
+import { processAlive as defaultProcessAlive, processStartTime as defaultStartTime } from "./io.mjs";
 
 export function lockPath(stateDir) {
   return path.join(stateDir, "harness.lock");
@@ -29,11 +35,16 @@ export async function readLock(ctx) {
   }
 }
 
-/** A lock is stale when its owner is gone or it is older than the ceiling. */
+/** A lock is stale when its owner is gone, was replaced, or it is too old. */
 export function lockIsStale(holder, ctx) {
   if (!holder) return true;
   const alive = ctx.isAlive ?? defaultProcessAlive;
   if (!alive(holder.pid)) return true;
+  if (holder.startTime) {
+    const startTimeOf = ctx.startTimeOf ?? defaultStartTime;
+    const current = startTimeOf(holder.pid);
+    if (current && current !== holder.startTime) return true;
+  }
   if (!Number.isFinite(holder.startedAt)) return true;
   return ctx.now() - holder.startedAt > ctx.lockStaleMs;
 }
@@ -51,37 +62,50 @@ export async function liveHolder(ctx) {
  */
 export async function acquireLock(ctx, { id, operation }) {
   await ctx.fs.mkdir(path.dirname(ctx.lockPath), { recursive: true });
+  const startTimeOf = ctx.startTimeOf ?? defaultStartTime;
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const token = crypto.randomBytes(12).toString("hex");
-    const body = JSON.stringify({
+    const holder = {
       pid: ctx.pid,
-      host: ctx.host,
+      startTime: startTimeOf(ctx.pid),
       token,
       id,
       operation,
       startedAt: ctx.now(),
-    });
+    };
+    const tmp = `${ctx.lockPath}.${token}`;
 
+    let linked = false;
     try {
-      await ctx.fs.writeFile(ctx.lockPath, body, { encoding: "utf8", flag: "wx" });
+      await ctx.fs.writeFile(tmp, JSON.stringify(holder), { encoding: "utf8", flag: "wx" });
+      await ctx.fs.link(tmp, ctx.lockPath);
+      linked = true;
     } catch (error) {
       if (error?.code !== "EEXIST") {
         return { acquired: false, holder: null, error: String(error?.message ?? error) };
       }
-      const holder = await readLock(ctx);
-      if (!lockIsStale(holder, ctx)) {
-        return { acquired: false, holder, error: null };
+    } finally {
+      try { await ctx.fs.unlink(tmp); } catch { /* never written */ }
+    }
+
+    if (!linked) {
+      const current = await readLock(ctx);
+      if (!lockIsStale(current, ctx)) {
+        return { acquired: false, holder: current, error: null };
       }
-      // The owner is gone. Remove its lock and race for ours; another process
-      // may win the next `wx`, in which case the loop re-reads and reports.
+      // The owner is gone. Read the lock again immediately before removing it,
+      // so a lock another process took in the meantime is never the one that
+      // gets deleted; then race for ours on the next pass.
+      const again = await readLock(ctx);
+      if ((again?.token ?? null) !== (current?.token ?? null)) continue;
       try { await ctx.fs.unlink(ctx.lockPath); } catch { /* someone else won */ }
       continue;
     }
 
     return {
       acquired: true,
-      holder: { pid: ctx.pid, host: ctx.host, token, id, operation, startedAt: ctx.now() },
+      holder,
       release: async () => {
         const current = await readLock(ctx);
         if (current?.token !== token) return;

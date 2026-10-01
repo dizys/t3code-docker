@@ -67,7 +67,9 @@ try {
       } else if (report.ok) {
         const applied = report.applied.map((entry) => entry.id).join(",") || "none";
         const cleared = report.cleared.map((entry) => entry.id).join(",") || "none";
-        process.stdout.write(`applied ${applied}; cleared ${cleared}\n`);
+        const kept = report.kept.map((entry) => entry.id).join(",");
+        process.stdout.write(`applied ${applied}; cleared ${cleared}`
+          + `${kept ? `; kept your own binaryPath for ${kept}` : ""}\n`);
       }
       if (!report.ok) {
         process.stderr.write(`provider-integration: ${report.error}\n`);

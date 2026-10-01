@@ -282,20 +282,101 @@ test("sync refuses to overwrite an unreadable settings file", async () => {
   assert.equal(fs.files.get(SETTINGS), "{not json");
 });
 
-test("sync reports a degraded mise without failing", async () => {
-  const fs = memoryFs();
+test("a degraded mise changes nothing, even with managed paths recorded", async () => {
+  const claudePath = "/home/t3/.local/share/mise/installs/claude/2.1.273/claude";
+  const settings = { providers: { claudeAgent: { binaryPath: claudePath, enabled: true } } };
+  const state = { schema: 1, managed: { claude: { driver: "claudeAgent", executable: claudePath, at: 1 } } };
+  const fs = memoryFs({
+    [SETTINGS]: JSON.stringify(settings),
+    [STATE]: JSON.stringify(state),
+  });
+  // What a failed `mise ls` really looks like: every harness reads as absent.
   const harness = {
     async status() {
-      return { harnesses: [], degraded: [{ what: "mise", error: "boom" }] };
+      return {
+        harnesses: PROVIDERS.map((provider) => fact(provider.id)),
+        degraded: [{ what: "mise", error: "timed out after 120000ms" }],
+      };
     },
   };
   const integration = createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness });
 
   const report = await integration.sync();
+  assert.equal(report.ok, false);
+  assert.equal(report.code, "degraded");
+  assert.match(report.error, /timed out/);
+  assert.deepEqual(JSON.parse(fs.files.get(SETTINGS)), settings, "settings untouched");
+  assert.deepEqual(JSON.parse(fs.files.get(STATE)), state, "managed record untouched");
+});
+
+test("sync keeps a binaryPath someone set, and replaces only T3's default name", async () => {
+  const wrapper = "/home/t3/bin/my-codex-wrapper";
+  const fs = memoryFs({
+    [SETTINGS]: JSON.stringify({
+      providers: {
+        codex: { binaryPath: wrapper },
+        claudeAgent: { binaryPath: "claude" },
+      },
+    }),
+  });
+  const codexPath = "/home/t3/.local/share/mise/installs/codex/0.159.1/bin/codex";
+  const claudePath = "/home/t3/.local/share/mise/installs/claude/2.1.285/claude";
+  const harness = fakeHarness([
+    fact("codex", { runnable: true, executable: codexPath }),
+    fact("claude", { runnable: true, executable: claudePath }),
+  ]);
+  const integration = createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness });
+
+  const report = await integration.sync();
   assert.equal(report.ok, true);
-  assert.equal(report.degraded.length, 1);
-  assert.equal(report.missing.length, PROVIDERS.length);
-  assert.equal(fs.files.has(SETTINGS), false);
+  assert.deepEqual(report.kept.map((entry) => entry.id), ["codex"]);
+  const written = JSON.parse(fs.files.get(SETTINGS));
+  assert.equal(written.providers.codex.binaryPath, wrapper, "the wrapper survives");
+  assert.equal(written.providers.claudeAgent.binaryPath, claudePath, "the default name is replaced");
+  const recorded = JSON.parse(fs.files.get(STATE));
+  assert.equal(recorded.managed.codex, undefined, "a kept value is not claimed");
+  assert.equal(recorded.managed.claude.executable, claudePath);
+
+  // Running again, and then after an uninstall, never touches the wrapper.
+  await integration.sync();
+  const nothingRunnable = fakeHarness(PROVIDERS.map((provider) => fact(provider.id)));
+  const uninstalled = createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness: nothingRunnable });
+  await uninstalled.sync();
+  assert.equal(JSON.parse(fs.files.get(SETTINGS)).providers.codex.binaryPath, wrapper);
+});
+
+test("sync leaves Codex alone when T3's own managed setup owns it", async () => {
+  const fs = memoryFs({
+    [SETTINGS]: JSON.stringify({
+      providerInstances: { codex: { driver: "codex", config: { setupMode: "managed", binaryPath: "/home/t3/.t3/provider/codex/bin/codex" } } },
+    }),
+  });
+  const harness = fakeHarness([
+    fact("codex", { runnable: true, executable: "/home/t3/.local/share/mise/installs/codex/0.159.1/bin/codex" }),
+  ]);
+  const integration = createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness });
+  const before = fs.files.get(SETTINGS);
+  const report = await integration.sync();
+  assert.equal(report.ok, true);
+  assert.ok(report.unchanged.includes("codex"));
+  assert.equal(fs.files.get(SETTINGS), before);
+});
+
+test("sync skips a harness whose operation is still running", async () => {
+  const claudePath = "/home/t3/.local/share/mise/installs/claude/2.1.273/claude";
+  const fs = memoryFs({
+    [SETTINGS]: JSON.stringify({ providers: { claudeAgent: { binaryPath: claudePath } } }),
+    [STATE]: JSON.stringify({ schema: 1, managed: { claude: { driver: "claudeAgent", executable: claudePath, at: 1 } } }),
+  });
+  const harness = {
+    async status() {
+      return { harnesses: [{ ...fact("claude"), installed: true, inProgress: true }], degraded: [] };
+    },
+  };
+  const integration = createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness });
+  const report = await integration.sync();
+  assert.ok(report.unchanged.includes("claude"));
+  assert.equal(JSON.parse(fs.files.get(SETTINGS)).providers.claudeAgent.binaryPath, claudePath);
 });
 
 test("an update replaces the recorded path", async () => {

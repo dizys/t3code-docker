@@ -59,6 +59,13 @@ class MemoryFs {
     this.files.delete(from);
   }
 
+  async link(from, to) {
+    const entry = this.files.get(from);
+    if (!entry) throw Object.assign(new Error(`ENOENT: ${from}`), { code: "ENOENT" });
+    if (this.files.has(to)) throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+    this.files.set(to, { ...entry });
+  }
+
   async unlink(filePath) {
     if (!this.files.delete(filePath)) {
       throw Object.assign(new Error(`ENOENT: ${filePath}`), { code: "ENOENT" });
@@ -192,9 +199,10 @@ function managerFor(world, overrides = {}) {
     arch: world.arch,
     now: overrides.now ?? (() => 1_700_000_000_000),
     pid: overrides.pid ?? 4242,
-    // Deterministic liveness: only the test's own pid is considered running.
+    // Deterministic liveness: only the test's own pid is considered running,
+    // and it has been running since tick 100.
     isAlive: overrides.isAlive ?? ((pid) => pid === (overrides.pid ?? 4242)),
-    host: "test-host",
+    startTimeOf: overrides.startTimeOf ?? ((pid) => (pid === (overrides.pid ?? 4242) ? "100" : null)),
     lockStaleMs: overrides.lockStaleMs ?? 60_000,
     authCacheTtlMs: 1_000,
   });
@@ -306,6 +314,61 @@ test("install rejects malformed versions", async () => {
   assert.equal(result.code, "invalid-version");
 });
 
+test("floating selectors are refused, and an explicit latest resolves exact", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const manager = managerFor(world);
+  for (const version of ["lts", "2", "stable"]) {
+    const result = await manager.install("claude", { version });
+    assert.equal(result.code, "invalid-version", `${version} refused`);
+  }
+  assert.equal(world.calls.some((call) => call.includes(" use ")), false);
+
+  const result = await manager.install("claude", { version: "latest" });
+  assert.equal(result.ok, true);
+  assert.equal(result.harness.recordedVersion, world.latest.claude);
+});
+
+test("a failed update keeps the previous release installed and runnable", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const manager = managerFor(world);
+
+  await manager.install("claude", { version: "2.1.270" });
+  world.failUse = "network unreachable";
+  const failed = await manager.update("claude");
+  assert.equal(failed.ok, false);
+  assert.equal(failed.harness.failed, true);
+  assert.match(failed.harness.failure, /network unreachable/);
+  assert.equal(failed.harness.installedVersion, "2.1.270");
+  assert.equal(failed.harness.runnable, true, "the old release still runs");
+  assert.ok(failed.harness.executable);
+
+  // A typo is refused before mise is touched, and also leaves it running.
+  world.failUse = null;
+  const typo = await manager.update("claude", { version: "v2.1.271" });
+  assert.equal(typo.code, "invalid-version");
+  assert.equal((await manager.resolve("claude")).runnable, true);
+});
+
+test("onStarted fires once the lock is held, and not when busy", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const manager = managerFor(world);
+  let started = 0;
+  const ok = await manager.install("grok", { onStarted: () => { started += 1; } });
+  assert.equal(ok.ok, true);
+  assert.equal(started, 1);
+
+  fs.seedFile(
+    path.join(STATE_DIR, "harness.lock"),
+    JSON.stringify({ pid: 4242, startTime: "100", token: "other", id: "codex", operation: "install", startedAt: 1_700_000_000_000 }),
+  );
+  const busy = await manager.install("claude", { onStarted: () => { started += 1; } });
+  assert.equal(busy.code, "busy");
+  assert.equal(started, 1);
+});
+
 test("update moves the selection and keeps the recorded version set", async () => {
   const fs = new MemoryFs();
   const world = createWorld(fs);
@@ -361,6 +424,43 @@ test("a live lock makes concurrent operations busy and never runnable", async ()
   assert.equal(result.code, "busy");
   assert.equal(result.harness.runnable, false);
   assert.equal(result.harness.inProgress, true);
+});
+
+test("a lock left by the same pid in an earlier container run is stale", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  // The setup server came back with pid 4242 after a restart, but it is a
+  // different process: its start time moved on.
+  const manager = managerFor(world, { startTimeOf: (pid) => (pid === 4242 ? "900" : null) });
+  fs.seedFile(
+    path.join(STATE_DIR, "harness.lock"),
+    JSON.stringify({ pid: 4242, startTime: "100", token: "before-restart", id: "claude", operation: "install", startedAt: 1_700_000_000_000 }),
+  );
+
+  assert.equal((await manager.resolve("claude")).inProgress, false);
+  const result = await manager.install("claude");
+  assert.equal(result.ok, true);
+  assert.equal(result.harness.runnable, true);
+  assert.equal(await fs.exists(path.join(STATE_DIR, "harness.lock")), false, "released");
+});
+
+test("the lock is created whole, never observable half-written", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const manager = managerFor(world);
+  const lockFile = path.join(STATE_DIR, "harness.lock");
+  const seen = [];
+  const link = fs.link.bind(fs);
+  fs.link = async (from, to) => {
+    await link(from, to);
+    if (to === lockFile) seen.push(JSON.parse(await fs.readFile(lockFile)));
+  };
+  await manager.install("codex");
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].pid, 4242);
+  assert.equal(seen[0].startTime, "100");
+  assert.equal(seen[0].id, "codex");
+  assert.equal([...fs.files.keys()].some((key) => key.startsWith(`${lockFile}.`)), false, "no temp left");
 });
 
 test("an interrupted install is reported failed and heals on the next attempt", async () => {

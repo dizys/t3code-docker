@@ -16,6 +16,7 @@
 // would shadow the legacy `enabled` flag and silently change enablement. They
 // edit the legacy map, and any explicit default instance that already exists,
 // preserving every unrelated key.
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 
 const isObject = (value) =>
@@ -39,20 +40,40 @@ export function statePathFor(baseDir) {
 }
 
 /**
- * Point one provider's legacy mirror, and its explicit default instance when
- * one exists, at `executable`. Unrelated keys on both blobs are preserved.
+ * Whether the managed path may be written over `current`. Only values nobody
+ * chose are ours to replace: absent, empty, T3's own default name, or the exact
+ * path this module wrote last time. A wrapper script or a different install
+ * someone pointed T3 at in its settings stays theirs.
  */
-export function applyManaged(settings, driver, executable) {
+export function replaceable(current, { owned = null, defaultBinary = null } = {}) {
+  if (current === undefined || current === null) return true;
+  const value = String(current).trim();
+  if (value === "") return true;
+  if (defaultBinary && value === defaultBinary) return true;
+  return owned !== null && value === owned;
+}
+
+/**
+ * Point one provider's legacy mirror, and its explicit default instance when
+ * one exists, at `executable`. Unrelated keys on both blobs are preserved, and
+ * a `binaryPath` someone set themselves is left alone (`kept`).
+ */
+export function applyManaged(settings, driver, executable, ownership = {}) {
   let next = settings;
   let changed = false;
+  let kept = false;
 
   const providers = isObject(settings.providers) ? { ...settings.providers } : {};
   const legacy = isObject(providers[driver]) ? { ...providers[driver] } : {};
   if (legacy.binaryPath !== executable) {
-    legacy.binaryPath = executable;
-    providers[driver] = legacy;
-    next = { ...next, providers };
-    changed = true;
+    if (replaceable(legacy.binaryPath, ownership)) {
+      legacy.binaryPath = executable;
+      providers[driver] = legacy;
+      next = { ...next, providers };
+      changed = true;
+    } else {
+      kept = true;
+    }
   }
 
   const instances = settings.providerInstances;
@@ -60,16 +81,30 @@ export function applyManaged(settings, driver, executable) {
     const instance = instances[driver];
     const config = isObject(instance.config) ? { ...instance.config } : {};
     if (config.binaryPath !== executable) {
-      config.binaryPath = executable;
-      next = {
-        ...next,
-        providerInstances: { ...instances, [driver]: { ...instance, config } },
-      };
-      changed = true;
+      if (replaceable(config.binaryPath, ownership)) {
+        config.binaryPath = executable;
+        next = {
+          ...next,
+          providerInstances: { ...instances, [driver]: { ...instance, config } },
+        };
+        changed = true;
+      } else {
+        kept = true;
+      }
     }
   }
 
-  return { settings: next, changed };
+  return { settings: next, changed, kept };
+}
+
+/**
+ * T3 0.0.44 can install Codex itself ("managed setup"). When someone chose
+ * that, the executable is T3's to pick, and this module stays out of it.
+ */
+export function t3ManagesItself(settings, driver) {
+  if (isObject(settings.providers?.[driver]) && settings.providers[driver].setupMode === "managed") return true;
+  const instance = settings.providerInstances?.[driver];
+  return isObject(instance) && isObject(instance.config) && instance.config.setupMode === "managed";
 }
 
 /**
@@ -130,7 +165,7 @@ export async function readJson(fs, file) {
 /** Replace a file atomically, so a crash never leaves it half-written. */
 export async function writeJsonAtomic(fs, file, value, mode = 0o600) {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp.${process.pid}`;
+  const tmp = `${file}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
   await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode });
   await fs.rename(tmp, file);
 }

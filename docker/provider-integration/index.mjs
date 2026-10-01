@@ -24,6 +24,7 @@ import {
   readJson,
   settingsPathFor,
   statePathFor,
+  t3ManagesItself,
   writeJsonAtomic,
 } from "./settings.mjs";
 
@@ -64,11 +65,30 @@ export function createProviderIntegration(options = {}) {
    * example after Uninstall) so T3 falls back to its own default. Returns a
    * report; never throws for a degraded mise, only for an unreadable settings
    * file, which must not be overwritten.
+   *
+   * A degraded mise changes nothing. When `mise ls` fails, every harness reads
+   * as not installed, and retracting on that answer would unpick T3's settings
+   * because of a timeout. A harness mid-operation is skipped for the same
+   * reason: its facts are about to change, and the operation syncs when done.
    */
   async function sync() {
     if (!harness) throw new Error("provider integration needs a harness manager");
 
     const { harnesses, degraded } = await harness.status({ authenticate: false });
+    if (degraded?.length) {
+      return {
+        ok: false,
+        code: "degraded",
+        error: degraded.map((entry) => `${entry.what}: ${entry.error}`).join("; ").slice(0, 300),
+        settingsPath,
+        applied: [],
+        cleared: [],
+        kept: [],
+        unchanged: [],
+        missing: [],
+        degraded,
+      };
+    }
     const facts = new Map(harnesses.map((entry) => [entry.id, entry]));
 
     const loaded = await readJson(fs, settingsPath);
@@ -80,6 +100,7 @@ export function createProviderIntegration(options = {}) {
         settingsPath,
         applied: [],
         cleared: [],
+        kept: [],
         unchanged: [],
         missing: [],
         degraded,
@@ -93,6 +114,7 @@ export function createProviderIntegration(options = {}) {
 
     const applied = [];
     const cleared = [];
+    const kept = [];
     const unchanged = [];
     const missing = [];
 
@@ -103,17 +125,31 @@ export function createProviderIntegration(options = {}) {
         continue;
       }
 
-      const desired = fact.runnable && fact.executable ? fact.executable : null;
       const recorded = previous.managed[provider.id]?.executable ?? null;
+      if (fact.inProgress || t3ManagesItself(settings, provider.driver)) {
+        unchanged.push(provider.id);
+        continue;
+      }
 
+      const desired = fact.runnable && fact.executable ? fact.executable : null;
       if (desired) {
-        const result = applyManaged(settings, provider.driver, desired);
+        const result = applyManaged(settings, provider.driver, desired, {
+          owned: recorded,
+          defaultBinary: provider.defaultBinary,
+        });
         if (result.changed) {
           settings = result.settings;
           settingsChanged = true;
         }
-        managed[provider.id] = { driver: provider.driver, executable: desired, at: now() };
-        applied.push({ id: provider.id, driver: provider.driver, executable: desired });
+        if (result.kept) {
+          // Someone pointed T3 elsewhere. Their value wins, and this module
+          // stops claiming the field so a later Uninstall cannot retract it.
+          delete managed[provider.id];
+          kept.push({ id: provider.id, driver: provider.driver, executable: desired });
+        } else {
+          managed[provider.id] = { driver: provider.driver, executable: desired, at: now() };
+          applied.push({ id: provider.id, driver: provider.driver, executable: desired });
+        }
       } else if (recorded) {
         const result = clearManaged(settings, provider.driver, recorded);
         if (result.changed) {
@@ -145,6 +181,7 @@ export function createProviderIntegration(options = {}) {
       settingsChanged,
       applied,
       cleared,
+      kept,
       unchanged,
       missing,
       degraded,

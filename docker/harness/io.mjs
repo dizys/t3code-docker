@@ -5,7 +5,7 @@
 // inject in-memory equivalents, so exact-version resolution, locking, and
 // failure recovery are exercised without touching mise or the host filesystem.
 import { spawn } from "node:child_process";
-import { promises as fsp } from "node:fs";
+import { promises as fsp, readFileSync } from "node:fs";
 
 /**
  * Run one program to completion and resolve with its result. It never rejects:
@@ -71,8 +71,8 @@ export function createFs() {
     writeFile: (path, data, options) => fsp.writeFile(path, data, options),
     mkdir: (path, options) => fsp.mkdir(path, options),
     rename: (from, to) => fsp.rename(from, to),
+    link: (from, to) => fsp.link(from, to),
     unlink: (path) => fsp.unlink(path),
-    rm: (path, options) => fsp.rm(path, options),
     stat: (path) => fsp.stat(path),
     async exists(path) {
       try {
@@ -103,5 +103,24 @@ export function processAlive(pid) {
     return true;
   } catch (error) {
     return error?.code === "EPERM";
+  }
+}
+
+/**
+ * When a process started, in clock ticks since boot (field 22 of
+ * /proc/<pid>/stat), or null when it cannot be read. A pid alone does not
+ * identify a process across a container restart: the setup server is usually
+ * reborn with the same pid, so a lock holder is the pair (pid, start time).
+ */
+export function processStartTime(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    // The command name is parenthesised and may contain spaces; the fields
+    // after it are fixed. starttime is the 20th field after the closing paren.
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return fields[19] ?? null;
+  } catch {
+    return null;
   }
 }

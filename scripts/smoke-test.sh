@@ -138,6 +138,13 @@ check "the T3 client shell is available for the setup pill" \
   "docker exec $NAME test -f $T3_PREFIX/client/index.html"
 check "T3 is not installed in the mutable npm prefix" \
   "docker exec $NAME test ! -e /opt/npm-global/lib/node_modules/t3"
+# Root resolves gosu, id and bash by name before stepping down. A directory on
+# its PATH that t3 can write would let an agent plant any of them and get root
+# on the next restart or `docker exec`.
+check "root's PATH holds no directory the t3 user can write" \
+  "docker exec $NAME sh -c 'IFS=:; for d in \$PATH; do [ -d \"\$d\" ] || continue; gosu t3 test -w \"\$d\" && { echo \"\$d\"; exit 1; }; done; exit 0'"
+check "the t3 user still gets its own npm prefix" \
+  "docker exec -u t3 $NAME bash -lc 'case :\$PATH: in *:/opt/npm-global/bin:*) true ;; *) false ;; esac'"
 
 # T3 states the versions it needs inside its own platform binary, and enforces
 # them at runtime: too old a `gh` and it reports "GitHub CLI is too old to
@@ -513,7 +520,7 @@ console_layout_is_clean() {
   docker exec "$NAME" test -x /usr/bin/chromium 2>/dev/null || return 1
   docker cp scripts/ui-audit.js "$NAME:/tmp/ui-audit.js" >/dev/null 2>&1 || return 1
   docker exec \
-    -e NODE_PATH=/opt/npm-global/lib/node_modules/@playwright/mcp/node_modules \
+    -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
     -e CHROME_PATH=/usr/bin/chromium \
     "$NAME" node /tmp/ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" \
     >"$UI_AUDIT_LOG" 2>&1

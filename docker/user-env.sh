@@ -7,10 +7,19 @@
 # the user's home is user-controlled, and root must neither resolve its binaries
 # nor create state there.
 #
-# The mutable npm prefix is handled separately, in /home/t3/.npmrc, because npm
-# reads its own user config without needing a shell.
+# The mutable npm prefix is also written to /home/t3/.npmrc, because npm reads
+# its own user config without needing a shell: a bare `docker exec -u t3 npm i
+# -g` never sources this file.
 
 if [ "$(id -u)" != "0" ]; then
+  # User globals from `npm i -g`. Writable by t3, so on t3's PATH only.
+  : "${NPM_CONFIG_PREFIX:=/opt/npm-global}"
+  export NPM_CONFIG_PREFIX
+  case ":$PATH:" in
+    *":${NPM_CONFIG_PREFIX}/bin:"*) ;;
+    *) PATH="${NPM_CONFIG_PREFIX}/bin:${PATH}"; export PATH ;;
+  esac
+
   # Go installs user binaries under GOPATH/bin. It is deliberately off the
   # image-wide PATH (see the Dockerfile): root running `go install` should use
   # its own /root/go, and a binary the t3 user dropped here must not be

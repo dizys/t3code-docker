@@ -36,8 +36,13 @@ export T3_INFRA_NODE T3_INFRA_BINARY T3_INFRA_LAUNCHER T3_PROVIDER_CLI
 # survives the restart or recreate that must finish the migration.
 OWNERSHIP_MARKER="${T3CODE_HOME}/.ownership-migration"
 
+# This runs as root inside a directory the t3 user owns, so it must never open
+# a path t3 could have pointed somewhere else. mktemp creates a fresh file with
+# O_EXCL (a planted symlink makes it fail, not follow), and rename replaces the
+# marker's directory entry itself rather than writing through it.
 write_ownership_marker() {
-  local tmp="${OWNERSHIP_MARKER}.tmp"
+  local tmp
+  tmp="$(mktemp "${OWNERSHIP_MARKER}.XXXXXX")"
   {
     printf 'version=1\n'
     printf 'target_uid=%s\n' "$PUID"
@@ -45,7 +50,7 @@ write_ownership_marker() {
     printf 'started=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$tmp"
   chmod 0644 "$tmp"
-  mv -f "$tmp" "$OWNERSHIP_MARKER"
+  mv -fT "$tmp" "$OWNERSHIP_MARKER"
   log "recorded ownership migration intent (${OWNERSHIP_MARKER})"
 }
 
@@ -168,6 +173,13 @@ fi
 # fragment returns early for root; this half is already the unprivileged user.
 # shellcheck source=/dev/null
 [ -r /etc/profile.d/t3-user-env.sh ] && . /etc/profile.d/t3-user-env.sh
+
+# A home volume from before the image wrote ~/.npmrc keeps its old one (or
+# none), and `docker exec -u t3 npm i -g` then fails on the root-owned system
+# prefix. Add the prefix once, without touching anything else in the file.
+if ! grep -qs '^prefix=' "${T3_HOME}/.npmrc"; then
+  printf 'prefix=/opt/npm-global\n' >> "${T3_HOME}/.npmrc" 2>/dev/null || true
+fi
 
 if [ "${1:-}" != "t3-serve" ]; then
   exec "$@"

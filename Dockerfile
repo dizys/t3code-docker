@@ -128,12 +128,12 @@ RUN set -eux; \
     groupadd -g "$T3_GID" t3; \
     useradd -m -u "$T3_UID" -g "$T3_GID" -s /bin/bash t3
 
-# Mutable npm location. User globals (`npm i -g`) and the browser MCP servers
-# live here. This is deliberately not T3 Code's own prefix: the server is image
-# infrastructure (T3_INFRA_PREFIX below), and a writable prefix it shared with
-# user packages could be used to rewrite the server itself. Agent harnesses do
-# not live here: they install through mise into the persistent home.
-ENV PATH=/opt/npm-global/bin:$PATH
+# Mutable npm location for user globals (`npm i -g`). Nothing the image itself
+# runs lives here: T3 Code is in /opt/t3, the browser MCP servers in /opt/t3-mcp,
+# and agent harnesses install through mise into the persistent home. It is on
+# the t3 user's PATH only (docker/user-env.sh), never the image-wide one: the
+# directory is writable by t3, and root resolving `gosu` or `bash` out of it
+# would hand root to whatever an agent dropped there.
 RUN mkdir -p /opt/npm-global && chown -R t3:t3 /opt/npm-global
 
 # `npm i -g` as the unprivileged user has nowhere to write by default - npm's
@@ -335,12 +335,19 @@ ENV CHROME_PATH=/usr/bin/chromium \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+# Image infrastructure like T3 itself: root-owned so an agent cannot rewrite
+# the server it launches, with the entry points linked into /usr/local/bin so
+# the bare names t3-browser-mcp registers resolve for every user.
 RUN set -eux; \
-    npm install -g --no-audit --no-fund --prefix /opt/npm-global \
+    npm install -g --no-audit --no-fund --prefix /opt/t3-mcp \
         "chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}" \
         "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}"; \
     npm cache clean --force; \
-    chown -R t3:t3 /opt/npm-global
+    for bin in /opt/t3-mcp/bin/*; do ln -sfn "$bin" /usr/local/bin/; done; \
+    chown -R root:root /opt/t3-mcp; \
+    chmod -R go-w /opt/t3-mcp; \
+    playwright-mcp --help >/dev/null; \
+    chrome-devtools-mcp --version
 
 # Stamped last so a version change reuses every layer above it. IMAGE_VERSION is
 # the release tag in CI and "dev" for a local build; the setup page shows both so

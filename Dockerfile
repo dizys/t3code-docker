@@ -145,9 +145,9 @@ RUN mkdir -p /opt/npm-global && chown -R t3:t3 /opt/npm-global
 RUN printf 'prefix=/opt/npm-global\n' > /home/t3/.npmrc \
     && chown t3:t3 /home/t3/.npmrc
 
-# User-only tool environment (Go's GOPATH/bin and mise's shims, set by
-# /etc/profile.d/t3-user-env.sh). Kept out of the image environment so root
-# never has a user-controlled directory on PATH.
+# User-only tool environment (the npm prefix, Go's GOPATH/bin and mise's
+# shims, set by /etc/profile.d/t3-user-env.sh). Kept out of the image
+# environment so root never has a user-controlled directory on PATH.
 COPY docker/user-env.sh /etc/profile.d/t3-user-env.sh
 RUN chmod 0644 /etc/profile.d/t3-user-env.sh
 
@@ -271,8 +271,9 @@ COPY examples/ /opt/examples/
 # patch.mjs fails the build if upstream moves the layout it relies on.
 COPY docker/t3-client/ /usr/local/share/t3-client/
 RUN "$T3_INFRA_NODE" /usr/local/share/t3-client/patch.mjs
-# `t3` is the same immutable launcher under its user-facing name. /usr/local/bin
-# precedes the npm prefixes on PATH, so it always wins over a project shim.
+# `t3` is the same immutable launcher under its user-facing name, for root's
+# shell and anyone typing it. Nothing in the image resolves it by name: the
+# entrypoint, the setup service and the helpers all use T3_INFRA_LAUNCHER.
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/t3-* \
     && ln -sfn t3-admin /usr/local/bin/t3
 

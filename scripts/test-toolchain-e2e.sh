@@ -11,9 +11,11 @@
 #   - the noninteractive CLI installs all five harnesses and T3's own provider
 #     probes (SDK init, app-server, serve, ACP) run the exact managed
 #     executables, from T3's cached snapshots;
-#   - mise-owned harness paths resolve manual-only in T3, so discovery and
-#     polling cannot update them; a self-updated Cursor is recorded as drift,
-#     not a failure;
+#   - mise-owned Claude, Codex and OpenCode paths resolve manual-only in T3,
+#     so discovery and polling cannot update them. Grok and Cursor carry their
+#     own updaters, which T3 offers wherever they live; T3's must target the
+#     managed executable, and a self-updated Cursor is recorded as drift, not a
+#     failure;
 #   - exact versions, credentials and the project Node selection survive a
 #     container recreate, including one with no network;
 #   - T3 and setup keep running on the image Node while the project selects
@@ -406,6 +408,13 @@ for id in $IDS; do
   T3_VERSION[$id]="$(field '.version // empty' "$body")"
   if [ "$id" = "cursor" ]; then
     info "cursor T3 version: ${T3_VERSION[$id]} (recorded ${VERSION[$id]}); updater: $(field '.versionAdvisory.updateCommand // "null"' "$body")"
+  elif [ "$id" = "grok" ]; then
+    # Since 0.0.44 T3 offers Grok's own `update` wherever it is installed, as
+    # it does Cursor's. Pressing it updates the managed executable in place
+    # rather than a second copy elsewhere, which is the part that matters.
+    has "$id T3 snapshot reports the managed version" "${VERSION[$id]}" "${T3_VERSION[$id]}"
+    is "$id T3's own updater targets the managed executable" "${EXE[$id]} update" \
+      "$(field '.versionAdvisory.updateCommand // ""' "$body")"
   else
     has "$id T3 snapshot reports the managed version" "${VERSION[$id]}" "${T3_VERSION[$id]}"
     is "$id T3 resolves the mise path manual-only" "null" \

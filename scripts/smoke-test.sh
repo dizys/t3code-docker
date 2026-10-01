@@ -408,7 +408,8 @@ import json, sys
 h = {a["id"]: a for a in json.load(sys.stdin)["harnesses"]}
 sys.exit(0 if all(h[i]["runnable"] and h[i]["version"] for i in ("claude", "codex", "opencode", "grok", "cursor")) else 1)'
 }
-check "every agent is runnable at a recorded version" agents_runnable
+# Retried: the card's facts refresh on the poll after the last install lands.
+check "every agent is runnable at a recorded version" "retry 10 agents_runnable"
 
 # T3 learns about each agent through its settings file, as soon as the agent
 # lands. Read it the way T3 does.
@@ -423,8 +424,12 @@ check "T3 is pointed at every managed agent" t3_points_at_managed_agents
 
 # Cursor's package carries its own node and rg. Installed through mise's
 # registry as-is, they shadowed the image's for every agent and terminal.
-check "Cursor's bundled node does not shadow the image's" \
-  "docker exec -u t3 $NAME bash -lc 'cd /tmp && [ \"\$(command -v node)\" = /usr/local/bin/node ] && [ \"\$(command -v rg || echo none)\" != *mise* ]'"
+image_node_wins() {
+  docker exec -u t3 "$NAME" bash -lc 'cd /tmp &&
+    [ "$(command -v node)" = /usr/local/bin/node ] &&
+    case "$(command -v rg || echo none)" in *mise*) false ;; *) true ;; esac'
+}
+check "Cursor's bundled node does not shadow the image's" image_node_wins
 check "toolchains run from any directory, as the t3 user" \
   "docker exec -u t3 $NAME bash -lc 'cd /tmp && go version && cargo --version && cargo clippy --version && rustfmt --version && bun --version && deno --version && uv --version'"
 
@@ -482,6 +487,9 @@ env_token_reads_as_signed_in() {
     [ "$(status_json "${NAME}-env" /tmp/envjar | jq -r '.setup.state // ""' 2>/dev/null)" = finished ] && break
     sleep 4
   done
+  retry 10 claude_reads_signed_in_from_env
+}
+claude_reads_signed_in_from_env() {
   status_json "${NAME}-env" /tmp/envjar | python3 -c '
 import json, sys
 s = json.load(sys.stdin)

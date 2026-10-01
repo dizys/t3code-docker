@@ -388,6 +388,18 @@ const configuredProviders = async () => {
   }
 };
 
+// The first-start preinstall runs in its own process, so the harness card's
+// cache does not hear about an agent it just installed. Any change in its
+// progress drops the cache, and the next poll shows the agent as it lands.
+let lastSetupProgress = null;
+const noticeSetupProgress = (setup) => {
+  const progress = setup ? JSON.stringify([setup.state, setup.items?.map((item) => item.state)]) : null;
+  if (progress === lastSetupProgress) return;
+  const first = lastSetupProgress === null;
+  lastSetupProgress = progress;
+  if (!first) void harnessCache.invalidate().catch(() => {});
+};
+
 const status = async () => {
   // Concurrently, and each failure contained: an empty list and "could not
   // read" are different facts, and reporting the first when the second is true
@@ -427,6 +439,7 @@ const status = async () => {
       return harnessModule.readPreinstall({ stateDir: manager.paths.stateDir });
     }, null),
   ]);
+  noticeSetupProgress(setup);
   const harnesses = harnessSnap?.harnesses ?? [];
   for (const entry of harnessSnap?.degraded ?? []) {
     degraded.push({ what: `harness ${entry.what}`, error: String(entry.error ?? "").slice(0, 200) });
@@ -1169,6 +1182,10 @@ const startLifecycle = async (target, kind, input) => {
         sync = { ok: false, error: String(error?.message ?? error).slice(0, 200) };
       }
     }
+    // Refresh the card's facts before reporting the result, so the poll that
+    // sees "ok" also sees the agent installed.
+    forgetSignInState(id);
+    try { await harnessCache.invalidate(); } catch { /* the next poll refreshes */ }
     if (operations.get(key)?.state === "running") {
       operations.set(key, {
         ...operations.get(key),
@@ -1177,8 +1194,6 @@ const startLifecycle = async (target, kind, input) => {
         finishedAt: Date.now(),
       });
     }
-    forgetSignInState(id);
-    try { await harnessCache.invalidate(); } catch { /* the next poll refreshes */ }
     return { result, sync };
   }, (error) => {
     if (operations.get(key)?.state === "running") {

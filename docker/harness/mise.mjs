@@ -70,9 +70,14 @@ export async function latest(ctx, tool) {
   return line;
 }
 
+/** `tool[options]@version`, mise's spelling for a tool with tool options. */
+export function toolSpec(tool, version, options = null) {
+  return `${tool}${options ? `[${options}]` : ""}@${version}`;
+}
+
 /** Install-and-select in one step; `mise use` records the exact requested pin. */
-export async function use(ctx, tool, version) {
-  const result = await ctx.run(miseArgs(ctx, ["use", "-g", `${tool}@${version}`]), {
+export async function use(ctx, tool, version, options = null) {
+  const result = await ctx.run(miseArgs(ctx, ["use", "-g", toolSpec(tool, version, options)]), {
     env: writeEnv(ctx.env),
     cwd: ctx.home,
     timeoutMs: ctx.timeouts.install,

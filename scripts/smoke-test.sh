@@ -179,7 +179,7 @@ fi
 # A freshly built image that immediately asks you to upgrade an agent is a bug
 # in this repo, not in the agent. The pins are what go stale, so assert they
 # were current when the image was built.
-check "the pinned agent versions were current at build time" \
+check "the image's pinned versions were current at build time" \
   "./scripts/bump-versions.sh --check"
 
 printf '\nPairing\n'
@@ -266,7 +266,7 @@ check "root exec does not leave root-owned state" \
 # server dies on `mkdir userdata` with nothing but an EACCES stack trace.
 STATE_MOUNT="$(mktemp -d)"
 sudo chown 0:0 "$STATE_MOUNT" 2>/dev/null || chown 0:0 "$STATE_MOUNT" 2>/dev/null || true
-docker run -d --name "${NAME}-mount" -v "$STATE_MOUNT:/home/t3/.t3" "$IMAGE" >/dev/null
+docker run -d --name "${NAME}-mount" -e T3_PREINSTALL=none -v "$STATE_MOUNT:/home/t3/.t3" "$IMAGE" >/dev/null
 mounted_ok=0
 for _ in $(seq 1 40); do
   if docker exec "${NAME}-mount" curl -fsS --max-time 3 \
@@ -295,7 +295,7 @@ check "a written credential lands on the state volume" \
 # The Dockerfile declares VOLUME, so an unmounted deployment still looks mounted
 # from inside; only the mount source distinguishes a throwaway anonymous volume.
 docker rm -f "${NAME}-anon" >/dev/null 2>&1 || true
-docker run -d --name "${NAME}-anon" -e T3_SETUP_KEY=x "$IMAGE" >/dev/null
+docker run -d --name "${NAME}-anon" -e T3_SETUP_KEY=x -e T3_PREINSTALL=none "$IMAGE" >/dev/null
 # The entrypoint always prints exactly one persistence verdict, so wait for any
 # of them rather than only the one we want. A wrong verdict then fails at once
 # with the line it printed, and a container that died fails with its exit code,
@@ -367,11 +367,94 @@ sys.exit(0 if img.get('version') and img.get('variant') == '$want' else 1)"
 }
 check "the image build is stamped and reported ($VARIANT)" version_is_stamped
 
-# The image ships no harness executable, so these cover what does not need one:
-# file-backed OpenCode writes, honest unknown states, and the provider catalog.
-# Sign-in with a managed harness is covered by the final-target E2E.
+# The image ships no agent CLI and no language runtime. The first start puts
+# them back: everything T3_PREINSTALL names (all of it, by default) installs in
+# the background onto the volume. This container runs the default, so what
+# follows is what someone pulling `latest` gets.
+printf '\nFirst-start setup (T3_PREINSTALL default)\n'
+status_json() { docker exec "${1:-$NAME}" sh -c \
+  "curl -sS --max-time 25 -b ${2:-/tmp/jar} http://127.0.0.1:3774/status"; }
+
+setup_state=""
+for _ in $(seq 1 150); do
+  setup_state="$(status_json 2>/dev/null | jq -r '.setup.state // "none"' 2>/dev/null || true)"
+  [ "$setup_state" = finished ] && break
+  sleep 4
+done
+if [ "$setup_state" = finished ]; then
+  ok "first-start setup finished"
+else
+  no "first-start setup finished (state: ${setup_state:-unreadable})"
+  docker logs "$NAME" 2>&1 | grep preinstall | tail -20
+fi
+
+setup_installed_everything() {
+  status_json | python3 -c '
+import json, sys
+s = json.load(sys.stdin)
+items = s["setup"]["items"]
+want = {"agent:" + i for i in ("claude", "codex", "opencode", "grok", "cursor")} \
+     | {"toolchain:" + i for i in ("go", "rust", "bun", "deno", "uv")}
+got = {i["kind"] + ":" + i["id"] for i in items if i["state"] == "done"}
+missing = want - got
+if missing: print("not installed:", sorted(missing))
+sys.exit(0 if not missing else 1)'
+}
+check "every agent and toolchain is installed on first start" setup_installed_everything
+
+agents_runnable() {
+  status_json | python3 -c '
+import json, sys
+h = {a["id"]: a for a in json.load(sys.stdin)["harnesses"]}
+sys.exit(0 if all(h[i]["runnable"] and h[i]["version"] for i in ("claude", "codex", "opencode", "grok", "cursor")) else 1)'
+}
+check "every agent is runnable at a recorded version" agents_runnable
+
+# T3 learns about each agent through its settings file, as soon as the agent
+# lands. Read it the way T3 does.
+t3_points_at_managed_agents() {
+  docker exec -u t3 "$NAME" cat /home/t3/.t3/userdata/settings.json | python3 -c '
+import json, sys
+p = json.load(sys.stdin).get("providers", {})
+drivers = ("claudeAgent", "codex", "opencode", "grok", "cursor")
+sys.exit(0 if all(p.get(d, {}).get("binaryPath", "").startswith("/home/t3/.local/share/mise/installs/") for d in drivers) else 1)'
+}
+check "T3 is pointed at every managed agent" t3_points_at_managed_agents
+
+# Cursor's package carries its own node and rg. Installed through mise's
+# registry as-is, they shadowed the image's for every agent and terminal.
+check "Cursor's bundled node does not shadow the image's" \
+  "docker exec -u t3 $NAME bash -lc 'cd /tmp && [ \"\$(command -v node)\" = /usr/local/bin/node ] && [ \"\$(command -v rg || echo none)\" != *mise* ]'"
+check "toolchains run from any directory, as the t3 user" \
+  "docker exec -u t3 $NAME bash -lc 'cd /tmp && go version && cargo --version && cargo clippy --version && rustfmt --version && bun --version && deno --version && uv --version'"
+
+# T3 refuses an OpenCode below the floor its own binary declares, and the
+# manager refuses to select one. Both read the same number, or a T3 bump that
+# raises it slips through until someone's session fails.
+opencode_floor_matches_t3() {
+  local declared catalogue installed
+  declared="$(docker exec "$NAME" sh -c \
+    "grep -a -o 'MINIMUM_OPENCODE_VERSION *= *\"[0-9][0-9.]*\"' $T3_BUNDLE | head -1" 2>/dev/null \
+    | grep -o '[0-9][0-9.]*' | head -1)"
+  catalogue="$(docker exec "$NAME" sh -c \
+    "grep -o 'MINIMUM_OPENCODE_VERSION = \"[0-9.]*\"' /opt/t3-harness/catalogue.mjs" \
+    | grep -o '[0-9][0-9.]*')"
+  installed="$(status_json | jq -r '.harnesses[] | select(.id == "opencode") | .version')"
+  [ -n "$declared" ] && [ "$declared" = "$catalogue" ] && version_at_least "$installed" "$declared"
+}
+check "the OpenCode floor matches T3's, and the install meets it" opencode_floor_matches_t3
+
+# Agent authentication, driven the way the page drives it, against the agents
+# the first start installed.
 printf '\nAgent authentication (variant %s)\n' "$VARIANT"
 auth_post() { docker exec "$NAME" sh -c "curl -sS -b /tmp/jar -H 'content-type: application/json' -d '$1' http://127.0.0.1:3774$2"; }
+as_t3() { docker exec -u t3 "$NAME" bash -lc "$1"; }
+
+codex_key_stored() {
+  auth_post '{"agent":"codex","key":"sk-smoke-test-key"}' /auth/apikey | grep -q '"ok":true' &&
+  as_t3 'codex login status' 2>&1 | grep -q "API key"
+}
+check "an API key signs Codex in" codex_key_stored
 
 opencode_key_stored() {
   auth_post '{"agent":"opencode","provider":"deepseek","key":"sk-smoke"}' /auth/apikey | grep -q '"ok":true' &&
@@ -382,18 +465,147 @@ check "an API key is written for OpenCode" opencode_key_stored
 check "an unknown agent is refused" \
   "auth_post '{\"agent\":\"bogus\",\"key\":\"x\"}' /auth/apikey | grep -q error"
 
-# With no executable to probe, the honest verdict is unknown (null) - never a
-# guess from a credentials file. Grok is the reason: a file of exactly the shape
-# its own help text documents still leaves the CLI saying "You are not
-# authenticated". The True flip with a managed install is covered by the E2E.
-uninstalled_reports_unknown() {
-  docker exec "$NAME" sh -c \
-    "curl -sS --max-time 20 -b /tmp/jar http://127.0.0.1:3774/status" | python3 -c '
+# The panel used to decide this from a credentials file on disk, which misses
+# every credential that never lands there. T3 Code honours ANTHROPIC_API_KEY and
+# CLAUDE_CODE_OAUTH_TOKEN, so a container holding one showed as authenticated in
+# T3 Code and "Not signed in" here. Ask each CLI instead. This container only
+# preinstalls Claude, which also proves the variable picks a subset, and that a
+# harness that is not installed reads as unknown rather than signed out.
+env_token_reads_as_signed_in() {
+  docker rm -f "${NAME}-env" >/dev/null 2>&1 || true
+  docker run -d --name "${NAME}-env" -e T3_SETUP_KEY=envkey -e T3_PREINSTALL=claude \
+    -e CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-smoke "$IMAGE" >/dev/null
+  retry 25 "docker exec ${NAME}-env sh -c \"curl -sS --max-time 5 -c /tmp/envjar \
+    -d 'key=envkey' -o /dev/null http://127.0.0.1:3774/login && \
+    curl -fsS --max-time 20 -b /tmp/envjar http://127.0.0.1:3774/status | grep -q harnesses\"" || return 1
+  for _ in $(seq 1 60); do
+    [ "$(status_json "${NAME}-env" /tmp/envjar | jq -r '.setup.state // ""' 2>/dev/null)" = finished ] && break
+    sleep 4
+  done
+  status_json "${NAME}-env" /tmp/envjar | python3 -c '
+import json, sys
+s = json.load(sys.stdin)
+h = {a["id"]: a for a in s["harnesses"]}
+only_claude = [i["id"] for i in s["setup"]["items"]] == ["claude"]
+others_unknown = all(h[i]["signedIn"] is None and not h[i]["installed"] for i in ("codex", "grok", "cursor"))
+sys.exit(0 if h["claude"]["signedIn"] is True and only_claude and others_unknown else 1)'
+}
+check "an env-var Claude credential reads as signed in" env_token_reads_as_signed_in
+docker rm -f "${NAME}-env" >/dev/null 2>&1 || true
+
+# Reading it correctly once is not enough: a cached verdict would keep saying
+# "not signed in" straight after a key is stored, which is exactly when someone
+# is looking at the panel.
+key_flips_signed_in() {
+  status_json | python3 -c '
 import json, sys
 h = {a["id"]: a for a in json.load(sys.stdin)["harnesses"]}
-sys.exit(0 if all(h[i]["signedIn"] is None for i in ("opencode", "codex", "grok", "cursor")) else 1)'
+sys.exit(0 if h["codex"]["signedIn"] is True and h["claude"]["signedIn"] is False else 1)'
 }
-check "an uninstalled harness reports unknown, not signed out" uninstalled_reports_unknown
+check "a stored key flips the panel without waiting for a cache" key_flips_signed_in
+
+# Grok has no status command, and its credentials file proves nothing - a file
+# of exactly the shape its own help text documents still leaves the CLI saying
+# "You are not authenticated". So the reading comes from `grok models`, the way
+# T3 Code does it, and a fresh container must read as a definite no.
+grok_reads_definitely() {
+  status_json | python3 -c '
+import json, sys
+h = {a["id"]: a for a in json.load(sys.stdin)["harnesses"]}
+sys.exit(0 if h["grok"]["signedIn"] is False and h["cursor"]["signedIn"] is False else 1)'
+}
+check "Grok and Cursor report a definite sign-in state" grok_reads_definitely
+
+session_state() {
+  docker exec "$NAME" sh -c "curl -sS -b /tmp/jar 'http://127.0.0.1:3774/auth/session?id=$1'"
+}
+signin_id() {
+  auth_post "{\"agent\":\"$1\"}" /auth/signin | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
+}
+
+# Claude renders its URL as an OSC-8 hyperlink wrapped over several lines;
+# scraping the visible text yields a truncated URL missing the PKCE challenge
+# and state, which would send you to a sign-in page that cannot complete.
+claude_url_complete() {
+  local id
+  id="$(signin_id claude)"
+  [ -n "$id" ] || return 1
+  sleep 14
+  session_state "$id" | grep -q 'code_challenge' &&
+  session_state "$id" | grep -q '"state":"awaiting-code"'
+}
+check "Claude sign-in captures a complete OAuth URL" claude_url_complete
+
+# Capturing the URL is half the flow; the code has to get back in. That prompt
+# runs the terminal in raw mode, where Enter arrives as CR - an LF is taken as
+# part of the pasted text and the prompt just sits there, which is what left the
+# panel saying "Submitting" for ever. A rejected code is the only exchange that
+# can be driven without an account, and it proves the same thing: the CLI read
+# the line, tried it, and answered. Stuck on "submitted" means it never did.
+claude_code_reaches_the_prompt() {
+  local id state
+  id="$(signin_id claude)"
+  [ -n "$id" ] || return 1
+  sleep 14
+  auth_post "{\"id\":\"$id\",\"code\":\"bogusCode123#bogusState456\"}" /auth/code >/dev/null
+  state=submitted
+  for _ in $(seq 1 20); do
+    state="$(session_state "$id" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+    [ "$state" != "submitted" ] && break
+    sleep 2
+  done
+  # And the verdict has to stick. The child is killed once its output says the
+  # code was rejected, and `script` reports that kill as a clean exit, which
+  # flipped the session to "done" a moment later. Re-read after it settles.
+  sleep 6
+  state="$(session_state "$id" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+  [ "$state" = "failed" ]
+}
+check "a pasted code reaches the Claude prompt" claude_code_reaches_the_prompt
+
+# Completion is "this agent is signed in now", not "the CLI exited": these are
+# terminal UIs, and one that prints its result and stays up is not a failure.
+# Codex is the one whose state can be flipped from outside mid-flow, so use it
+# - signed out first, since only a transition counts.
+signin_finishes_on_transition() {
+  local id state
+  docker exec -u t3 "$NAME" sh -c 'rm -f ~/.codex/auth.json'
+  id="$(signin_id codex)"
+  [ -n "$id" ] || return 1
+  sleep 12
+  auth_post '{"agent":"codex","key":"sk-smoke-transition"}' /auth/apikey | grep -q '"ok":true' || return 1
+  for _ in $(seq 1 10); do
+    state="$(session_state "$id" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+    [ "$state" = "done" ] && return 0
+    sleep 3
+  done
+  return 1
+}
+check "a sign-in finishes when the agent becomes signed in" signin_finishes_on_transition
+
+# Codex's default login starts a callback server on localhost:1455, which is
+# unreachable from a browser on any other machine. Any sign-in URL naming
+# localhost is broken by construction for a remote server.
+codex_device_not_localhost() {
+  local id session
+  docker exec -u t3 "$NAME" sh -c 'rm -f ~/.codex/auth.json'
+  id="$(signin_id codex)"
+  [ -n "$id" ] || return 1
+  sleep 13
+  session="$(session_state "$id")"
+  printf '%s' "$session" | grep -q 'auth.openai.com/codex/device' &&
+  ! printf '%s' "$session" | grep -q localhost
+}
+check "Codex signs in by device code, not a localhost callback" codex_device_not_localhost
+
+grok_device_code() {
+  local id
+  id="$(signin_id grok)"
+  [ -n "$id" ] || return 1
+  sleep 12
+  session_state "$id" | grep -q 'accounts.x.ai'
+}
+check "Grok sign-in captures a device URL" grok_device_code
 
 # OpenCode takes a key per provider and there are over two hundred of them, so
 # the page offers the models.dev catalog rather than asking you to recall an id.
@@ -410,6 +622,47 @@ rx = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
 sys.exit(0 if ok and all(rx.match(i) for i in ids) else 1)'
 }
 check "the provider picker offers a catalog the server accepts" provider_catalog
+
+# The page's lifecycle buttons, driven the way the page drives them. An install
+# answers as soon as it holds the lock (202) and finishes in the background, so
+# a slow download cannot outlive the request behind a tunnel; the page learns
+# the result from /status.
+printf '\nAgent lifecycle from the page\n'
+lifecycle_post() {
+  docker exec "$NAME" sh -c "curl -sS -o /tmp/lifecycle.json -w '%{http_code}' -b /tmp/jar \
+    -H 'content-type: application/json' -d '{\"id\":\"$2\"}' http://127.0.0.1:3774/harnesses/$1"
+}
+operation_result() {
+  local state=""
+  for _ in $(seq 1 90); do
+    state="$(status_json | jq -r ".operations[\"harness:$1\"].state // \"\"")"
+    [ "$state" = running ] || [ -z "$state" ] || break
+    sleep 2
+  done
+  [ "$state" = ok ]
+}
+grok_binary_path() {
+  docker exec -u t3 "$NAME" cat /home/t3/.t3/userdata/settings.json | jq -r '.providers.grok.binaryPath // ""'
+}
+
+uninstall_retracts_t3_wiring() {
+  local code
+  code="$(lifecycle_post uninstall grok)"
+  { [ "$code" = 200 ] || { [ "$code" = 202 ] && operation_result grok; }; } || return 1
+  [ -z "$(grok_binary_path)" ] &&
+  status_json | jq -e '.harnesses[] | select(.id == "grok") | .installed == false' >/dev/null
+}
+check "uninstall from the page removes the agent and T3's path to it" uninstall_retracts_t3_wiring
+
+install_answers_then_finishes() {
+  local code
+  code="$(lifecycle_post install grok)"
+  [ "$code" = 202 ] || return 1
+  operation_result grok &&
+  status_json | jq -e '.harnesses[] | select(.id == "grok") | .runnable' >/dev/null &&
+  case "$(grok_binary_path)" in /home/t3/.local/share/mise/installs/grok/*) true ;; *) false ;; esac
+}
+check "install from the page answers at once and finishes in the background" install_answers_then_finishes
 
 # The client script used to be embedded in a template literal in server.mjs,
 # which quietly ate escapes on the way out: `/\s+/` reached the browser as
@@ -594,7 +847,7 @@ rm -f "$SETUP_JAR"
 
 printf '\nStartup pairing link\n'
 docker rm -f "${NAME}-boot" >/dev/null 2>&1 || true
-docker run -d --name "${NAME}-boot" \
+docker run -d --name "${NAME}-boot" -e T3_PREINSTALL=none \
   -e "T3_PUBLIC_URL=${PUBLIC_URL}" \
   -e T3_PRINT_PAIRING_ON_START=1 \
   "$IMAGE" >/dev/null

@@ -125,6 +125,7 @@ const PROVIDER_CANDIDATES = [
 ].filter(Boolean);
 
 let harnessManager = null;
+let harnessModule = null;
 async function loadHarness() {
   if (harnessManager) return harnessManager;
   let lastError = null;
@@ -132,6 +133,7 @@ async function loadHarness() {
     try {
       const module = await import(candidate);
       if (typeof module?.createHarnessManager !== "function") continue;
+      harnessModule = module;
       harnessManager = module.createHarnessManager();
       return harnessManager;
     } catch (error) {
@@ -308,7 +310,8 @@ const lifecycleHttpStatus = (code) => {
   switch (code) {
     case "ok": return 200;
     case "busy": return 409;
-    case "unknown-harness": return 404;
+    case "unknown-harness":
+    case "unknown-toolchain": return 404;
     case "invalid-version":
     case "version-below-minimum":
     case "not-installed":
@@ -408,7 +411,7 @@ const status = async () => {
     degraded.push({ what, error: String(raced.error ?? "unavailable").slice(0, 200) });
     return fallback;
   };
-  const [server, harnessSnap, pairings, sessions] = await Promise.all([
+  const [server, harnessSnap, pairings, sessions, toolchainSnap, setup] = await Promise.all([
     attempt("server health", health, { ok: false, detail: "health check failed" }),
     attempt("agent probes", () => harnessLifecycleStatus(true), {
       harnesses: [], degraded: [],
@@ -416,6 +419,13 @@ const status = async () => {
     }),
     attemptTimed("pairing links", () => listJson(["auth", "pairing", "list", "--json"]), T3_LIST_BUDGET_MS, []),
     attemptTimed("paired devices", () => listJson(["auth", "session", "list", "--json"]), T3_LIST_BUDGET_MS, []),
+    // One local `mise ls`: cheap enough to read on every poll.
+    attemptTimed("toolchains", async () => (await loadHarness()).toolchains.status(), HARNESS_BUDGET_MS,
+      { toolchains: [], degraded: [] }),
+    attempt("first-start setup", async () => {
+      const manager = await loadHarness();
+      return harnessModule.readPreinstall({ stateDir: manager.paths.stateDir });
+    }, null),
   ]);
   const harnesses = harnessSnap?.harnesses ?? [];
   for (const entry of harnessSnap?.degraded ?? []) {
@@ -451,6 +461,14 @@ const status = async () => {
       source: harnessSnap?.cache?.source ?? "unavailable",
       refreshing: harnessSnap?.cache?.refreshing ?? false,
     },
+    toolchains: toolchainSnap?.toolchains ?? [],
+    // The background install of everything T3_PREINSTALL names, on a first
+    // start: what it planned, where it is, and what failed (retried on the
+    // next start, or from the row's own Install button).
+    setup,
+    // How the operations this page started ended, so a click that returned
+    // 202 can still end in a toast or an error on the row.
+    operations: Object.fromEntries(operations),
     pairings,
     sessions,
     degraded,
@@ -787,7 +805,7 @@ const page = (authed, mount) => `<!doctype html>
 ${authed ? `<div class="tc-strip"><div class="tc-wrap tc-wrap--wide tc-strip-in" id="strip"></div></div>` : ""}
 </div>
 <main class="tc-wrap tc-wrap--wide tc-main">
-${authed ? `<div id="degraded"></div>` : ""}
+${authed ? `<div id="degraded"></div><div id="setup-progress" aria-live="polite"></div>` : ""}
 ${
   authed
     ? `<h1 class="tc-sr">T3 Code setup console</h1>
@@ -826,6 +844,18 @@ ${
       <div class="tc-list" id="agents"><div class="tc-row"><span class="tc-skel"
         style="width:44%"></span></div><div class="tc-row"><span class="tc-skel"
         style="width:33%"></span></div></div>
+    </section>
+
+    <section class="tc-card">
+      <div class="tc-cardhead">
+        <h2 class="tc-eyebrow">Toolchains</h2>
+        <div class="tc-cardhead-spacer"></div>
+        <p class="tc-cardhead-note" id="toolchain-count"></p>
+      </div>
+      <div class="tc-list" id="toolchains"><div class="tc-row"><span class="tc-skel"
+        style="width:36%"></span></div></div>
+      <div class="tc-cardfoot">Available in every directory. A project that pins its own
+        version in mise.toml or .tool-versions gets that one instead.</div>
     </section>
 
   </div>
@@ -1092,37 +1122,87 @@ const portsStatus = async () => ({
 // none` the authenticated read races its budget and falls back to cached or
 // cheap local facts (see the offline-safe status block above).
 
-const runLifecycle = async (kind, input) => {
+// Install, update and uninstall take from seconds to minutes: Codex is a
+// 400 MB download, and a phone on a tunnel will not hold a request open that
+// long (Cloudflare cuts it at 100 s and the page reported a failure while the
+// install carried on). So a POST answers as soon as the operation holds the
+// lock, and the work finishes in the background. `operations` is what the page
+// polls to learn how its own clicks ended; work started elsewhere (preinstall,
+// `t3-harness`) shows up through the manager's inProgress facts instead.
+const operations = new Map(); // "harness:claude" -> { kind, state, error, ... }
+const TOOLCHAIN_IDS = new Set(["go", "rust", "bun", "deno", "uv"]);
+
+const startLifecycle = async (target, kind, input) => {
+  const ids = target === "harness" ? HARNESS_IDS : TOOLCHAIN_IDS;
   const rawId = input?.id ?? input?.agent ?? "";
   const id = String(rawId ?? "").trim();
-  if (!HARNESS_IDS.has(id)) {
-    return {
-      http: 404,
-      body: { ok: false, code: "unknown-harness", error: `unknown harness: ${String(rawId ?? "")}` },
-    };
+  if (!ids.has(id)) {
+    const code = target === "harness" ? "unknown-harness" : "unknown-toolchain";
+    return { http: 404, body: { ok: false, code, error: `unknown ${target}: ${String(rawId ?? "")}` } };
   }
-  const rawVersion = input?.version;
+  const rawVersion = target === "harness" ? input?.version : undefined;
   const version = rawVersion === undefined || rawVersion === null || String(rawVersion).trim() === ""
     ? undefined
     : String(rawVersion).trim();
-  const harness = await loadHarness();
-  let result;
-  if (kind === "install") result = await harness.install(id, version ? { version } : {});
-  else if (kind === "update") result = await harness.update(id, version ? { version } : {});
-  else result = await harness.uninstall(id);
-  let sync = null;
-  if (result?.ok) {
-    try {
-      sync = await syncManagedProviders();
-    } catch (error) {
-      sync = { ok: false, error: String(error?.message ?? error).slice(0, 200) };
+
+  const manager = await loadHarness();
+  const ops = target === "harness" ? manager : manager.toolchains;
+  const key = `${target}:${id}`;
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const options = {
+    ...(version ? { version } : {}),
+    onStarted: () => {
+      operations.set(key, { kind, state: "running", error: null, startedAt: Date.now(), finishedAt: null });
+      markStarted(null);
+      // Let the next poll see the lock instead of the facts from before it.
+      void harnessCache.invalidate().catch(() => {});
+    },
+  };
+
+  const done = ops[kind](id, options).then(async (result) => {
+    let sync = null;
+    if (result?.ok && target === "harness") {
+      try {
+        sync = await syncManagedProviders();
+      } catch (error) {
+        sync = { ok: false, error: String(error?.message ?? error).slice(0, 200) };
+      }
     }
+    if (operations.get(key)?.state === "running") {
+      operations.set(key, {
+        ...operations.get(key),
+        state: result?.ok ? "ok" : "failed",
+        error: result?.ok ? null : String(result?.error ?? "failed").slice(0, 300),
+        finishedAt: Date.now(),
+      });
+    }
+    forgetSignInState(id);
+    try { await harnessCache.invalidate(); } catch { /* the next poll refreshes */ }
+    return { result, sync };
+  }, (error) => {
+    if (operations.get(key)?.state === "running") {
+      operations.set(key, {
+        ...operations.get(key), state: "failed", error: String(error?.message ?? error).slice(0, 300), finishedAt: Date.now(),
+      });
+    }
+    return { result: { ok: false, code: "failed", error: String(error?.message ?? error) }, sync: null };
+  });
+
+  // Whichever comes first: the lock (answer now, finish in the background), or
+  // the whole operation (refused before it started - busy, a bad version - or
+  // simply quick, like an uninstall).
+  const first = await Promise.race([started, done]);
+  if (first === null) {
+    return { http: 202, body: { ok: true, code: "started", id, kind, target } };
   }
+  const { result, sync } = first;
   const body = {
     ok: Boolean(result?.ok),
     code: result?.code ?? "failed",
     ...(result?.error ? { error: result.error } : {}),
-    harness: result?.harness ? toPublicHarness(result.harness) : null,
+    ...(result?.harness ? { harness: toPublicHarness(result.harness) } : {}),
+    ...(result?.toolchain ? { toolchain: result.toolchain } : {}),
     ...(sync ? { sync } : {}),
   };
   return { http: lifecycleHttpStatus(result?.code ?? "failed"), body };
@@ -1131,6 +1211,7 @@ const runLifecycle = async (kind, input) => {
 const ROUTES = ["/login", "/status", "/pair", "/revoke", "/ports",
   "/ports/expose", "/ports/unexpose",
   "/harnesses/install", "/harnesses/update", "/harnesses/uninstall", "/harnesses",
+  "/toolchains/install", "/toolchains/update", "/toolchains/uninstall",
   "/auth/apikey", "/auth/signin", "/auth/session", "/auth/code", "/auth/cancel",
   "/providers"];
 
@@ -1229,11 +1310,12 @@ const server = createServer(async (req, res) => {
         return sendJson(res, 500, { error: String(error?.message ?? error) });
       }
     }
-    if (req.method === "POST" && (route === "/harnesses/install" || route === "/harnesses/update" || route === "/harnesses/uninstall")) {
+    const lifecycle = /^\/(harnesses|toolchains)\/(install|update|uninstall)$/.exec(route);
+    if (req.method === "POST" && lifecycle) {
       try {
-        const kind = route.endsWith("/install") ? "install" : route.endsWith("/update") ? "update" : "uninstall";
+        const target = lifecycle[1] === "harnesses" ? "harness" : "toolchain";
         const input = JSON.parse((await readBody(req)) || "{}");
-        const { http, body } = await runLifecycle(kind, input);
+        const { http, body } = await startLifecycle(target, lifecycle[2], input);
         return sendJson(res, http, body);
       } catch (error) {
         return sendJson(res, 400, { error: String(error?.message ?? error) });

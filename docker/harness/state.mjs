@@ -1,5 +1,6 @@
-// The manager's own record: what exact version each harness was installed at,
-// where its executable resolved, and how the last operation ended.
+// The manager's own record: what exact version each harness (and toolchain)
+// was installed at, where its executable resolved, and how the last operation
+// ended.
 //
 // mise is the source of truth for what is installed right now; this file adds
 // the facts mise cannot express - that an operation was interrupted, and which
@@ -14,15 +15,21 @@ export function statePath(stateDir) {
 }
 
 export function emptyState() {
-  return { schema: SCHEMA, harnesses: {} };
+  return { schema: SCHEMA, harnesses: {}, toolchains: {} };
 }
+
+const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
 /** Read the state file. A missing or corrupt file yields a fresh state. */
 export async function readState(ctx) {
   try {
     const parsed = JSON.parse(await ctx.fs.readFile(ctx.statePath, "utf8"));
-    if (!parsed || typeof parsed !== "object" || !parsed.harnesses) return emptyState();
-    return { schema: SCHEMA, harnesses: parsed.harnesses };
+    if (!isObject(parsed)) return emptyState();
+    return {
+      schema: SCHEMA,
+      harnesses: isObject(parsed.harnesses) ? parsed.harnesses : {},
+      toolchains: isObject(parsed.toolchains) ? parsed.toolchains : {},
+    };
   } catch {
     return emptyState();
   }
@@ -36,15 +43,15 @@ export async function writeState(ctx, state) {
   await ctx.fs.rename(tmp, ctx.statePath);
 }
 
-/** Merge one harness entry into the state and persist it. */
-export async function updateHarness(ctx, id, patch) {
+/** Merge one entry of a section ("harnesses" or "toolchains") and persist it. */
+export async function updateEntry(ctx, section, id, patch) {
   const state = await readState(ctx);
-  const previous = state.harnesses[id] ?? {};
+  const previous = state[section][id] ?? {};
   const next = { ...previous, ...patch };
   for (const key of Object.keys(next)) {
     if (next[key] === undefined) delete next[key];
   }
-  state.harnesses[id] = next;
+  state[section][id] = next;
   await writeState(ctx, state);
   return next;
 }

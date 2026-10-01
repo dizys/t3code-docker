@@ -25,6 +25,10 @@ fi
 : "${MISE_STATE_DIR:=$HOME/.local/state/mise}"
 : "${MISE_CACHE_DIR:=$HOME/.cache/mise}"
 export MISE_CONFIG_DIR MISE_DATA_DIR MISE_STATE_DIR MISE_CACHE_DIR
+# The same PATH the server and its terminals have: mise shims and the user's
+# npm prefix. Without it every toolchain reads as missing from `docker exec`.
+# shellcheck source=/dev/null
+[ -r /etc/profile.d/t3-user-env.sh ] && . /etc/profile.d/t3-user-env.sh
 
 ok()   { printf '  \033[32m%-22s\033[0m %s\n' "$1" "${2:-}"; }
 bad()  { printf '  \033[31m%-22s\033[0m %s\n' "$1" "${2:-}"; }
@@ -123,11 +127,35 @@ else
 fi
 
 head_ "Harnesses"
-version_of claude claude --version
-version_of codex codex --version
-version_of opencode opencode --version
-version_of grok grok --version
-version_of cursor-agent cursor-agent --version
+# The manager's own answer: exact version and whether T3 can run it. Cursor in
+# particular has no shim on PATH (its package would shadow node), so asking
+# PATH would say it is missing when it is installed.
+declare -A runnable=()
+harness_rows="$(t3-harness list 2>/dev/null || true)"
+if [ -z "$harness_rows" ]; then
+  bad "manager" "t3-harness list returned nothing"
+fi
+while IFS=$'\t' read -r id version state; do
+  [ -n "$id" ] || continue
+  case "$state" in
+    runnable*) ok "$id" "$version"; runnable[$id]=1 ;;
+    *"…")      warn "$id" "$state" ;;
+    "not installed") warn "$id" "not installed (setup page, or: t3-harness install $id)" ;;
+    *)         bad "$id" "$version $state" ;;
+  esac
+done <<< "$harness_rows"
+
+preinstall_file="$MISE_STATE_DIR/t3-preinstall.json"
+if [ -r "$preinstall_file" ]; then
+  setup_state="$(jq -r '.run.state // "idle"' "$preinstall_file" 2>/dev/null)"
+  setup_failed="$(jq -r '[.items | to_entries[] | select(.value.state == "failed") | .key] | join(", ")' \
+    "$preinstall_file" 2>/dev/null)"
+  if [ -n "$setup_failed" ]; then
+    warn "first-start setup" "$setup_state; failed: $setup_failed (retried on the next start)"
+  else
+    ok "first-start setup" "$setup_state (T3_PREINSTALL=${T3_PREINSTALL:-all})"
+  fi
+fi
 
 head_ "Harness sign-in"
 # Only some harnesses keep a credential file we can point at; for the rest
@@ -141,10 +169,10 @@ cred codex    "$HOME/.codex/auth.json"
 cred opencode "$HOME/.local/share/opencode/auth.json"
 for h in cursor grok; do
   case "$h" in
-    cursor) dir="$HOME/.cursor"; bin=cursor-agent ;;
-    grok)   dir="$HOME/.grok";   bin=grok ;;
+    cursor) dir="$HOME/.cursor" ;;
+    grok)   dir="$HOME/.grok" ;;
   esac
-  if ! command -v "$bin" >/dev/null 2>&1; then
+  if [ -z "${runnable[$h]:-}" ]; then
     warn "$h" "not installed"
   elif [ -d "$dir" ]; then
     printf '  %-22s %s\n' "$h" "config dir present (sign-in state not readable)"

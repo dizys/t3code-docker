@@ -45,7 +45,7 @@ check("server exposes install/update/uninstall mutations",
   has(SERVER, "/harnesses/install") && has(SERVER, "/harnesses/update") && has(SERVER, "/harnesses/uninstall"),
   "lifecycle POST routes are missing");
 check("mutations are backed only by the shared manager",
-  has(SERVER, "loadHarness()") && has(SERVER, "harness.install") && has(SERVER, "harness.update") && has(SERVER, "harness.uninstall"),
+  has(SERVER, "loadHarness()") && has(SERVER, "manager.toolchains") && has(SERVER, "ops[kind](id, options)"),
   "lifecycle must call the shared manager, not a second installer");
 check("status is read-only and mutations sync providers",
   has(SERVER, "syncManagedProviders") && has(SERVER, "harnessLifecycleStatus"),
@@ -74,11 +74,15 @@ check("card offers explicit versions and lifecycle actions",
   has(APP, "h-install") && has(APP, "h-update") && has(APP, "h-uninstall") && has(APP, "hv-version"),
   "Install/Update/Uninstall plus a version field are required");
 check("polling preserves version drafts and in-flight work",
-  has(APP, "versionDrafts") && has(APP, "harnessBusy"),
-  "the 15s poll must not erase version input or busy rows");
+  has(APP, "versionDrafts") && has(APP, "lifecycleBusy") && has(APP, "pendingOps"),
+  "the poll must not erase version input or busy rows");
 check("lifecycle failures stay visible",
-  has(APP, "harnessNotice"),
-  "POST errors must render inline, not only as a toast");
+  has(APP, "notices.set(key"),
+  "POST errors and background failures must render inline, not only as a toast");
+check("lifecycle answers before the download finishes",
+  has(SERVER, "Promise.race([started, done])") && has(SERVER, "operations: Object.fromEntries(operations)")
+    && has(APP, "res.status === 202"),
+  "an install must not hold the request open for the length of a download");
 
 // -- 3. styles for the lifecycle controls -------------------------------------
 check("lifecycle controls wrap without squeezing the row",

@@ -19,8 +19,9 @@ export const CURSOR_EXECUTABLE = "cursor-agent";
 
 /**
  * `executable` is the path relative to the mise install directory. `versionArgs`
- * is the bounded probe the
- * manager runs to turn "a file exists" into "this exact version runs".
+ * is the bounded probe the manager runs to turn "a file exists" into "this
+ * exact version runs". `miseOptions` are mise tool options passed with every
+ * `mise use`, so an update keeps them.
  */
 export const CATALOGUE = Object.freeze([
   {
@@ -89,6 +90,13 @@ export const CATALOGUE = Object.freeze([
     name: "Cursor",
     miseTool: CURSOR_EXECUTABLE,
     executable: `dist-package/${CURSOR_EXECUTABLE}`,
+    // Cursor's package is a whole runtime: dist-package holds its own `node`,
+    // `rg` and a dozen helpers next to cursor-agent. mise's registry exposes
+    // that directory, so installing Cursor used to shadow the image's node and
+    // ripgrep for every agent and terminal. Point bin_path at a directory that
+    // does not exist instead: nothing gets a shim, and T3, sign-in and the
+    // browser helper all launch cursor-agent by its absolute path anyway.
+    miseOptions: "bin_path=dist-package/.t3-no-shims",
     versionArgs: ["--version"],
     // Cursor versions are date-hash pins, not semver; 2026.09.15-d2fe57e.
     versionPattern: "(\\d{4}\\.\\d{2}\\.\\d{2}-[0-9a-f]+)",
@@ -126,4 +134,31 @@ export function normalizeArch(arch) {
 export function supportsArch(entry, arch) {
   const normalized = normalizeArch(arch);
   return normalized !== null && entry.architectures.includes(normalized);
+}
+
+/**
+ * The toolchains the image used to bake, now installed into the persistent
+ * home through mise and selected globally, so `go`, `cargo`, `bun`, `deno` and
+ * `uv` work in any directory. A project's own mise.toml or idiomatic file
+ * still wins inside that project. `probe` proves the install runs.
+ */
+export const TOOLCHAINS = Object.freeze([
+  { id: "go", name: "Go", miseTool: "go", probe: ["go", "version"] },
+  {
+    id: "rust",
+    name: "Rust",
+    miseTool: "rust",
+    // What the old image installed: a minimal profile plus the two components
+    // an agent reaches for. rustup itself is bootstrapped by mise.
+    miseOptions: "components=clippy,rustfmt,profile=minimal",
+    probe: ["cargo", "--version"],
+  },
+  { id: "bun", name: "Bun", miseTool: "bun", probe: ["bun", "--version"] },
+  { id: "deno", name: "Deno", miseTool: "deno", probe: ["deno", "--version"] },
+  { id: "uv", name: "uv", miseTool: "uv", probe: ["uv", "--version"] },
+]);
+
+/** Look up one toolchain by its stable id. */
+export function getToolchain(id) {
+  return TOOLCHAINS.find((entry) => entry.id === id) ?? null;
 }

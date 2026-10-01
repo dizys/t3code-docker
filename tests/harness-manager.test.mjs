@@ -12,6 +12,7 @@ import test from "node:test";
 
 import {
   CATALOGUE,
+  TOOLCHAINS,
   createHarnessManager,
   getHarness,
   normalizeArch,
@@ -100,13 +101,17 @@ function createWorld(fs, { arch = "x64" } = {}) {
   const world = {
     fs,
     arch,
-    latest: { claude: "2.1.273", codex: "0.154.1", opencode: "1.18.31", grok: "1.0.34", "cursor-agent": "2026.09.15-d2fe57e" },
+    latest: {
+      claude: "2.1.273", codex: "0.154.1", opencode: "1.18.31", grok: "1.0.34", "cursor-agent": "2026.09.15-d2fe57e",
+      go: "1.27.1", rust: "1.98.1", bun: "1.4.2", deno: "2.9.7", uv: "0.12.21",
+    },
     tools: {},
     selected: {},
     binVersions: new Map(),
     calls: [],
     failUse: null,
     runVersionOverride: {},
+    useSpecs: [],
   };
 
   world.versionsOf = (tool) => (world.tools[tool] ?? []).map((entry) => entry.version);
@@ -119,7 +124,7 @@ function createWorld(fs, { arch = "x64" } = {}) {
 
     if (bin !== "mise") {
       const version = world.binVersions.get(bin) ?? "0.0.0";
-      if (argv[1] === "--version") return ok(`${version}\n`);
+      if (argv[1] === "--version" || argv[1] === "version") return ok(`${version}\n`);
       if (bin.endsWith("claude") && argv[1] === "auth") return ok('{"loggedIn":true}\n');
       if (bin.endsWith("codex") && argv[1] === "login") return ok("Logged in\n");
       if (bin.endsWith("grok") && argv[1] === "models") return ok("You are logged in\n");
@@ -140,14 +145,18 @@ function createWorld(fs, { arch = "x64" } = {}) {
     }
     if (command === "latest") return ok(`${world.latest[tool]}\n`);
     if (command === "which") {
-      const selected = world.selected[tool];
+      // Rust's binaries are cargo/rustc, not "rust".
+      const selected = world.selected[tool === "cargo" ? "rust" : tool];
       return selected ? ok(`${selected}\n`) : fail("not a mise bin");
     }
     if (command === "use") {
-      const [name, version] = String(tool).split("@");
+      // `tool[options]@version`: options are mise's business, not the fake's.
+      const [spec, version] = String(tool).split("@");
+      const name = spec.replace(/\[.*\]$/, "");
+      world.useSpecs.push(String(tool));
       if (world.failUse) return fail(world.failUse);
       const install = path.join(DATA_DIR, "installs", name, version);
-      const executable = path.join(install, entryForTool(name).executable);
+      const executable = path.join(install, entryForTool(name)?.executable ?? `bin/${name}`);
       fs.seedFile(executable, "", 0o755);
       world.binVersions.set(executable, version);
       world.selected[name] = executable;
@@ -185,7 +194,7 @@ function createWorld(fs, { arch = "x64" } = {}) {
 }
 
 function entryForTool(miseTool) {
-  return CATALOGUE.find((entry) => entry.miseTool === miseTool);
+  return CATALOGUE.find((entry) => entry.miseTool === miseTool) ?? null;
 }
 
 function managerFor(world, overrides = {}) {
@@ -684,4 +693,58 @@ test("status degrades instead of throwing when mise is unavailable", async () =>
   assert.equal(degraded.length, 1);
   assert.equal(degraded[0].what, "mise");
   for (const harness of harnesses) assert.equal(harness.runnable, false);
+});
+
+test("cursor installs with no shims, so its bundled node and rg stay private", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const manager = managerFor(world);
+  const result = await manager.install("cursor");
+  assert.equal(result.ok, true);
+  assert.deepEqual(world.useSpecs, ["cursor-agent[bin_path=dist-package/.t3-no-shims]@2026.09.15-d2fe57e"]);
+  // An update passes the option again, so it cannot be lost.
+  world.latest["cursor-agent"] = "2026.09.28-64d2043";
+  await manager.update("cursor");
+  assert.equal(world.useSpecs[1], "cursor-agent[bin_path=dist-package/.t3-no-shims]@2026.09.28-64d2043");
+  assert.equal((await manager.resolve("cursor")).runnable, true);
+});
+
+test("toolchains install at an exact latest, globally, and uninstall cleanly", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const manager = managerFor(world);
+
+  assert.deepEqual(TOOLCHAINS.map((entry) => entry.id), ["go", "rust", "bun", "deno", "uv"]);
+  const before = await manager.toolchains.status();
+  assert.equal(before.toolchains.every((entry) => !entry.installed), true);
+
+  const rust = await manager.toolchains.install("rust");
+  assert.equal(rust.ok, true);
+  assert.equal(rust.toolchain.installed, true);
+  assert.equal(rust.toolchain.version, "1.98.1");
+  assert.ok(world.useSpecs.includes("rust[components=clippy,rustfmt,profile=minimal]@1.98.1"));
+
+  const go = await manager.toolchains.install("go");
+  assert.equal(go.ok, true);
+  assert.ok(world.calls.some((call) => call.endsWith("bin/go version")), "probed with `go version`");
+
+  const removed = await manager.toolchains.uninstall("go");
+  assert.equal(removed.ok, true);
+  assert.equal(removed.toolchain.installed, false);
+  assert.ok(world.calls.some((call) => call.includes("uninstall go@1.27.1")));
+  assert.equal((await manager.toolchains.resolve("rust")).installed, true, "others untouched");
+});
+
+test("a failed toolchain install is reported and leaves nothing selected", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const manager = managerFor(world);
+  world.failUse = "error sending request: Connection refused";
+  const result = await manager.toolchains.install("deno");
+  assert.equal(result.ok, false);
+  assert.equal(result.toolchain.installed, false);
+  assert.equal(result.toolchain.failed, true);
+  assert.match(result.toolchain.failure, /Connection refused/);
+  const unknown = await manager.toolchains.install("python");
+  assert.equal(unknown.code, "unknown-toolchain");
 });

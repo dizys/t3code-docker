@@ -19,6 +19,7 @@ T3_HOME=/home/t3
 : "${T3_SETUP_ENABLED:=1}"
 : "${T3_SETUP_PORT:=3774}"
 : "${T3_PERSIST_AGENT_CREDENTIALS:=1}"
+: "${T3_PREINSTALL:=all}"
 # The image's own runtimes. T3 runs as the root-owned platform binary; setup
 # and repository JavaScript helpers run under the image Node. Neither resolves
 # `node` or `t3` through PATH. Overridable for tests.
@@ -29,7 +30,7 @@ T3_HOME=/home/t3
 # per-provider `binaryPath`.
 : "${T3_PROVIDER_CLI:=/opt/t3-provider/cli.mjs}"
 export T3CODE_HOME T3CODE_HOST T3CODE_PORT T3_WORKSPACE T3_SETUP_PORT
-export T3_INFRA_NODE T3_INFRA_BINARY T3_INFRA_LAUNCHER T3_PROVIDER_CLI
+export T3_INFRA_NODE T3_INFRA_BINARY T3_INFRA_LAUNCHER T3_PROVIDER_CLI T3_PREINSTALL
 
 # Ownership migration is recorded here before anything else changes. The state
 # directory is the one path every deployment mounts, so a marker written there
@@ -304,6 +305,19 @@ sync_managed_providers() {
 }
 
 sync_managed_providers
+
+# Put back what the image used to bake. Everything T3_PREINSTALL names (by
+# default all five agents and Go, Rust, Bun, Deno and uv) that is not on the
+# volume yet installs in the background, once: progress is on the setup page,
+# each agent is handed to T3 as soon as it lands, and a failure is retried on
+# the next start. Nothing here blocks the server from coming up.
+start_preinstall() {
+  [ -r /opt/t3-harness/preinstall.mjs ] || return 0
+  [ -x "$T3_INFRA_NODE" ] || return 0
+  ( "$T3_INFRA_NODE" /opt/t3-harness/preinstall.mjs || true ) &
+}
+
+start_preinstall
 
 # The setup service exists for one job: minting a pairing link on demand,
 # without a shell in the container and without a restart. Everything after

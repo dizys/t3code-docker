@@ -79,6 +79,7 @@
   --id-opencode: oklch(0.64 0.062 175);
   --id-cursor: oklch(0.62 0.062 300);
   --id-grok: oklch(0.6 0.045 230);
+  --id-toolchain: oklch(0.6 0.02 120);
 
   /* ---- type — no display serif in this brand (see brand-spec.md §2) */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -148,6 +149,7 @@
   --id-opencode: oklch(0.7 0.06 175);
   --id-cursor: oklch(0.7 0.06 300);
   --id-grok: oklch(0.68 0.045 230);
+  --id-toolchain: oklch(0.68 0.02 120);
 
   --shadow-raised: 0 1px 2px oklch(0 0 0 / 0.3);
   --shadow-pop: 0 8px 28px -8px oklch(0 0 0 / 0.65), 0 1px 2px oklch(0 0 0 / 0.3);
@@ -276,6 +278,13 @@ textarea {
   grid-template-columns: minmax(0, 1.32fr) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+}
+
+/* Page-level notices (an unreadable status, first-start setup) sit above the
+   deck with the deck's own gap, instead of touching the first card. */
+#degraded > .tc-notice,
+#setup-progress > .tc-notice {
+  margin-bottom: 16px;
 }
 
 .tc-deck-col {

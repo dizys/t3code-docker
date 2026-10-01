@@ -9,7 +9,7 @@
 import os from "node:os";
 import path from "node:path";
 
-import { CATALOGUE, getHarness, normalizeArch, supportsArch } from "./catalogue.mjs";
+import { CATALOGUE, TOOLCHAINS, getHarness, getToolchain, normalizeArch, supportsArch } from "./catalogue.mjs";
 import { createFs, createRunner, isExecutable, processAlive, processStartTime } from "./io.mjs";
 import * as lock from "./lock.mjs";
 import * as mise from "./mise.mjs";
@@ -159,49 +159,38 @@ export function createHarnessManager(options = {}) {
   }
 
   /**
-   * Run one lifecycle operation under the global lock. `onStarted` fires once
-   * the lock is held, which is how the setup server answers a POST as soon as
-   * the work has really begun instead of holding the request for the length
-   * of a download.
+   * Run one lifecycle operation under the global lock, recording how it went
+   * in `section` of the state file. `onStarted` fires once the lock is held,
+   * which is how the setup server answers a POST as soon as the work has
+   * really begun instead of holding the request for the length of a download.
    */
-  async function runOperation(id, kind, work, { onStarted } = {}) {
-    const entry = getHarness(id);
-    if (!entry) return { ok: false, code: "unknown-harness", error: `unknown harness: ${id}` };
-    if (!supportsArch(entry, ctx.arch)) {
-      return { ok: false, code: "unsupported-arch", error: `${entry.name} has no ${ctx.arch} build` };
-    }
-
+  async function runLocked({ section, id, kind, entry, work, onStarted, after }) {
     const held = await lock.acquireLock(ctx, { id, operation: kind });
     if (!held.acquired) {
       const detail = held.error
         ? held.error
         : `another operation is in progress (${held.holder?.operation ?? "unknown"}` +
           `${held.holder?.id ? ` ${held.holder.id}` : ""})`;
-      return {
-        ok: false,
-        code: held.error ? "lock-error" : "busy",
-        error: detail,
-        harness: await resolve(id),
-      };
+      return { ok: false, code: held.error ? "lock-error" : "busy", error: detail, ...(await after()) };
     }
 
     let outcome;
     try {
       try { onStarted?.(); } catch { /* a listener cannot fail the operation */ }
       const before = await state.readState(ctx);
-      const previous = before.harnesses[id] ?? {};
-      await state.updateHarness(ctx, id, {
+      const previous = before[section][id] ?? {};
+      await state.updateEntry(ctx, section, id, {
         operation: { kind, state: "in-progress", startedAt: ctx.now(), finishedAt: null, error: null },
       });
       const patch = await work(entry, previous) ?? {};
-      await state.updateHarness(ctx, id, {
+      await state.updateEntry(ctx, section, id, {
         ...patch,
         operation: { kind, state: "ok", startedAt: null, finishedAt: ctx.now(), error: null },
       });
       outcome = { ok: true, code: "ok" };
     } catch (error) {
       const message = String(error?.message ?? error);
-      await state.updateHarness(ctx, id, {
+      await state.updateEntry(ctx, section, id, {
         operation: { kind, state: "failed", startedAt: null, finishedAt: ctx.now(), error: message },
       });
       outcome = { ok: false, code: error?.code ?? "failed", error: message };
@@ -210,8 +199,37 @@ export function createHarnessManager(options = {}) {
     }
     // Resolve after releasing the lock: the operation has finished, so the
     // returned facts must not read as "still in progress".
-    authCache.delete(id);
-    return { ...outcome, harness: await resolve(id) };
+    return { ...outcome, ...(await after()) };
+  }
+
+  async function runOperation(id, kind, work, { onStarted } = {}) {
+    const entry = getHarness(id);
+    if (!entry) return { ok: false, code: "unknown-harness", error: `unknown harness: ${id}` };
+    if (!supportsArch(entry, ctx.arch)) {
+      return { ok: false, code: "unsupported-arch", error: `${entry.name} has no ${ctx.arch} build` };
+    }
+    return runLocked({
+      section: "harnesses",
+      id,
+      kind,
+      entry,
+      work,
+      onStarted,
+      after: async () => {
+        authCache.delete(id);
+        return { harness: await resolve(id) };
+      },
+    });
+  }
+
+  /**
+   * A typed version that can never be exact is refused before the lock, so a
+   * typo answers at once and is not recorded as a failed operation.
+   */
+  function refuseMalformed(version) {
+    const requested = version ? String(version).trim() : "";
+    if (!requested || requested === "latest" || VERSION_SYNTAX.test(requested)) return null;
+    return { ok: false, code: "invalid-version", error: `invalid version: ${requested}` };
   }
 
   /** `latest` (or nothing) resolves to mise's newest release, recorded exact. */
@@ -229,7 +247,7 @@ export function createHarnessManager(options = {}) {
 
   /** Install and select one exact release, and prove it runs before recording it. */
   async function select(entry, previous, target) {
-    await mise.use(ctx, entry.miseTool, target);
+    await mise.use(ctx, entry.miseTool, target, entry.miseOptions ?? null);
     const executable = await resolveExecutable(entry, target);
     const probe = await probeVersion(ctx, entry, executable);
     if (!probe.ok) throw operationError("not-runnable", probe.error ?? "the installed executable did not run");
@@ -248,12 +266,16 @@ export function createHarnessManager(options = {}) {
    * and records that exact value. Already-installed versions are re-verified.
    */
   async function install(id, options = {}) {
+    const refused = refuseMalformed(options.version);
+    if (refused) return refused;
     return runOperation(id, "install", async (entry, previous) =>
       select(entry, previous, await targetVersion(entry, options.version)), options);
   }
 
   /** Update an installed harness. Always explicit; never implied by status. */
   async function update(id, options = {}) {
+    const refused = refuseMalformed(options.version);
+    if (refused) return refused;
     return runOperation(id, "update", async (entry, previous) => {
       if (!previous.version) {
         const current = await resolve(id, { authenticate: false });
@@ -299,6 +321,101 @@ export function createHarnessManager(options = {}) {
     }, options);
   }
 
+  // --- toolchains -----------------------------------------------------------
+  //
+  // Go, Rust, Bun, Deno and uv, selected in the user's global mise config so
+  // they work in every directory. Simpler than a harness: no sign-in, and the
+  // shim on PATH is the whole interface, so the facts are what mise reports.
+
+  function toolchainFacts(entry, snap) {
+    const entries = snap.tools[entry.miseTool] ?? [];
+    const global = entries.find((candidate) =>
+      candidate.source && String(candidate.source.path ?? "").startsWith(ctx.configDir)) ?? null;
+    const record = snap.saved.toolchains[entry.id] ?? {};
+    const operation = record.operation ?? null;
+    const liveForThis = Boolean(snap.live && snap.live.id === entry.id);
+    const interrupted = operation?.state === "in-progress" && !liveForThis;
+    let failure = null;
+    if (interrupted) failure = "a previous operation was interrupted before it finished";
+    else if (operation?.state === "failed") failure = operation.error ?? "the last operation failed";
+    return {
+      id: entry.id,
+      name: entry.name,
+      miseTool: entry.miseTool,
+      installed: Boolean(global?.installed),
+      version: global?.installed ? global.version ?? null : null,
+      inProgress: liveForThis,
+      operation: operation?.kind ?? null,
+      failed: Boolean(failure),
+      failure,
+    };
+  }
+
+  async function toolchainStatus() {
+    const snap = await snapshot();
+    return { toolchains: TOOLCHAINS.map((entry) => toolchainFacts(entry, snap)), degraded: snap.degraded };
+  }
+
+  async function resolveToolchain(id) {
+    const entry = getToolchain(id);
+    if (!entry) throw new Error(`unknown toolchain: ${id}`);
+    return toolchainFacts(entry, await snapshot());
+  }
+
+  function runToolchain(id, kind, work, { onStarted } = {}) {
+    const entry = getToolchain(id);
+    if (!entry) return Promise.resolve({ ok: false, code: "unknown-toolchain", error: `unknown toolchain: ${id}` });
+    return runLocked({
+      section: "toolchains",
+      id,
+      kind,
+      entry,
+      work,
+      onStarted,
+      after: async () => ({ toolchain: await resolveToolchain(id) }),
+    });
+  }
+
+  /** Install, or move to, mise's latest release, then prove the shim runs. */
+  async function selectToolchain(entry) {
+    const target = await mise.latest(ctx, entry.miseTool);
+    assertVersion(target);
+    await mise.use(ctx, entry.miseTool, target, entry.miseOptions ?? null);
+    const [bin, ...args] = entry.probe;
+    const executable = await mise.which(ctx, bin);
+    if (!executable) throw operationError("not-runnable", `mise installed ${entry.name} ${target} but has no ${bin}`);
+    const result = await ctx.run([executable, ...args], {
+      env: ctx.env,
+      cwd: ctx.home,
+      timeoutMs: ctx.timeouts.probe,
+    });
+    if (result.error || result.code !== 0) {
+      throw operationError("not-runnable", result.error || `${bin} exited with code ${result.code}`);
+    }
+    return { version: target, updatedAt: ctx.now() };
+  }
+
+  function installToolchain(id, options = {}) {
+    return runToolchain(id, "install", (entry) => selectToolchain(entry), options);
+  }
+
+  function updateToolchain(id, options = {}) {
+    return runToolchain(id, "update", (entry) => selectToolchain(entry), options);
+  }
+
+  /** Drop the global selection and every installed release of the tool. */
+  function uninstallToolchain(id, options = {}) {
+    return runToolchain(id, "uninstall", async (entry) => {
+      const listing = await mise.listTools(ctx);
+      const versions = (listing.tools?.[entry.miseTool] ?? [])
+        .filter((candidate) => candidate.installed && String(candidate.source?.path ?? "").startsWith(ctx.configDir))
+        .map((candidate) => candidate.version);
+      await mise.unuse(ctx, entry.miseTool);
+      for (const version of versions) await mise.uninstall(ctx, entry.miseTool, version);
+      return { version: undefined };
+    }, options);
+  }
+
   /** Read-only facts for every catalogue entry. */
   async function status(options = {}) {
     const snap = await snapshot();
@@ -329,6 +446,13 @@ export function createHarnessManager(options = {}) {
     update,
     uninstall,
     invalidateAuth,
+    toolchains: {
+      status: toolchainStatus,
+      resolve: resolveToolchain,
+      install: installToolchain,
+      update: updateToolchain,
+      uninstall: uninstallToolchain,
+    },
     paths: {
       home,
       configDir: ctx.configDir,

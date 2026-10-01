@@ -2,8 +2,8 @@
 // Inject the setup-console pill into T3 Code's client shell.
 //
 // Runs at image build time, after installing T3's platform package. The shell
-// is a static file upstream owns, so this reads like any other build step that would fail
-// loudly rather than ship: if a future release moves the `</body>` or renames
+// is a static file upstream owns, so this reads like any other build step that
+// would fail loudly rather than ship: if a future release moves the `</body>` or renames
 // the client directory, the build stops here, and scripts/smoke-test.sh checks
 // the served HTML again in the running container. Both exist so a T3 bump
 // cannot silently drop the only route from the app back to the console.

@@ -139,6 +139,13 @@ check "the T3 client shell is available for the setup pill" \
 check "T3 is not installed in the mutable npm prefix" \
   "docker exec $NAME test ! -e /opt/npm-global/lib/node_modules/t3"
 
+# T3 states the versions it needs inside its own platform binary, and enforces
+# them at runtime: too old a `gh` and it reports "GitHub CLI is too old to
+# report sign-in status", too old an OpenCode and it refuses the server. Read
+# the floors back out of the binary (with -a: it is an executable) and hold the
+# image to them, so an upstream bump fails here rather than in a session.
+T3_BUNDLE="$T3_BINARY"
+
 # Compares with sort -V: passes when installed >= required.
 version_at_least() {
   [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]
@@ -146,7 +153,11 @@ version_at_least() {
 
 gh_meets_t3_minimum() {
   local declared installed
-  declared="$(grep -m1 '^ARG GH_MIN_VERSION=' Dockerfile | cut -d= -f2)"
+  declared="$(docker exec "$NAME" sh -c \
+    "grep -a -o 'Update .gh. to [0-9][0-9.]* or newer' $T3_BUNDLE | head -1" 2>/dev/null \
+    | grep -o '[0-9][0-9.]*' | head -1)"
+  # Fall back to the floor the Dockerfile asserts if the wording moved.
+  [ -n "$declared" ] || declared="$(grep -m1 '^ARG GH_MIN_VERSION=' Dockerfile | cut -d= -f2)"
   installed="$(docker exec "$NAME" gh --version 2>/dev/null | head -1 | awk '{print $3}')"
   [ -n "$installed" ] || return 1
   GH_DECLARED="$declared"; GH_INSTALLED="$installed"

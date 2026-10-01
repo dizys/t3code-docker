@@ -214,7 +214,7 @@ RUN set -eux; \
 # against the registry. The agent harnesses are not baked and therefore carry
 # no pins here: the harness installer resolves and records an exact version on
 # explicit install.
-ARG T3_VERSION=0.0.42
+ARG T3_VERSION=0.0.44
 ARG TARGETARCH
 
 # T3 Code is image infrastructure. Its platform distribution installs into a
@@ -317,8 +317,8 @@ FROM core AS browser
 
 # Browser automation over MCP. T3 Code's own preview tools are hosted by the
 # web/desktop client, so a phone-only setup has no eyes without this.
-ARG CHROME_DEVTOOLS_MCP_VERSION=1.9.0
-ARG PLAYWRIGHT_MCP_VERSION=0.0.82
+ARG CHROME_DEVTOOLS_MCP_VERSION=1.10.1
+ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 USER root
 
 RUN set -eux; \

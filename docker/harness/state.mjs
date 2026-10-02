@@ -38,7 +38,7 @@ export async function readState(ctx) {
 /** Atomic replace, so a crash never leaves a half-written state file. */
 export async function writeState(ctx, state) {
   await ctx.fs.mkdir(path.dirname(ctx.statePath), { recursive: true });
-  const tmp = `${ctx.statePath}.tmp`;
+  const tmp = `${ctx.statePath}.tmp.${process.pid}.${Math.random().toString(36).slice(2, 8)}`;
   await ctx.fs.writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await ctx.fs.rename(tmp, ctx.statePath);
 }

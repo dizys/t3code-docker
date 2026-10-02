@@ -2,7 +2,7 @@
 //
 // These are the only subprocesses the manager runs that are not mise itself.
 // They are bounded, read-only, and never install anything; their whole job is
-// to turn "a path exists" into the concrete facts the plan requires - an exact
+// to turn "a path exists" into the facts the console and T3 need - an exact
 // running version and an authenticated/not/unknown verdict.
 import path from "node:path";
 

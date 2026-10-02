@@ -53,10 +53,12 @@ export async function listTools(ctx) {
  * kept as a moving target.
  */
 export async function latest(ctx, tool) {
+  // Normally well under two seconds. A network that drops packets instead of
+  // refusing them would otherwise hold the lock for the whole mise timeout.
   const result = await ctx.run(miseArgs(ctx, ["latest", tool]), {
     env: readEnv(ctx.env),
     cwd: ctx.home,
-    timeoutMs: ctx.timeouts.mise,
+    timeoutMs: ctx.timeouts.latest ?? ctx.timeouts.mise,
   });
   if (result.error || result.code !== 0) {
     throw new Error(firstError(result) || `mise latest ${tool} failed`);
@@ -66,7 +68,8 @@ export async function latest(ctx, tool) {
     .map((value) => value.trim())
     .filter((value) => value && !/\s/.test(value) && /^[0-9A-Za-z]/.test(value))
     .pop();
-  if (!line) throw new Error(`mise latest ${tool} returned no version`);
+  // Offline with a cold cache, mise warns and exits 0 with nothing on stdout.
+  if (!line) throw new Error(`mise latest ${tool} returned no version: ${firstError(result)}`);
   return line;
 }
 
@@ -127,13 +130,27 @@ export function installDir(ctx, tool, version) {
   return path.join(ctx.dataDir, "installs", tool, version);
 }
 
-/** Take the last non-empty error line out of a failed mise run. */
+// Lines mise prints around every failure that say nothing about the cause.
+const NOISE = [
+  /^mise ERROR Version: /i,
+  /Run with --verbose or MISE_VERBOSE/i,
+  /^mise WARN\s+mise version \S+ available/i,
+  /^mise WARN\s+To update, run/i,
+];
+
+/**
+ * The line that says why a mise run failed. mise reports the cause first
+ * (`mise ERROR Failed to install http:grok@9.9.9: ... 404`) and then the same
+ * two boilerplate lines every time, so take the first ERROR that is not
+ * boilerplate, else the last line left.
+ */
 export function firstError(result) {
   if (result.error) return result.error;
   const lines = `${result.stderr}\n${result.stdout}`
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .filter((line) => !/^mise\b.*\b(version|linux|x64|arm64)\b/i.test(line));
-  return lines.pop() ?? `mise exited with code ${result.code}`;
+    .filter((line) => !NOISE.some((pattern) => pattern.test(line)));
+  const pick = lines.find((line) => /\bERROR\b/.test(line)) ?? lines.pop();
+  return pick ? pick.replace(/^mise (ERROR|WARN)\s+/, "") : `mise exited with code ${result.code}`;
 }

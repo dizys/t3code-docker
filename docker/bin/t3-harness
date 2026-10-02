@@ -105,6 +105,12 @@ fi
 if [ "$command" = "status" ] && [ $# -gt 1 ]; then
   printf 't3-harness: status takes at most one harness id\n\n' >&2; usage >&2; exit 2
 fi
+if [ $# -eq 1 ]; then
+  case "$1" in
+    claude|codex|opencode|grok|cursor|go|rust|bun|deno|uv) ;;
+    *) printf 't3-harness: unknown agent or toolchain %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+fi
 if [ -n "$version" ] && { [ "$command" = "list" ] || [ "$command" = "toolchains" ] || [ "$command" = "status" ] || [ "$command" = "uninstall" ]; }; then
   printf 't3-harness: --version only applies to install and update\n\n' >&2; usage >&2; exit 2
 fi

@@ -25,6 +25,7 @@ const VERSION_SYNTAX = /^\d+\.[0-9A-Za-z._+-]{1,62}$/;
 
 const DEFAULT_TIMEOUTS = Object.freeze({
   mise: 120_000,
+  latest: 45_000,
   install: 15 * 60 * 1000,
   probe: 20_000,
 });
@@ -66,10 +67,50 @@ export function createHarnessManager(options = {}) {
   /** Read the shared snapshot once: mise, our state, and any live lock. */
   async function snapshot() {
     const listing = await mise.listTools(ctx);
-    const saved = await state.readState(ctx);
-    const live = await lock.liveHolder(ctx);
+    let live = await lock.liveHolder(ctx);
+    let saved = await state.readState(ctx);
+    // An operation records "in-progress" just after taking the lock and "ok"
+    // just before releasing it, so reads that straddle either edge can pair a
+    // stale lock with a fresh state. Read both again before calling anything
+    // interrupted; a real interruption still reads the same way twice.
+    const running = (section) => Object.values(saved[section]).some((record) => record.operation?.state === "in-progress");
+    if (!live && (running("harnesses") || running("toolchains"))) {
+      live = await lock.liveHolder(ctx);
+      saved = await state.readState(ctx);
+    }
     const degraded = listing.error ? [{ what: "mise", error: listing.error }] : [];
     return { tools: listing.tools ?? {}, saved, live, degraded };
+  }
+
+  /** The version the user's global mise config selects for a tool, or null. */
+  async function globalVersion(tool) {
+    const listing = await mise.listTools(ctx);
+    const global = (listing.tools?.[tool] ?? [])
+      .filter((candidate) => String(candidate.source?.path ?? "").startsWith(ctx.configDir));
+    return (global.find((candidate) => candidate.active) ?? global[0])?.version ?? null;
+  }
+
+  /**
+   * `mise use` and then prove the result runs. mise has moved the global
+   * selection by the time a probe can fail, so a release that installed but
+   * does not run is rolled back to whatever was selected before - otherwise
+   * the next sync would hand T3 an executable the manager just rejected.
+   */
+  async function useVerified(entry, target, verify) {
+    const before = await globalVersion(entry.miseTool);
+    await mise.use(ctx, entry.miseTool, target, entry.miseOptions ?? null);
+    try {
+      return await verify();
+    } catch (error) {
+      if (before !== target) {
+        try {
+          if (before) await mise.use(ctx, entry.miseTool, before, entry.miseOptions ?? null);
+          else await mise.unuse(ctx, entry.miseTool);
+          await mise.uninstall(ctx, entry.miseTool, target);
+        } catch { /* the failure being reported is the one that matters */ }
+      }
+      throw error;
+    }
   }
 
   async function factsFor(entry, snap, { authenticate = true } = {}) {
@@ -247,10 +288,12 @@ export function createHarnessManager(options = {}) {
 
   /** Install and select one exact release, and prove it runs before recording it. */
   async function select(entry, previous, target) {
-    await mise.use(ctx, entry.miseTool, target, entry.miseOptions ?? null);
-    const executable = await resolveExecutable(entry, target);
-    const probe = await probeVersion(ctx, entry, executable);
-    if (!probe.ok) throw operationError("not-runnable", probe.error ?? "the installed executable did not run");
+    const { executable, probe } = await useVerified(entry, target, async () => {
+      const resolved = await resolveExecutable(entry, target);
+      const result = await probeVersion(ctx, entry, resolved);
+      if (!result.ok) throw operationError("not-runnable", result.error ?? "the installed executable did not run");
+      return { executable: resolved, probe: result };
+    });
     return {
       version: target,
       executable,
@@ -276,6 +319,11 @@ export function createHarnessManager(options = {}) {
   async function update(id, options = {}) {
     const refused = refuseMalformed(options.version);
     if (refused) return refused;
+    // Nothing to update is an answer, not a failed operation to record.
+    const current = getHarness(id) ? await resolve(id, { authenticate: false }) : null;
+    if (current && !current.installed && !current.recordedVersion) {
+      return { ok: false, code: "not-installed", error: `${current.name} is not installed`, harness: current };
+    }
     return runOperation(id, "update", async (entry, previous) => {
       if (!previous.version) {
         const current = await resolve(id, { authenticate: false });
@@ -329,8 +377,9 @@ export function createHarnessManager(options = {}) {
 
   function toolchainFacts(entry, snap) {
     const entries = snap.tools[entry.miseTool] ?? [];
-    const global = entries.find((candidate) =>
-      candidate.source && String(candidate.source.path ?? "").startsWith(ctx.configDir)) ?? null;
+    const configured = entries.filter((candidate) =>
+      candidate.source && String(candidate.source.path ?? "").startsWith(ctx.configDir));
+    const global = configured.find((candidate) => candidate.active) ?? configured[0] ?? null;
     const record = snap.saved.toolchains[entry.id] ?? {};
     const operation = record.operation ?? null;
     const liveForThis = Boolean(snap.live && snap.live.id === entry.id);
@@ -346,6 +395,8 @@ export function createHarnessManager(options = {}) {
       version: global?.installed ? global.version ?? null : null,
       inProgress: liveForThis,
       operation: operation?.kind ?? null,
+      operationState: operation?.state ?? null,
+      managedVersions: record.managedVersions ?? [],
       failed: Boolean(failure),
       failure,
     };
@@ -377,42 +428,49 @@ export function createHarnessManager(options = {}) {
   }
 
   /** Install, or move to, mise's latest release, then prove the shim runs. */
-  async function selectToolchain(entry) {
+  async function selectToolchain(entry, previous) {
     const target = await mise.latest(ctx, entry.miseTool);
     assertVersion(target);
-    await mise.use(ctx, entry.miseTool, target, entry.miseOptions ?? null);
-    const [bin, ...args] = entry.probe;
-    const executable = await mise.which(ctx, bin);
-    if (!executable) throw operationError("not-runnable", `mise installed ${entry.name} ${target} but has no ${bin}`);
-    const result = await ctx.run([executable, ...args], {
-      env: ctx.env,
-      cwd: ctx.home,
-      timeoutMs: ctx.timeouts.probe,
+    await useVerified(entry, target, async () => {
+      const [bin, ...args] = entry.probe;
+      const executable = await mise.which(ctx, bin);
+      if (!executable) throw operationError("not-runnable", `mise installed ${entry.name} ${target} but has no ${bin}`);
+      const result = await ctx.run([executable, ...args], {
+        env: ctx.env,
+        cwd: ctx.home,
+        timeoutMs: ctx.timeouts.probe,
+      });
+      if (result.error || result.code !== 0) {
+        throw operationError("not-runnable", result.error || `${bin} exited with code ${result.code}`);
+      }
     });
-    if (result.error || result.code !== 0) {
-      throw operationError("not-runnable", result.error || `${bin} exited with code ${result.code}`);
-    }
-    return { version: target, updatedAt: ctx.now() };
+    return { version: target, updatedAt: ctx.now(), managedVersions: union(previous.managedVersions, [target]) };
   }
 
   function installToolchain(id, options = {}) {
-    return runToolchain(id, "install", (entry) => selectToolchain(entry), options);
+    return runToolchain(id, "install", selectToolchain, options);
   }
 
   function updateToolchain(id, options = {}) {
-    return runToolchain(id, "update", (entry) => selectToolchain(entry), options);
+    return runToolchain(id, "update", selectToolchain, options);
   }
 
-  /** Drop the global selection and every installed release of the tool. */
+  /**
+   * Drop the global selection and every release this manager installed (an
+   * update leaves the previous one behind), plus whatever the global config
+   * selected. A version only a project asked for is that project's to keep.
+   */
   function uninstallToolchain(id, options = {}) {
-    return runToolchain(id, "uninstall", async (entry) => {
+    return runToolchain(id, "uninstall", async (entry, previous) => {
       const listing = await mise.listTools(ctx);
-      const versions = (listing.tools?.[entry.miseTool] ?? [])
+      const selected = (listing.tools?.[entry.miseTool] ?? [])
         .filter((candidate) => candidate.installed && String(candidate.source?.path ?? "").startsWith(ctx.configDir))
         .map((candidate) => candidate.version);
       await mise.unuse(ctx, entry.miseTool);
-      for (const version of versions) await mise.uninstall(ctx, entry.miseTool, version);
-      return { version: undefined };
+      for (const version of union(previous.managedVersions, selected)) {
+        await mise.uninstall(ctx, entry.miseTool, version);
+      }
+      return { version: undefined, managedVersions: [] };
     }, options);
   }
 

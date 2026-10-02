@@ -17,6 +17,7 @@ import {
   getHarness,
   normalizeArch,
 } from "../docker/harness/index.mjs";
+import { firstError } from "../docker/harness/mise.mjs";
 
 const HOME = "/home/t3";
 const DATA_DIR = path.join(HOME, ".local/share/mise");
@@ -112,6 +113,7 @@ function createWorld(fs, { arch = "x64" } = {}) {
     failUse: null,
     runVersionOverride: {},
     useSpecs: [],
+    failProbe: [],
   };
 
   world.versionsOf = (tool) => (world.tools[tool] ?? []).map((entry) => entry.version);
@@ -123,6 +125,7 @@ function createWorld(fs, { arch = "x64" } = {}) {
     const [bin] = argv;
 
     if (bin !== "mise") {
+      if (world.failProbe.some((fragment) => bin.includes(fragment))) return fail("Illegal instruction");
       const version = world.binVersions.get(bin) ?? "0.0.0";
       if (argv[1] === "--version" || argv[1] === "version") return ok(`${version}\n`);
       if (bin.endsWith("claude") && argv[1] === "auth") return ok('{"loggedIn":true}\n');
@@ -747,4 +750,68 @@ test("a failed toolchain install is reported and leaves nothing selected", async
   assert.match(result.toolchain.failure, /Connection refused/);
   const unknown = await manager.toolchains.install("python");
   assert.equal(unknown.code, "unknown-toolchain");
+});
+
+test("a release that installs but does not run is rolled back, not left selected", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const manager = managerFor(world);
+  await manager.install("opencode", { version: "1.18.31" });
+
+  world.failProbe = ["/opencode/1.18.33/"];
+  const failed = await manager.update("opencode", { version: "1.18.33" });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.code, "not-runnable");
+  assert.equal(failed.harness.installedVersion, "1.18.31", "the previous release is selected again");
+  assert.equal(failed.harness.runnable, true);
+  assert.ok(world.calls.some((call) => call.includes("uninstall opencode@1.18.33")), "the bad release is removed");
+
+  // A first install that does not run leaves nothing selected at all.
+  world.failProbe = ["/grok/"];
+  const fresh = await manager.install("grok");
+  assert.equal(fresh.ok, false);
+  assert.equal(fresh.harness.installed, false);
+  assert.equal(fresh.harness.configured, false);
+});
+
+test("uninstalling a toolchain removes every release the manager installed", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const manager = managerFor(world);
+  world.latest.uv = "0.12.20";
+  await manager.toolchains.install("uv");
+  world.latest.uv = "0.12.21";
+  const updated = await manager.toolchains.update("uv");
+  assert.equal(updated.toolchain.version, "0.12.21");
+  assert.deepEqual(updated.toolchain.managedVersions, ["0.12.20", "0.12.21"]);
+
+  const removed = await manager.toolchains.uninstall("uv");
+  assert.equal(removed.ok, true);
+  assert.ok(world.calls.some((call) => call.includes("uninstall uv@0.12.20")));
+  assert.ok(world.calls.some((call) => call.includes("uninstall uv@0.12.21")));
+});
+
+test("update on something never installed answers without recording a failure", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const manager = managerFor(world);
+  const result = await manager.update("codex");
+  assert.equal(result.code, "not-installed");
+  assert.equal(result.harness.failed, false);
+  assert.equal(await fs.exists(path.join(STATE_DIR, "harness-state.json")), false, "nothing recorded");
+});
+
+test("mise failures report their cause, not the boilerplate around it", () => {
+  const failure = {
+    code: 1, error: null, stdout: "",
+    stderr: [
+      "mise WARN  mise version 2026.9.18 available",
+      "mise ERROR Failed to install http:grok@9.9.9: 404 Not Found for url (https://example.test/linux-x64/grok)",
+      "mise ERROR Version: 2026.9.10 linux-arm64 (2026-09-16)",
+      "mise ERROR Run with --verbose or MISE_VERBOSE=1 for more information",
+    ].join("\n"),
+  };
+  assert.equal(firstError(failure), "Failed to install http:grok@9.9.9: 404 Not Found for url (https://example.test/linux-x64/grok)");
+  const offline = { code: 0, error: null, stdout: "", stderr: "mise WARN  Remote versions cannot be fetched for anthropics/claude-code: error sending request" };
+  assert.match(firstError(offline), /^Remote versions cannot be fetched/);
 });

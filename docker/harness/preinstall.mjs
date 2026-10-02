@@ -172,6 +172,12 @@ export async function runPreinstall({
       const version = current.installedVersion ?? current.version ?? null;
       record.items[keyOf(item)] = { state: "done", version, at: now(), adopted: true };
       summary.adopted.push(keyOf(item));
+    } else if (current?.operation === "uninstall" && current?.operationState === "ok") {
+      // Someone uninstalled it on purpose - say after a first start that could
+      // not install it, and an Install and Uninstall of their own since. The
+      // manager remembers that even when this record does not.
+      record.items[keyOf(item)] = { state: "done", version: null, at: now(), declined: true };
+      summary.skipped.push(keyOf(item));
     } else {
       pending.push(item);
     }
@@ -192,7 +198,15 @@ export async function runPreinstall({
       + " progress is on the setup page");
   }
 
+  // Three failures in a row is nearly always no network, or a registry that is
+  // down for everything. Stop there rather than holding the install lock for
+  // every remaining item; the rest are tried on the next start like failures.
+  let failedInARow = 0;
   for (const item of pending) {
+    if (failedInARow >= 3) {
+      summary.deferred = [...(summary.deferred ?? []), keyOf(item)];
+      continue;
+    }
     const key = keyOf(item);
     const ops = opsFor(item);
     record.run.current = key;
@@ -212,6 +226,7 @@ export async function runPreinstall({
     }
 
     const facts = result?.harness ?? result?.toolchain ?? null;
+    failedInARow = result?.ok ? 0 : failedInARow + 1;
     if (result?.ok) {
       const version = facts?.installedVersion ?? facts?.version ?? null;
       record.items[key] = { state: "done", version, at: now() };
@@ -234,6 +249,10 @@ export async function runPreinstall({
   record.run.current = null;
   record.run.finishedAt = now();
   await writeRecord(fs, file, record);
+  if (summary.deferred?.length) {
+    log(`stopped after three failures in a row (no network?); ${summary.deferred.length} more`
+      + " will be tried on the next start");
+  }
   if (pending.length) {
     log(summary.failed.length
       ? `preinstall finished; ${summary.failed.length} failed and will be retried on the next start`

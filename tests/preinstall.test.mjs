@@ -29,12 +29,18 @@ function memoryFs() {
 }
 
 /** A fake manager: `installed` holds what is present, `fail` what will fail. */
-function fakeManager({ installed = [], fail = {}, busyFor = {} } = {}) {
+function fakeManager({ installed = [], fail = {}, busyFor = {}, declined = [] } = {}) {
   const present = new Set(installed);
   const calls = [];
   const side = (kind) => ({
     async resolve(id) {
-      return { id, installed: present.has(id), installedVersion: present.has(id) ? "1.0.0" : null, version: present.has(id) ? "1.0.0" : null };
+      return {
+        id,
+        installed: present.has(id),
+        installedVersion: present.has(id) ? "1.0.0" : null,
+        version: present.has(id) ? "1.0.0" : null,
+        ...(declined.includes(id) ? { operation: "uninstall", operationState: "ok" } : {}),
+      };
     },
     async install(id) {
       calls.push(`${kind}:${id}`);
@@ -173,4 +179,28 @@ test("a run whose process is gone reads as interrupted", async () => {
   const restarted = await readPreinstall({ stateDir: STATE_DIR, fs, isAlive: () => true, startTimeOf: () => "900" });
   assert.equal(restarted.state, "interrupted");
   assert.deepEqual(restarted.items.map((item) => item.state), ["done", "pending"]);
+});
+
+test("three failures in a row stop the run; the rest wait for the next start", async () => {
+  const fs = memoryFs();
+  const offline = fakeManager({ fail: { claude: "x", codex: "x", opencode: "x", grok: "x", cursor: "x" } });
+  const summary = await run(offline, fs, { T3_PREINSTALL: "agents" });
+  assert.deepEqual(offline.calls, ["agent:claude", "agent:codex", "agent:opencode"]);
+  assert.deepEqual(summary.deferred, ["agent:grok", "agent:cursor"]);
+  const shown = await readPreinstall({ stateDir: STATE_DIR, fs });
+  assert.deepEqual(shown.items.map((item) => item.state), ["failed", "failed", "failed", "pending", "pending"]);
+
+  const online = fakeManager();
+  await run(online, fs, { T3_PREINSTALL: "agents" });
+  assert.deepEqual(online.calls, ["agent:claude", "agent:codex", "agent:opencode", "agent:grok", "agent:cursor"]);
+});
+
+test("an agent the user uninstalled stays uninstalled, even after a failed first try", async () => {
+  const fs = memoryFs();
+  await run(fakeManager({ fail: { claude: "rate limited" } }), fs, { T3_PREINSTALL: "claude" });
+  // Since then: Install from the page, then Uninstall. The manager remembers.
+  const manager = fakeManager({ declined: ["claude"] });
+  const summary = await run(manager, fs, { T3_PREINSTALL: "claude" });
+  assert.deepEqual(manager.calls, []);
+  assert.deepEqual(summary.skipped, ["agent:claude"]);
 });

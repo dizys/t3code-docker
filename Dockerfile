@@ -282,10 +282,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/t3-* \
 
 # The agent names, for `docker exec <container> claude` and friends: links to
 # t3-agent, which runs the managed install as t3. They sit in their own
-# root-owned directory at the end of PATH because T3 decides whether an agent
-# is installed by finding its name on PATH; the entrypoint drops this
-# directory from the server's environment so an uninstalled agent reads as
-# uninstalled there, and login shells get it back through the profile.
+# root-owned directory at the end of the image PATH because T3 decides whether
+# an agent is installed by finding its name on PATH: the entrypoint drops it
+# from the server's environment, and login shells (which T3 also reads its
+# PATH from) never get it, so an uninstalled agent reads as uninstalled.
 RUN mkdir -p /usr/local/lib/t3-agents \
     && for agent in claude codex opencode grok cursor-agent; do \
          ln -sfn /usr/local/bin/t3-agent "/usr/local/lib/t3-agents/${agent}"; \

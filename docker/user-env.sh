@@ -52,13 +52,11 @@ if [ "$(id -u)" != "0" ]; then
     *) PATH="${MISE_DATA_DIR}/shims:${PATH}"; export PATH ;;
   esac
 
-  # The agent names by way of the dispatcher, last, for terminals: Cursor has
-  # no shim, and an agent that is not installed yet says so instead of
-  # "command not found". The entrypoint takes this back out for T3 itself.
-  case ":$PATH:" in
-    *":/usr/local/lib/t3-agents:"*) ;;
-    *) PATH="${PATH}:/usr/local/lib/t3-agents"; export PATH ;;
-  esac
+  # The agent dispatcher (/usr/local/lib/t3-agents, on the image PATH for
+  # `docker exec`) is deliberately not added here. T3 reads its PATH from an
+  # interactive login shell, which runs this file, and decides an agent is
+  # installed by finding its name there; the dispatcher answers to every
+  # agent name, installed or not.
 
   # Interactive bash also gets mise's full activation, which keeps the tool
   # environment current when the shell changes directory. Non-interactive

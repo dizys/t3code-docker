@@ -8,10 +8,9 @@
 # /usr/local/lib/t3-agents (last on the image PATH) are links to this
 # root-owned script. It steps down to t3 (where a sign-in has to land anyway),
 # asks the harness manager which exact executable is installed, and runs that.
-# In the t3 user's own shells the mise shims come first on PATH, so this only
-# answers where they do not: root, a bare `docker exec -u t3`, and
-# cursor-agent, which has no shim (its package would shadow node). T3 itself
-# never sees it: the entrypoint drops the directory from the server's PATH.
+# It answers where the t3 user's shell setup is absent: root, and a bare
+# `docker exec -u t3`. T3 itself never sees it: the entrypoint drops the
+# directory from the server's PATH, and login shells never add it.
 set -euo pipefail
 
 name="$(basename "$0")"

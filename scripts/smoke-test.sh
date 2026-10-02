@@ -440,18 +440,23 @@ image_node_wins() {
 }
 check "Cursor's bundled node does not shadow the image's" image_node_wins
 # `docker exec` has none of the t3 user's shell setup; the dispatcher still
-# runs the managed install, as t3 even when called as root. Cursor has no shim,
-# so the dispatcher is also what a terminal finds for cursor-agent.
+# runs the managed install, as t3 even when called as root - Cursor included,
+# which has no shim at all.
 agents_by_name_from_exec() {
   local want got
   want="$(status_json | jq -r '.harnesses[] | select(.id == "claude") | .version')"
   got="$(docker exec "$NAME" claude --version 2>/dev/null | head -1)"
   case "$got" in *"$want"*) ;; *) return 1 ;; esac
   docker exec -u t3 "$NAME" opencode --version >/dev/null 2>&1 &&
-  docker exec -u t3 "$NAME" bash -lc 'cd /tmp && cursor-agent --version' >/dev/null 2>&1 &&
+  docker exec -u t3 "$NAME" cursor-agent --version >/dev/null 2>&1 &&
   [ "$(docker exec "$NAME" sh -c 'stat -c %U /home/t3/.claude.json 2>/dev/null || echo t3')" = t3 ]
 }
 check "agents run by name from docker exec, as the t3 user" agents_by_name_from_exec
+# T3 reads its PATH from `$SHELL -ilc` and calls an agent installed when its
+# name is found there. The dispatcher answers to every name, so it must never
+# be on that PATH, or an uninstalled agent reads as installed.
+check "T3's login-shell PATH does not include the agent dispatcher" \
+  "! docker exec -u t3 $NAME bash -ilc 'echo \"\$PATH\"' 2>/dev/null | grep -q t3-agents"
 check "toolchains run from any directory, as the t3 user" \
   "docker exec -u t3 $NAME bash -lc 'cd /tmp && go version && cargo --version && cargo clippy --version && rustfmt --version && bun --version && deno --version && uv --version'"
 

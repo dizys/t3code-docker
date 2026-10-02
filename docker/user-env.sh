@@ -52,6 +52,14 @@ if [ "$(id -u)" != "0" ]; then
     *) PATH="${MISE_DATA_DIR}/shims:${PATH}"; export PATH ;;
   esac
 
+  # The agent names by way of the dispatcher, last, for terminals: Cursor has
+  # no shim, and an agent that is not installed yet says so instead of
+  # "command not found". The entrypoint takes this back out for T3 itself.
+  case ":$PATH:" in
+    *":/usr/local/lib/t3-agents:"*) ;;
+    *) PATH="${PATH}:/usr/local/lib/t3-agents"; export PATH ;;
+  esac
+
   # Interactive bash also gets mise's full activation, which keeps the tool
   # environment current when the shell changes directory. Non-interactive
   # contexts and explicit `mise exec` do not need it.

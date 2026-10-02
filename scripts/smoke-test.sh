@@ -124,9 +124,10 @@ check "t3 runs" "docker exec $NAME t3 --version"
 only_the_dispatcher_is_baked() {
   docker exec "$NAME" sh -c '
     for agent in claude codex opencode grok cursor-agent; do
-      [ "$(readlink -f "$(command -v "$agent")")" = /usr/local/bin/t3-agent ] || exit 1
+      [ "$(command -v "$agent")" = "/usr/local/lib/t3-agents/$agent" ] || exit 1
+      [ "$(readlink -f "/usr/local/lib/t3-agents/$agent")" = /usr/local/bin/t3-agent ] || exit 1
     done
-    [ "$(stat -c %U /usr/local/bin/t3-agent)" = root ]'
+    [ "$(stat -c %U /usr/local/bin/t3-agent /usr/local/lib/t3-agents | sort -u)" = root ]'
 }
 check "no harness executable is baked, only the root-owned dispatcher" only_the_dispatcher_is_baked
 check "mise ships" "docker exec $NAME mise --version"

@@ -4,13 +4,14 @@
 #
 # The agents install into the t3 user's persistent home, and that directory is
 # deliberately not on the image-wide PATH: root must never resolve a command
-# the t3 user can write. So /usr/local/bin/claude, codex, opencode, grok and
-# cursor-agent are links to this root-owned script. It steps down to t3 (where
-# a sign-in has to land anyway), asks the harness manager which exact
-# executable is installed, and runs that. In the t3 user's own shells the mise
-# shims come first on PATH, so this only answers where they do not: root,
-# a bare `docker exec -u t3`, and cursor-agent, which has no shim (its package
-# would shadow node).
+# the t3 user can write. So claude, codex, opencode, grok and cursor-agent in
+# /usr/local/lib/t3-agents (last on the image PATH) are links to this
+# root-owned script. It steps down to t3 (where a sign-in has to land anyway),
+# asks the harness manager which exact executable is installed, and runs that.
+# In the t3 user's own shells the mise shims come first on PATH, so this only
+# answers where they do not: root, a bare `docker exec -u t3`, and
+# cursor-agent, which has no shim (its package would shadow node). T3 itself
+# never sees it: the entrypoint drops the directory from the server's PATH.
 set -euo pipefail
 
 name="$(basename "$0")"

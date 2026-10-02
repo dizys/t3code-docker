@@ -198,6 +198,12 @@ if [ "${1:-}" != "t3-serve" ]; then
 fi
 shift || true
 
+# T3 decides an agent is installed by finding its name on PATH, and the
+# dispatcher answers to every agent name whether it is installed or not. Keep
+# it out of what the server and everything started here inherits.
+PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vx '/usr/local/lib/t3-agents' | paste -sd: -)"
+export PATH
+
 register_projects() {
   [ "$T3_AUTO_ADD_PROJECTS" = "1" ] || return 0
   [ -d "$T3_WORKSPACE" ] || return 0

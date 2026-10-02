@@ -277,13 +277,20 @@ RUN "$T3_INFRA_NODE" /usr/local/share/t3-client/patch.mjs
 # `t3` is the same immutable launcher under its user-facing name, for root's
 # shell and anyone typing it. Nothing in the image resolves it by name: the
 # entrypoint, the setup service and the helpers all use T3_INFRA_LAUNCHER.
-# The agent names go to t3-agent, which runs the managed install as t3, so
-# `docker exec <container> claude` works without the user's shell setup.
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/t3-* \
-    && ln -sfn t3-admin /usr/local/bin/t3 \
+    && ln -sfn t3-admin /usr/local/bin/t3
+
+# The agent names, for `docker exec <container> claude` and friends: links to
+# t3-agent, which runs the managed install as t3. They sit in their own
+# root-owned directory at the end of PATH because T3 decides whether an agent
+# is installed by finding its name on PATH; the entrypoint drops this
+# directory from the server's environment so an uninstalled agent reads as
+# uninstalled there, and login shells get it back through the profile.
+RUN mkdir -p /usr/local/lib/t3-agents \
     && for agent in claude codex opencode grok cursor-agent; do \
-         ln -sfn t3-agent "/usr/local/bin/${agent}"; \
+         ln -sfn /usr/local/bin/t3-agent "/usr/local/lib/t3-agents/${agent}"; \
        done
+ENV PATH=${PATH}:/usr/local/lib/t3-agents
 
 ENV T3CODE_HOME=/home/t3/.t3 \
     T3CODE_HOST=0.0.0.0 \

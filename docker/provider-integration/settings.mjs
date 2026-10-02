@@ -41,16 +41,27 @@ export function statePathFor(baseDir) {
 
 /**
  * Whether the managed path may be written over `current`. Only values nobody
- * chose are ours to replace: absent, empty, T3's own default name, or the exact
- * path this module wrote last time. A wrapper script or a different install
- * someone pointed T3 at in its settings stays theirs.
+ * chose are ours to replace: absent, empty, T3's own default name, the exact
+ * path this module wrote last time, or an absolute path that no longer exists
+ * (`dead`) - an old image's /opt/npm-global/bin/claude, say, which T3 could
+ * never launch again. A wrapper script or a different install someone pointed
+ * T3 at in its settings stays theirs.
  */
-export function replaceable(current, { owned = null, defaultBinary = null } = {}) {
+export function replaceable(current, { owned = null, defaultBinary = null, dead = null } = {}) {
   if (current === undefined || current === null) return true;
   const value = String(current).trim();
   if (value === "") return true;
   if (defaultBinary && value === defaultBinary) return true;
+  if (dead?.has(value)) return true;
   return owned !== null && value === owned;
+}
+
+/** Both places T3 may hold a provider's binaryPath, for the dead-path check. */
+export function binaryPathsFor(settings, driver) {
+  return [
+    settings.providers?.[driver]?.binaryPath,
+    settings.providerInstances?.[driver]?.config?.binaryPath,
+  ].filter((value) => typeof value === "string" && value.trim() !== "").map((value) => value.trim());
 }
 
 /**

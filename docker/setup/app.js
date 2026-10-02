@@ -354,7 +354,8 @@ if ($('mint')) {
   const versionDrafts = new Map();
   const lifecycleBusy = new Set();   // POST in flight
   const pendingOps = new Map();      // accepted (202), waiting on /status
-  const notices = new Map();         // last error per key, shown on the row
+  const notices = new Map();         // last error or warning per key: {text, tone}
+  let lastStatus = null;             // the last /status, to redraw a row at once
   const DONE = { install: 'Installed', update: 'Updated', uninstall: 'Uninstalled' };
   const WORKING = { install: 'Installing…', update: 'Updating…', uninstall: 'Removing…' };
 
@@ -372,18 +373,47 @@ if ($('mint')) {
     lifecycleBusy.has(key) || pendingOps.has(key) || Boolean(runningOp(s, key)) || Boolean(facts.inProgress);
 
   // A click accepted earlier has finished: say how, once.
+  const factsFor = (s, key) => {
+    const [target, id] = key.split(':');
+    const list = target === 'harness' ? s.harnesses : (s.toolchains || []);
+    return list.find((x) => x.id === id) || {};
+  };
   const settleOperations = (s) => {
     for (const [key, pending] of pendingOps) {
       const op = (s.operations || {})[key];
-      if (!op || op.state === 'running') continue;
+      if (!op) {
+        // The setup service restarted and forgot it. Once nothing is running
+        // for this row any more, stop waiting: the row shows where it ended.
+        if (Date.now() - pending.at > 10000 && !factsFor(s, key).inProgress) {
+          pendingOps.delete(key);
+          notices.set(key, { tone: 'warn', text: 'The setup service restarted during this '
+            + pending.kind + '; the row shows where it ended up.' });
+        }
+        continue;
+      }
+      if (op.state === 'running') continue;
       pendingOps.delete(key);
       if (op.state === 'ok') {
-        notices.delete(key);
+        if (op.warning) notices.set(key, { tone: 'warn', text: op.warning });
+        else notices.delete(key);
         toast(DONE[op.kind] + ' ' + pending.name, CHECK);
       } else {
-        notices.set(key, op.error || ('Could not ' + op.kind + ' ' + pending.name));
+        notices.set(key, { tone: 'err', text: op.error || ('Could not ' + op.kind + ' ' + pending.name) });
       }
     }
+  };
+  const noticeLine = (key) => {
+    const notice = notices.get(key);
+    return notice
+      ? '<span style="color:var(--' + (notice.tone === 'warn' ? 'warn' : 'err') + '-fg)">'
+        + esc(notice.text) + '</span>'
+      : '';
+  };
+  // Show the click as taken straight away, without waiting on /status.
+  const redrawRows = () => {
+    if (!lastStatus) return;
+    renderToolchains(lastStatus);
+    if (!panelActive) renderAgents(lastStatus);
   };
 
   const callLifecycle = async (target, kind, id, name) => {
@@ -391,7 +421,7 @@ if ($('mint')) {
     const version = target === 'harness' ? (versionDrafts.get(id) ?? '').trim() : '';
     notices.delete(key);
     lifecycleBusy.add(key);
-    load();
+    redrawRows();
     try {
       const res = await fetch(BASE + '/' + (target === 'harness' ? 'harnesses' : 'toolchains') + '/' + kind, {
         method: 'POST', headers: {'content-type': 'application/json'},
@@ -399,16 +429,16 @@ if ($('mint')) {
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 202) {
-        pendingOps.set(key, { kind, name });
+        pendingOps.set(key, { kind, name, at: Date.now() });
         versionDrafts.delete(id);
       } else if (!res.ok || data.ok === false) {
-        notices.set(key, data.error || ('Could not ' + kind + ' ' + name));
+        notices.set(key, { tone: 'err', text: data.error || ('Could not ' + kind + ' ' + name) });
       } else {
         versionDrafts.delete(id);
         toast(DONE[kind] + ' ' + name, CHECK);
       }
     } catch (error) {
-      notices.set(key, String(error.message || error));
+      notices.set(key, { tone: 'err', text: String(error.message || error) });
     } finally {
       lifecycleBusy.delete(key);
     }
@@ -451,8 +481,8 @@ if ($('mint')) {
     if (h.version) lines.push('<span class="tc-mono">' + esc(h.version) + '</span>');
     const failure = failureLine(h);
     if (failure) lines.push(failure);
-    const notice = notices.get('harness:' + h.id);
-    if (notice) lines.push('<span style="color:var(--err-fg)">' + esc(notice) + '</span>');
+    const notice = noticeLine('harness:' + h.id);
+    if (notice) lines.push(notice);
     // How each one authenticates, so a button press holds no surprises.
     const how = h.canSignIn && h.canSetKey ? 'Browser sign-in, or a stored API key'
       : h.canSignIn ? 'Browser sign-in'
@@ -551,8 +581,8 @@ if ($('mint')) {
       if (t.version) lines.push('<span class="tc-mono">' + esc(t.version) + '</span>');
       const failure = failureLine(t);
       if (failure) lines.push(failure);
-      const notice = notices.get(key);
-      if (notice) lines.push('<span style="color:var(--err-fg)">' + esc(notice) + '</span>');
+      const notice = noticeLine(key);
+      if (notice) lines.push(notice);
       const actions = busy
         ? '<button type="button" class="tc-btn tc-btn--ghost tc-btn--sm" disabled'
           + ' aria-label="Working"><span class="tc-spin"></span></button>'
@@ -595,7 +625,10 @@ if ($('mint')) {
     const items = (setup && setup.items) || [];
     if (!items.length) { el.innerHTML = ''; return; }
     const done = items.filter((i) => i.state === 'done').length;
-    const failed = items.filter((i) => i.state === 'failed');
+    // After a finished run, anything still pending was not tried: the run
+    // stops after three failures in a row, which is nearly always no network.
+    const failed = items.filter((i) => i.state === 'failed'
+      || (setup.state === 'finished' && i.state === 'pending'));
     if (setup.state === 'running') {
       const current = items.find((i) => i.state === 'installing');
       el.innerHTML = '<div class="tc-notice tc-notice--info"><span class="tc-spin" aria-hidden="true"></span>'
@@ -841,6 +874,7 @@ if ($('mint')) {
       const res = await fetch(BASE + '/status');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       s = await res.json();
+      lastStatus = s;
     } catch (error) {
       // Name the URL and the reason. "Could not read status" sent someone
       // hunting a migration bug when the page was calling the wrong path.

@@ -20,6 +20,7 @@ import { PROVIDERS } from "./providers.mjs";
 import {
   applyManaged,
   baseDirFor,
+  binaryPathsFor,
   clearManaged,
   readJson,
   settingsPathFor,
@@ -133,23 +134,29 @@ export function createProviderIntegration(options = {}) {
 
       const desired = fact.runnable && fact.executable ? fact.executable : null;
       if (desired) {
+        const dead = new Set();
+        for (const value of binaryPathsFor(settings, provider.driver)) {
+          if (value.startsWith("/") && value !== desired && !(await fs.exists(value))) dead.add(value);
+        }
         const result = applyManaged(settings, provider.driver, desired, {
           owned: recorded,
           defaultBinary: provider.defaultBinary,
+          dead,
         });
         if (result.changed) {
           settings = result.settings;
           settingsChanged = true;
         }
-        if (result.kept) {
-          // Someone pointed T3 elsewhere. Their value wins, and this module
-          // stops claiming the field so a later Uninstall cannot retract it.
-          delete managed[provider.id];
-          kept.push({ id: provider.id, driver: provider.driver, executable: desired });
-        } else {
+        // Claim the field only where it now holds the managed path. Where
+        // someone pointed T3 elsewhere their value wins, and this module stops
+        // claiming it so a later Uninstall cannot retract it.
+        if (binaryPathsFor(settings, provider.driver).includes(desired)) {
           managed[provider.id] = { driver: provider.driver, executable: desired, at: now() };
           applied.push({ id: provider.id, driver: provider.driver, executable: desired });
+        } else {
+          delete managed[provider.id];
         }
+        if (result.kept) kept.push({ id: provider.id, driver: provider.driver, executable: desired });
       } else if (recorded) {
         const result = clearManaged(settings, provider.driver, recorded);
         if (result.changed) {

@@ -80,7 +80,7 @@ check("lifecycle failures stay visible",
   has(APP, "notices.set(key"),
   "POST errors and background failures must render inline, not only as a toast");
 check("lifecycle answers before the download finishes",
-  has(SERVER, "Promise.race([started, done])") && has(SERVER, "operations: Object.fromEntries(operations)")
+  has(SERVER, "Promise.race([started, done])") && has(SERVER, "operations: Object.fromEntries(")
     && has(APP, "res.status === 202"),
   "an install must not hold the request open for the length of a download");
 

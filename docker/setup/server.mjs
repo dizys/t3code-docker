@@ -481,7 +481,7 @@ const status = async () => {
     setup,
     // How the operations this page started ended, so a click that returned
     // 202 can still end in a toast or an error on the row.
-    operations: Object.fromEntries(operations),
+    operations: Object.fromEntries([...operations].map(([key, { token: _token, ...op }]) => [key, op])),
     pairings,
     sessions,
     degraded,
@@ -1135,6 +1135,20 @@ const portsStatus = async () => ({
 // none` the authenticated read races its budget and falls back to cached or
 // cheap local facts (see the offline-safe status block above).
 
+// The install worked, but T3 may still not be pointed at it: the settings file
+// could not be written, or someone set this agent's binary path themselves.
+// Say so on the row instead of letting an "Installed" toast imply otherwise.
+const syncWarning = (id, sync) => {
+  if (!sync) return null;
+  if (sync.ok === false) {
+    return `Installed, but T3's settings were not updated (${String(sync.error ?? sync.code ?? "unknown").slice(0, 160)}).`;
+  }
+  if ((sync.kept ?? []).some((entry) => entry.id === id)) {
+    return "Installed. T3 is set to a binary path of your own for this agent, so it keeps using that one.";
+  }
+  return null;
+};
+
 // Install, update and uninstall take from seconds to minutes: Codex is a
 // 400 MB download, and a phone on a tunnel will not hold a request open that
 // long (Cloudflare cuts it at 100 s and the page reported a failure while the
@@ -1161,12 +1175,16 @@ const startLifecycle = async (target, kind, input) => {
   const manager = await loadHarness();
   const ops = target === "harness" ? manager : manager.toolchains;
   const key = `${target}:${id}`;
+  // Only the request that actually took the lock reports into `operations`.
+  // A second click refused as busy must not overwrite the one still running.
+  const token = randomBytes(6).toString("hex");
+  const mine = () => operations.get(key)?.token === token && operations.get(key)?.state === "running";
   let markStarted;
   const started = new Promise((resolve) => { markStarted = resolve; });
   const options = {
     ...(version ? { version } : {}),
     onStarted: () => {
-      operations.set(key, { kind, state: "running", error: null, startedAt: Date.now(), finishedAt: null });
+      operations.set(key, { kind, state: "running", token, error: null, warning: null, startedAt: Date.now(), finishedAt: null });
       markStarted(null);
       // Let the next poll see the lock instead of the facts from before it.
       void harnessCache.invalidate().catch(() => {});
@@ -1186,17 +1204,18 @@ const startLifecycle = async (target, kind, input) => {
     // sees "ok" also sees the agent installed.
     forgetSignInState(id);
     try { await harnessCache.invalidate(); } catch { /* the next poll refreshes */ }
-    if (operations.get(key)?.state === "running") {
+    if (mine()) {
       operations.set(key, {
         ...operations.get(key),
         state: result?.ok ? "ok" : "failed",
         error: result?.ok ? null : String(result?.error ?? "failed").slice(0, 300),
+        warning: result?.ok ? syncWarning(id, sync) : null,
         finishedAt: Date.now(),
       });
     }
     return { result, sync };
   }, (error) => {
-    if (operations.get(key)?.state === "running") {
+    if (mine()) {
       operations.set(key, {
         ...operations.get(key), state: "failed", error: String(error?.message ?? error).slice(0, 300), finishedAt: Date.now(),
       });

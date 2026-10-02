@@ -11,8 +11,8 @@
 // every dependency injectable so the unit tests can drive exact timing
 // without a container or a network.
 
-/** Per-request bound for the offline endpoints. Acceptance is five seconds;
-// keep headroom for HTTP framing and the local reads that share the budget. */
+/** Per-request bound for the offline endpoints, which should answer within five
+// seconds; keep headroom for HTTP framing and the local reads that share it. */
 export const STATUS_BUDGET_MS = 4500;
 
 /**

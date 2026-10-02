@@ -312,6 +312,7 @@ test("a degraded mise changes nothing, even with managed paths recorded", async 
 test("sync keeps a binaryPath someone set, and replaces only T3's default name", async () => {
   const wrapper = "/home/t3/bin/my-codex-wrapper";
   const fs = memoryFs({
+    [wrapper]: "#!/bin/sh\nexec codex \"$@\"\n",
     [SETTINGS]: JSON.stringify({
       providers: {
         codex: { binaryPath: wrapper },
@@ -343,6 +344,29 @@ test("sync keeps a binaryPath someone set, and replaces only T3's default name",
   const uninstalled = createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness: nothingRunnable });
   await uninstalled.sync();
   assert.equal(JSON.parse(fs.files.get(SETTINGS)).providers.codex.binaryPath, wrapper);
+});
+
+test("a binaryPath to an executable that no longer exists is replaced", async () => {
+  // What an upgrade from the old baked image can leave behind: an absolute
+  // path into a prefix the new image does not have.
+  const fs = memoryFs({
+    [SETTINGS]: JSON.stringify({
+      providers: { claudeAgent: { binaryPath: "/opt/npm-global/bin/claude", enabled: true } },
+      providerInstances: { cursor: { driver: "cursor", config: { binaryPath: "/opt/cursor/.local/bin/cursor-agent" } } },
+    }),
+  });
+  const claudePath = "/home/t3/.local/share/mise/installs/claude/2.1.285/claude";
+  const cursorPath = "/home/t3/.local/share/mise/installs/cursor-agent/2026.09.28-64d2043/dist-package/cursor-agent";
+  const harness = fakeHarness([
+    fact("claude", { runnable: true, executable: claudePath }),
+    fact("cursor", { runnable: true, executable: cursorPath }),
+  ]);
+  const report = await createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness }).sync();
+  assert.deepEqual(report.kept, []);
+  const written = JSON.parse(fs.files.get(SETTINGS));
+  assert.equal(written.providers.claudeAgent.binaryPath, claudePath);
+  assert.equal(written.providers.claudeAgent.enabled, true);
+  assert.equal(written.providerInstances.cursor.config.binaryPath, cursorPath);
 });
 
 test("sync leaves Codex alone when T3's own managed setup owns it", async () => {

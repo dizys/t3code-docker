@@ -93,7 +93,7 @@ amd64-only.) To run a published image instead of building, set `T3_IMAGE` in
 `.env` and drop `--build`.
 
 The first start installs the agents and toolchains onto the `/home/t3` volume
-in the background; it takes a minute or two on a decent connection, and the
+in the background; it takes a few minutes on a decent connection, and the
 setup page shows it happening. Meanwhile open the setup UI on port **3774**,
 enter your `T3_SETUP_KEY`, and press **Create pairing link**. Scan the QR with
 the T3 Code app, or open the link in a browser.
@@ -123,7 +123,7 @@ docker compose exec -it t3code t3-login claude   # if you prefer a shell to the 
 | mise, for per-project versions | ✅ | ✅ |
 | Headless Chromium + browser MCP servers | ✅ | — |
 | cloudflared, for publishing a port | ✅ | ✅ |
-| Image size (pulled) | ~2.5 GB (~1.0 GB) | ~1.9 GB (~0.7 GB) |
+| Image size, unpacked (download) | ~2.5 GB (~1.0 GB) | ~1.9 GB (~0.7 GB) |
 
 "First start" means the container installs them onto the `/home/t3` volume the
 first time it runs, in the background, and never again: about 2.5 GB that lives
@@ -201,9 +201,9 @@ docker compose exec t3code t3-harness uninstall grok
 
 Uninstall removes the executable and the T3 Code wiring but keeps credentials
 and user data, so installing again gets you straight back to signed in. An
-agent you uninstall stays uninstalled; the first-start install never brings it
-back. If you set an agent's binary path yourself in T3 Code's provider
-settings, that path is left alone.
+agent you uninstall stays uninstalled for as long as the home volume lives;
+the first-start install does not bring it back. If you set an agent's binary
+path yourself in T3 Code's provider settings, that path is left alone.
 
 Each installed agent gets the sign-in actions it actually supports, established
 by running the CLIs rather than reading about them:
@@ -435,8 +435,8 @@ docker compose exec t3code t3-browser-mcp --remove
 
 That registers a headless Chromium as an MCP server with the managed Claude
 Code, Codex, and OpenCode harnesses, so the agent can navigate, screenshot,
-click, and read the console whatever client you are on. Install those harnesses
-first (the setup page's **Agents** card or `t3-harness install`). Start a new
+click, and read the console whatever client you are on. Run it once the first
+start has installed those agents (the setup page shows when). Start a new
 thread afterwards — providers read their MCP configuration at session start.
 
 Playwright is the default: `chrome-devtools-mcp` officially supports Google
@@ -483,8 +483,8 @@ different Node versions, and an agent that runs `node` in a project directory
 gets that project's Node:
 
 ```bash
-docker compose exec -u t3 t3code mise install        # in a project with mise.toml
-docker compose exec -u t3 t3code mise use node@22    # records the exact version
+docker compose exec -u t3 -w /workspace/myapp t3code mise install       # what mise.toml asks for
+docker compose exec -u t3 -w /workspace/myapp t3code mise use node@22   # pins it, exactly
 ```
 
 Two policies are worth knowing, both set in `/etc/mise/config.toml`:

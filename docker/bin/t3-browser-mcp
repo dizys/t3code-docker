@@ -6,8 +6,8 @@
 # connected there is no host, so the agent cannot see anything it builds. This
 # gives the agent a browser that lives in the container instead.
 #
-# Registration runs through the managed harness the setup console installed
-# (the same executable T3 launches). The final images ship no baked harness.
+# Registration runs through the managed harness (the same executable T3
+# launches), so install the agents first - the first start does by default.
 set -euo pipefail
 
 # `docker exec` lands as root (the image sets no USER so the entrypoint can
@@ -87,25 +87,23 @@ if [ "$action" = "add" ] && ! command -v "$cmd" >/dev/null 2>&1; then
   exit 1
 fi
 
-# The managed executable for a harness when one is runnable, else the name
-# resolved from PATH (empty when neither exists).
-harness_exec() { # id name
+# The managed executable for a harness when one is runnable, else empty. PATH
+# is not consulted: the names there are t3-agent, which resolves the same way.
+harness_exec() { # id
   local managed=""
   if [ -r "$T3_PROVIDER_CLI" ] && [ -x "$T3_INFRA_NODE" ]; then
     managed="$("$T3_INFRA_NODE" "$T3_PROVIDER_CLI" resolve "$1" 2>/dev/null || true)"
   fi
   if [ -n "$managed" ] && [ -x "$managed" ]; then
     printf '%s' "$managed"
-    return 0
   fi
-  command -v "$2" 2>/dev/null || true
 }
 
 json_args="$(printf '%s\n' "${args[@]}" | jq -R . | jq -s .)"
 
 register_claude() {
   local bin
-  bin="$(harness_exec claude claude)"
+  bin="$(harness_exec claude)"
   [ -n "$bin" ] || { echo "  claude: not installed"; return; }
   if [ "$action" = "remove" ]; then
     "$bin" mcp remove --scope user "$name" >/dev/null 2>&1 || true
@@ -122,7 +120,7 @@ register_claude() {
 
 register_codex() {
   local bin
-  bin="$(harness_exec codex codex)"
+  bin="$(harness_exec codex)"
   [ -n "$bin" ] || { echo "  codex: not installed"; return; }
   local config="${CODEX_HOME:-$HOME/.codex}/config.toml"
   mkdir -p "$(dirname "$config")"
@@ -155,7 +153,7 @@ register_codex() {
 
 register_opencode() {
   local bin
-  bin="$(harness_exec opencode opencode)"
+  bin="$(harness_exec opencode)"
   [ -n "$bin" ] || { echo "  opencode: not installed"; return; }
   local config="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
   mkdir -p "$(dirname "$config")"

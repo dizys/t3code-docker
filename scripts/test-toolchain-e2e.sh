@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end verification of the final toolchain-management product.
+# End-to-end verification of the agent lifecycle on a real image.
 #
 #   scripts/test-toolchain-e2e.sh --variant core|browser <image>
 #                               [--keep]
@@ -7,7 +7,7 @@
 # The unit under test is the assembled product a fresh user meets, on one real
 # amd64 image, not one module in isolation:
 #
-#   - a fresh final image ships the installer and no baked harness;
+#   - a fresh image ships the installer and no baked harness;
 #   - the noninteractive CLI installs all five harnesses and T3's own provider
 #     probes (SDK init, app-server, serve, ACP) run the exact managed
 #     executables, from T3's cached snapshots;
@@ -21,7 +21,7 @@
 #   - T3 and setup keep running on the image Node while the project selects
 #     another one;
 #   - Uninstall retracts the managed path from T3 and removes the executable
-#     without touching credentials, and the final images report no baked
+#     without touching credentials;
 #   - on `browser`, `t3-browser-mcp` registers the MCP servers through the
 #     managed Claude, Codex and OpenCode, and Chromium drives a real page.
 #

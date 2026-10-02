@@ -43,6 +43,12 @@ OWNERSHIP_MARKER="${T3CODE_HOME}/.ownership-migration"
 # marker's directory entry itself rather than writing through it.
 write_ownership_marker() {
   local tmp
+  # The directory itself could be a link the t3 user planted; root writes
+  # nothing through it. The migration still runs, it is just not resumable.
+  if [ -L "$T3CODE_HOME" ]; then
+    log "WARNING: ${T3CODE_HOME} is a symlink; not recording migration intent there"
+    return 0
+  fi
   tmp="$(mktemp "${OWNERSHIP_MARKER}.XXXXXX")"
   {
     printf 'version=1\n'
@@ -179,6 +185,11 @@ fi
 # none), and `docker exec -u t3 npm i -g` then fails on the root-owned system
 # prefix. Add the prefix once, without touching anything else in the file.
 if ! grep -qs '^prefix=' "${T3_HOME}/.npmrc"; then
+  # A file without a trailing newline would otherwise get the prefix glued
+  # onto its last line - often an auth token.
+  if [ -s "${T3_HOME}/.npmrc" ] && [ -n "$(tail -c 1 "${T3_HOME}/.npmrc")" ]; then
+    printf '\n' >> "${T3_HOME}/.npmrc" 2>/dev/null || true
+  fi
   printf 'prefix=/opt/npm-global\n' >> "${T3_HOME}/.npmrc" 2>/dev/null || true
 fi
 

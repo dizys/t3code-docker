@@ -2,16 +2,19 @@
 
 # T3 Code, packaged as a headless server.
 #
-# Two final targets:
-#   core    - FINAL DEFAULT (`latest`). Base + full non-browser OS packages,
-#             image infrastructure, mise, and the harness installer. No baked
-#             harness executables, no baked language runtimes (Go/Rust/Bun/Deno/
-#             uv and project language versions install through mise), no browser.
-#   browser - core + Chromium, fonts, and both browser-automation MCP servers.
+# Two targets:
+#   browser - the default (`latest`): core + Chromium, fonts, and both
+#             browser-automation MCP servers.
+#   core    - T3 Code, the setup service, the full non-browser OS toolchain,
+#             mise and the harness installer. No browser.
 #
-# Build:  docker build --target core -t t3code:core .
-#         docker build --target browser -t t3code:browser .
-# See README.md for the runtime contract and the target profiles.
+# Neither bakes an agent CLI or a language toolchain: the first start installs
+# them onto the /home/t3 volume (T3_PREINSTALL), where they stay.
+#
+# Build:  docker build -t t3code:browser .
+#         docker build --target core -t t3code:core .
+# `full` and `slim` remain as aliases at the end, so an older .env still builds.
+# See README.md for the runtime contract.
 
 ARG NODE_IMAGE=node:24-trixie-slim
 
@@ -193,9 +196,9 @@ RUN set -eux; \
     chown -R t3:t3 /home/t3/.config /home/t3/.local /home/t3/.cache
 
 # ---------------------------------------------------------------------------
-# core - the default: base + full non-browser OS packages, T3 infrastructure,
-# mise (from base), and the harness installer. No baked harness executables,
-# no baked language runtimes, no browser.
+# core - base + full non-browser OS packages, T3 infrastructure, mise (from
+# base), and the harness installer. No baked harness executables, no baked
+# language runtimes, no browser.
 # ---------------------------------------------------------------------------
 FROM base AS core
 
@@ -274,8 +277,13 @@ RUN "$T3_INFRA_NODE" /usr/local/share/t3-client/patch.mjs
 # `t3` is the same immutable launcher under its user-facing name, for root's
 # shell and anyone typing it. Nothing in the image resolves it by name: the
 # entrypoint, the setup service and the helpers all use T3_INFRA_LAUNCHER.
+# The agent names go to t3-agent, which runs the managed install as t3, so
+# `docker exec <container> claude` works without the user's shell setup.
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/t3-* \
-    && ln -sfn t3-admin /usr/local/bin/t3
+    && ln -sfn t3-admin /usr/local/bin/t3 \
+    && for agent in claude codex opencode grok cursor-agent; do \
+         ln -sfn t3-agent "/usr/local/bin/${agent}"; \
+       done
 
 ENV T3CODE_HOME=/home/t3/.t3 \
     T3CODE_HOST=0.0.0.0 \
@@ -358,3 +366,11 @@ ARG IMAGE_VARIANT=browser
 ENV T3_IMAGE_VERSION=${IMAGE_VERSION} \
     T3_IMAGE_VARIANT=${IMAGE_VARIANT}
 LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
+
+# ---------------------------------------------------------------------------
+# The names the targets had before they stopped baking agents in, so a .env
+# that still says T3_BUILD_TARGET=full (or slim) keeps building. Same images;
+# `full` is last so a plain `docker build` gets it, and it is `browser`.
+# ---------------------------------------------------------------------------
+FROM core AS slim
+FROM browser AS full

@@ -4,8 +4,9 @@
 #   scripts/smoke-test.sh [--variant NAME] [image]      (default: t3code:browser)
 #
 # Capability profiles:
-#   core     default, installer + mise, no baked harnesses/runtimes/browser
-#   browser  core + Chromium/fonts/MCP servers
+#   browser  default (`latest`): core + Chromium/fonts/MCP servers
+#   core     installer + mise, no browser; agents and toolchains install on
+#            first start, in both
 #
 # The variant selects which capabilities are asserted; it is never inferred
 # from the presence of Chromium. When omitted it is inferred from the image
@@ -118,9 +119,16 @@ done
 printf '\nHarnesses (variant %s)\n' "$VARIANT"
 check "t3 runs" "docker exec $NAME t3 --version"
 # The image ships the installer, never the executables: a baked harness would
-# let a stale copy masquerade as a managed install.
-check "no harness executable is baked" \
-  "! docker exec $NAME sh -c 'command -v claude || command -v codex || command -v opencode || command -v grok || command -v cursor-agent' >/dev/null 2>&1"
+# let a stale copy masquerade as a managed install. The agent names on root's
+# PATH are all the root-owned dispatcher, which runs the managed install.
+only_the_dispatcher_is_baked() {
+  docker exec "$NAME" sh -c '
+    for agent in claude codex opencode grok cursor-agent; do
+      [ "$(readlink -f "$(command -v "$agent")")" = /usr/local/bin/t3-agent ] || exit 1
+    done
+    [ "$(stat -c %U /usr/local/bin/t3-agent)" = root ]'
+}
+check "no harness executable is baked, only the root-owned dispatcher" only_the_dispatcher_is_baked
 check "mise ships" "docker exec $NAME mise --version"
 check "harness installer ships" "docker exec $NAME t3-harness --help"
 check "provider integration ships" "docker exec $NAME test -r /opt/t3-provider/cli.mjs"
@@ -430,6 +438,19 @@ image_node_wins() {
     case "$(command -v rg || echo none)" in *mise*) false ;; *) true ;; esac'
 }
 check "Cursor's bundled node does not shadow the image's" image_node_wins
+# `docker exec` has none of the t3 user's shell setup; the dispatcher still
+# runs the managed install, as t3 even when called as root. Cursor has no shim,
+# so the dispatcher is also what a terminal finds for cursor-agent.
+agents_by_name_from_exec() {
+  local want got
+  want="$(status_json | jq -r '.harnesses[] | select(.id == "claude") | .version')"
+  got="$(docker exec "$NAME" claude --version 2>/dev/null | head -1)"
+  case "$got" in *"$want"*) ;; *) return 1 ;; esac
+  docker exec -u t3 "$NAME" opencode --version >/dev/null 2>&1 &&
+  docker exec -u t3 "$NAME" bash -lc 'cd /tmp && cursor-agent --version' >/dev/null 2>&1 &&
+  [ "$(docker exec "$NAME" sh -c 'stat -c %U /home/t3/.claude.json 2>/dev/null || echo t3')" = t3 ]
+}
+check "agents run by name from docker exec, as the t3 user" agents_by_name_from_exec
 check "toolchains run from any directory, as the t3 user" \
   "docker exec -u t3 $NAME bash -lc 'cd /tmp && go version && cargo --version && cargo clippy --version && rustfmt --version && bun --version && deno --version && uv --version'"
 

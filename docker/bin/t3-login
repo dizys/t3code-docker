@@ -42,9 +42,9 @@ Usage: t3-login <harness>
 Run this with a TTY:  docker compose exec -it t3code t3-login claude
 Then enable the provider in T3 Code under Settings > Providers.
 
-A harness installed through the setup console signs in with its managed
-executable. The final images bake no harness, so install one first
-(`t3-harness install <id>`) if nothing is resolved.
+Each agent signs in with its managed executable. The first start installs
+them in the background; if one is not there yet, wait for it (the setup page
+shows progress) or run `t3-harness install <id>`.
 
 `connect` authorizes this environment for T3 Connect. It does not start or
 disturb the running server - the link takes effect on the next start, so

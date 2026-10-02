@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared image capability profile for scripts that verify final targets.
+# Shared image capability profile for the scripts that verify the targets.
 #
 # Call t3_image_profile_resolve <caller> <image> <requested-variant>. It sets:
 #   VARIANT      core | browser

@@ -12,8 +12,8 @@
 //     Beside it, how many things need the person, counted as the console's
 //     own badges count them.
 //   - In T3's command palette, Setup's commands (Open setup, Pair a device,
-//     Agents, Toolchains, Ports) when a search names them, opening the same
-//     dialog on that page.
+//     Agents, Toolchains, Source control, Ports), found and ranked the way T3
+//     finds its own, opening the same dialog on that page.
 //
 // Both appear only when the console answers on this origin (the documented
 // route puts it at /__setup), so a deployment that does not route it keeps
@@ -63,66 +63,92 @@
     && event.origin === origin
     && event.data && event.data.source === 't3-setup' && typeof event.data.type === 'string');
 
-  // Setup's commands in T3's command palette. Each answers to its own few
-  // words, chosen not to collide with T3's commands ("open", "sign" and "go"
-  // would, and so would "github", "pull requests" and "source control", which
-  // T3's own actions and settings answer to), and every word of a search has
-  // to start one of them. The page
-  // commands also answer to "setup" with another word ("setup ports"), and
-  // "setup" alone finds only Open setup.
+  // Setup's commands in T3's command palette, searched the way T3 searches its
+  // own: each by what its row shows (its title, and the line under it), a
+  // page's title with Setup's name, and its `terms`, a few names it goes by.
   const PALETTE_ITEMS = [
-    { id: 'setup', route: null, title: 'Open setup', meta: 'Agents, toolchains, source control, ports and devices on this server', words: ['setup', 'console'] },
-    { id: 'agents', route: 'agents', title: 'Agents', meta: 'Setup · sign in, install and update', words: ['agents'] },
-    { id: 'pair', route: 'devices', title: 'Pair a device', meta: 'Setup · Devices', words: ['pair', 'pairing', 'devices'] },
-    { id: 'toolchains', route: 'toolchains', title: 'Toolchains', meta: 'Setup · Go, Rust, Bun, Deno, uv and any mise tool', words: ['toolchains', 'mise'] },
-    { id: 'sourcecontrol', route: 'sourcecontrol', title: 'Source control', meta: 'Setup · sign in to GitHub, GitLab, Forgejo, Gitea and Azure DevOps', words: ['gitlab', 'forgejo', 'codeberg', 'gitea', 'azure', 'glab'] },
-    { id: 'ports', route: 'ports', title: 'Ports', meta: 'Setup · publish a dev server', words: ['ports', 'publish'] },
+    { id: 'setup', route: null, title: 'Open setup', meta: 'Agents, toolchains, source control, ports and devices on this server', terms: ['setup console'] },
+    { id: 'agents', route: 'agents', title: 'Agents', meta: 'Setup · sign in, install and update', terms: [] },
+    { id: 'pair', route: 'devices', title: 'Pair a device', meta: 'Setup · Devices', terms: ['devices', 'pairing'] },
+    { id: 'toolchains', route: 'toolchains', title: 'Toolchains', meta: 'Setup · Go, Rust, Bun, Deno, uv and any mise tool', terms: [] },
+    { id: 'sourcecontrol', route: 'sourcecontrol', title: 'Source control', meta: 'Setup · sign in to GitHub, GitLab, Forgejo, Gitea and Azure DevOps', terms: ['codeberg', 'gh glab fj tea az'] },
+    { id: 'ports', route: 'ports', title: 'Ports', meta: 'Setup · publish a dev server', terms: [] },
   ];
 
+  /** T3's own search normalisation: no accents, lower case, single spaces. */
+  const searchText = (text) => String(text || '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
+
   /**
-   * Setup's commands for a palette search, and whether the search is plainly
-   * about them: four letters or more, when they take the highlight (Enter
-   * opens them). Shorter, a search like "set" could as well mean Settings,
-   * so they are listed without taking Enter from T3's own first result.
+   * How well one search term answers a search, as T3 scores its own: all of
+   * the search's words must be in it, and it is the whole search (3), starts
+   * with it (2), has it somewhere (1), or only has its words (0).
    */
-  const paletteMatches = (query) => {
-    const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
-    const length = words.join(' ').length;
-    if (length < 3) return { items: [], strong: false };
-    const starts = (list, word) => list.some((w) => w.startsWith(word));
-    const items = PALETTE_ITEMS.filter((item) => {
-      const own = words.filter((word) => starts(item.words, word));
-      const group = words.filter((word) => 'setup'.startsWith(word));
-      return words.every((word) => own.includes(word) || group.includes(word))
-        && (item.id === 'setup' || own.length > 0);
-    });
-    return { items, strong: items.length > 0 && length >= 4 };
+  const termScore = (term, query, words) => {
+    const text = searchText(term);
+    if (!text || !words.every((word) => text.includes(word))) return null;
+    return text === query ? 3 : text.startsWith(query) ? 2 : text.includes(query) ? 1 : 0;
   };
 
   /**
-   * Where an arrow key takes the highlight in the palette, over Setup's rows
-   * (`ours` of them, listed first) and T3's (`theirs`): one list, wrapping at
-   * both ends as T3's does. `own` is Setup's highlighted row, or -1 while
-   * T3's are in charge; `at` is T3's active row, or -1 before T3 has one (a
-   * fresh search: T3's first arrow key then lights its first row or its
-   * last). Returns the new `own`, and whether T3 should get the key too, to
-   * move its own highlight or light its first row.
+   * Setup's commands for a palette search, best first, matched and ranked as
+   * T3 matches and ranks its own: every word of the search somewhere in an
+   * item's terms, and the earliest term that has them all deciding its place.
+   * A leading ">" (T3's commands only) still finds them: they are commands.
    */
-  const paletteStep = ({ key, own, ours, theirs, at }) => {
+  const paletteMatches = (raw) => {
+    const query = searchText(String(raw || '').replace(/^\s*>/, ''));
+    if (!query) return [];
+    const words = query.split(' ');
+    return PALETTE_ITEMS
+      .map((item, index) => {
+        // A page's title also goes by Setup's name with it ("setup ports"); an
+        // item's own names come before the line under it, which mentions others.
+        const terms = [item.title, ...(item.route ? ['Setup ' + item.title] : []), ...item.terms, item.meta];
+        if (!words.every((word) => searchText(terms.join(' ')).includes(word))) return null;
+        const at = terms.findIndex((term) => termScore(term, query, words) !== null);
+        return { item, index, rank: at === -1 ? 0 : 1000 - at * 100 + termScore(terms[at], query, words) };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.rank - a.rank || a.index - b.index)
+      .map((found) => found.item);
+  };
+
+  /**
+   * Where an arrow key takes the highlight in the palette, over T3's rows
+   * (`theirs` of them) with Setup's (`ours`) among them after the first
+   * `before` of T3's: one list, wrapping at both ends as T3's does. `own` is
+   * Setup's highlighted row, or -1 while T3's are in charge; `at` is T3's
+   * active row, or -1 before T3 has one (a fresh search: T3's first arrow key
+   * then lights its first row or its last). T3 keeps its own highlight where
+   * it was while Setup has it, and can only be moved a row at a time, so
+   * leaving Setup's rows passes T3 the key unless its highlight is already
+   * where the person is going. Returns the new `own`, and whether T3 should
+   * get the key too.
+   */
+  const paletteStep = ({ key, own, ours, theirs, at, before = 0 }) => {
+    const split = Math.min(Math.max(before, 0), theirs);
     if (key === 'ArrowDown') {
       if (own >= 0 && own < ours - 1) return { own: own + 1, pass: false };
-      // Off Setup's last row onto T3's first: T3 lights it itself if it has
-      // no active row yet, or wraps to it from its last.
-      if (own >= 0) return theirs ? { own: -1, pass: at === -1 || at === theirs - 1 } : { own: 0, pass: false };
-      // From nothing, or round from T3's last row: Setup's first, at the top.
-      if (!theirs || at === -1 || at === theirs - 1) return { own: 0, pass: false };
+      if (own >= 0) {
+        if (!theirs) return { own: 0, pass: false };
+        // Off Setup's last row onto T3's next, or round to T3's first.
+        return { own: -1, pass: split < theirs ? at !== split : true };
+      }
+      // Onto Setup's first row: from T3's row above it, or, when Setup's rows
+      // are at the top, from nothing or round from T3's last.
+      if (!theirs || (split > 0 ? at === split - 1 : at === -1 || at === theirs - 1)) return { own: 0, pass: false };
       return { own: -1, pass: true };
     }
     if (key === 'ArrowUp') {
       if (own > 0) return { own: own - 1, pass: false };
-      // Off Setup's first row, round to T3's last: T3 goes there itself.
-      if (own === 0) return theirs ? { own: -1, pass: true } : { own: ours - 1, pass: false };
-      if (!theirs || at === 0) return { own: ours - 1, pass: false };
+      if (own === 0) {
+        if (!theirs) return { own: ours - 1, pass: false };
+        // Off Setup's first row onto T3's row above, or round to T3's last.
+        return { own: -1, pass: split > 0 ? at !== split - 1 : true };
+      }
+      // Onto Setup's last row: from T3's row below it, or, when Setup's rows
+      // are at the bottom, from nothing or round from T3's first.
+      if (!theirs || (split < theirs ? at === split : at === -1 || at === 0)) return { own: ours - 1, pass: false };
       return { own: -1, pass: true };
     }
     return { own, pass: true };
@@ -523,18 +549,22 @@
 
   // ------------------------------------------------------ command palette --
   // Setup's commands in T3's command palette (⌘K), as a group of their own
-  // among T3's when a search names them. The palette is base-ui's
-  // Autocomplete, which knows nothing of rows it did not draw, so Setup's keep
-  // their own highlight: while one of them has it, they "own" it, T3's own
-  // highlighted row is drawn plain, and Enter is theirs. The arrow keys and
-  // the pointer move it between the two as through one list (paletteStep).
+  // among T3's when a search finds them: commands, so after T3's Actions and
+  // before its Projects, Settings and Threads, the order T3 keeps its own
+  // groups in whatever the search. The palette is base-ui's Autocomplete,
+  // which knows nothing of rows it did not draw, so Setup's keep their own
+  // highlight: while one of them has it, they "own" it, T3's own highlighted
+  // row is drawn plain, and Enter is theirs. A search starts it where T3
+  // starts its own, on the first row, which is Setup's only when Setup's group
+  // comes first. The arrow keys and the pointer move it between the two as
+  // through one list (paletteStep).
   // Only on the palette's first page: T3's pages within it (the theme list,
   // say) say "Backspace Back" in their footer.
   const PALETTE = '[data-command-palette="true"]';
   const OWN_ROW = 'data-t3-setup-item';
   // `chosen`: the person has moved the highlight themselves since the search
   // changed, so where it is is theirs, not a default to keep recomputing.
-  const palette = { dialog: null, input: null, items: [], strong: false, own: -1, chosen: false, query: null, watch: null };
+  const palette = { dialog: null, input: null, items: [], own: -1, chosen: false, query: null, watch: null };
 
   const PALETTE_ICONS = {
     setup: SERVER_COG_ICON,
@@ -630,7 +660,21 @@
     return group;
   };
 
-  /** Where Setup's group goes: first in T3's list, or in place of "No matching…" when T3 has nothing. */
+  /** T3's group of commands, the one Setup's follows. */
+  const actionsGroup = (list) => [...list.querySelectorAll('[data-slot="command-group"]:not([data-t3-setup-palette])')]
+    .find((group) => {
+      const label = group.querySelector('[data-slot="command-group-label"]');
+      return Boolean(label) && label.textContent.trim() === 'Actions';
+    }) || null;
+
+  /** How many of T3's rows come before Setup's group. */
+  const rowsBefore = (group) => theirRows()
+    .filter((row) => Boolean(row.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING)).length;
+
+  /**
+   * Where Setup's group goes: after T3's Actions, or first in T3's list when
+   * it shows none, or in place of "No matching…" when T3 has nothing.
+   */
   const placeGroup = (group) => {
     const list = palette.dialog.querySelector('[data-slot="command-list"]');
     const footer = palette.dialog.querySelector('[data-slot="command-footer"]');
@@ -638,7 +682,12 @@
       if (list || region !== (footer && footer.previousElementSibling)) region.removeAttribute('data-t3-setup-empty');
     }
     if (list) {
-      if (list.firstElementChild !== group) list.prepend(group);
+      const actions = actionsGroup(list);
+      // Moved only when out of place: every move is a mutation T3's list
+      // watcher answers with another sync.
+      if (actions) {
+        if (actions.nextElementSibling !== group) actions.after(group);
+      } else if (list.firstElementChild !== group) list.prepend(group);
       const host = palette.dialog.querySelector('[data-t3-setup-host]');
       if (host) host.remove();
       return;
@@ -689,8 +738,7 @@
     if (!palette.dialog) return;
     if (!palette.dialog.isConnected || !palette.input.isConnected) return detachPalette();
     const query = palette.input.value;
-    const { items, strong } = state.base && state.paired === true && !subPage()
-      ? paletteMatches(query) : { items: [], strong: false };
+    const items = state.base && state.paired === true && !subPage() ? paletteMatches(query) : [];
     if (!items.length) {
       removeGroup();
       palette.items = [];
@@ -707,15 +755,14 @@
       group = buildGroup(items);
     }
     placeGroup(group);
-    // A new search starts the highlight where T3 starts its own: at the top,
-    // which is Setup's first row when the search is plainly about Setup, or
-    // when T3 has nothing to offer. T3's results can arrive a moment after
-    // the search (and vanish while it redraws), so the default follows them
-    // until the person moves the highlight.
+    // A new search starts the highlight where T3 starts its own: on the first
+    // row, which is Setup's when its group comes first (T3 shows no Actions
+    // for the search) or T3 has nothing to offer. T3's results can arrive a
+    // moment after the search (and vanish while it redraws), so the default
+    // follows them until the person moves the highlight.
     if (query !== palette.query || !same) palette.chosen = false;
-    if (!palette.chosen) palette.own = strong || theirRows().length === 0 ? 0 : -1;
+    if (!palette.chosen) palette.own = rowsBefore(group) === 0 ? 0 : -1;
     palette.items = items;
-    palette.strong = strong;
     palette.query = query;
     paintPalette();
   };
@@ -734,7 +781,7 @@
     const dialog = input.closest(PALETTE);
     if (palette.dialog === dialog && palette.input === input) return;
     detachPalette();
-    Object.assign(palette, { dialog, input, items: [], strong: false, own: -1, chosen: false, query: null });
+    Object.assign(palette, { dialog, input, items: [], own: -1, chosen: false, query: null });
     // T3 redraws its list as results arrive; put Setup's group back each time.
     palette.watch = new MutationObserver(schedulePalette);
     palette.watch.observe(dialog, { childList: true, subtree: true });
@@ -796,7 +843,7 @@
     }
     if (key !== 'ArrowDown' && key !== 'ArrowUp') return;
     const rows = theirRows();
-    const next = paletteStep({ key, own: palette.own, ours: palette.items.length, theirs: rows.length, at: theirActive(rows) });
+    const next = paletteStep({ key, own: palette.own, ours: palette.items.length, theirs: rows.length, at: theirActive(rows), before: rowsBefore(ourGroup()) });
     palette.own = next.own;
     palette.chosen = true;
     if (!next.pass) {

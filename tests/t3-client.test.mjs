@@ -70,26 +70,32 @@ test("only the console in the dialog is listened to", () => {
   assert.equal(B.fromConsole(message({}), null, "https://t3.example.com"), false, "no dialog open");
 });
 
-test("Setup's commands answer to their own words in T3's palette, and not to T3's", () => {
-  const found = (q) => { const m = B.paletteMatches(q); return [m.items.map((i) => i.id).join(","), m.strong]; };
-  assert.deepEqual(found("setu"), ["setup", true]);
-  assert.deepEqual(found("setup"), ["setup", true], "setup alone finds Open setup only");
-  assert.deepEqual(found("set"), ["setup", false], "three letters could mean Settings: listed, not taking Enter");
-  assert.deepEqual(found("se"), ["", false]);
-  assert.deepEqual(found("setup ag"), ["agents", true], "setup and a word narrow to that page");
-  assert.deepEqual(found("ports setup"), ["ports", true]);
-  assert.deepEqual(found("pair"), ["pair", true]);
-  assert.deepEqual(found("devi"), ["pair", true]);
-  assert.deepEqual(found("mise"), ["toolchains", true]);
-  assert.deepEqual(found("publish"), ["ports", true]);
-  assert.deepEqual(found("console"), ["setup", true]);
-  for (const q of ["settings", "open", "sign", "go to", "new thread", "setup ports x", "theme"]) assert.deepEqual(found(q), ["", false], q);
-  assert.deepEqual(found("gitlab"), ["sourcecontrol", true]);
-  assert.deepEqual(found("setup azure"), ["sourcecontrol", true]);
-  assert.deepEqual(found("codeberg"), ["sourcecontrol", true]);
-  // T3's own pull request actions and Source Control settings answer to these:
-  // Setup must not take Enter from them.
-  for (const q of ["github", "pull requests", "source control"]) assert.deepEqual(found(q), ["", false], q);
+test("Setup's commands are found in T3's palette the way T3 finds its own", () => {
+  const found = (q) => B.paletteMatches(q).map((i) => i.id).join(",");
+  // A title's words, typed in any order or part: what the row says is what finds it.
+  for (const q of ["open", "open setup", "Open Setup", "open set", "set", "setu", "setup", "op se", "console"]) {
+    assert.equal(found(q).split(",")[0], "setup", q);
+  }
+  assert.equal(found("open setup"), "setup", "only what has both words");
+  // The line under a title counts too, ranked after a title that answers.
+  assert.equal(found("ports"), "ports,setup", "Ports first; Open setup lists them");
+  assert.equal(found("setup ports"), "ports,setup", "a page by Setup's name first");
+  assert.equal(found("ports setup"), "ports,setup");
+  assert.equal(found("pair"), "pair");
+  assert.equal(found("devices"), "pair,setup");
+  assert.equal(found("mise"), "toolchains");
+  assert.equal(found("go"), "toolchains");
+  assert.equal(found("publish"), "ports");
+  assert.equal(found("source control"), "sourcecontrol,setup");
+  assert.equal(found("github"), "sourcecontrol");
+  assert.equal(found("codeberg"), "sourcecontrol");
+  assert.equal(found("glab"), "sourcecontrol");
+  assert.equal(found("sign in"), "agents,sourcecontrol");
+  // T3's normalisation: case, accents and spacing do not matter; ">" (T3's commands) still finds them.
+  assert.equal(found("  ÓPEN   setup "), "setup");
+  assert.equal(found(">open setup"), "setup");
+  // Nothing typed, or nothing that answers: none.
+  for (const q of ["", "   ", ">", "settings", "new thread", "setup ports x", "theme"]) assert.equal(found(q), "", q);
   for (const item of B.PALETTE_ITEMS) assert.ok(item.route === null || /^[a-z]+$/.test(item.route), item.id);
 });
 
@@ -117,6 +123,36 @@ test("arrow keys walk Setup's rows and T3's as one list that wraps", () => {
   // A fresh search where T3 has the highlight: down lights the top row, Setup's.
   assert.deepEqual(step("ArrowDown", -1, -1), [0, false]);
   assert.deepEqual(step("Enter", 0, -1), [0, true], "other keys are not its business");
+});
+
+test("arrow keys pass through Setup's rows where they sit among T3's", () => {
+  // T3's Actions (2 rows) above Setup's (2), then T3's other rows (3 more): 5 of T3's.
+  const step = (key, own, at) => { const r = B.paletteStep({ key, own, ours: 2, theirs: 5, at, before: 2 }); return [r.own, r.pass]; };
+  // A fresh search: T3's first row is the top, so T3 lights it.
+  assert.deepEqual(step("ArrowDown", -1, -1), [-1, true]);
+  // From T3's last Action down into Setup's first; T3 keeps its highlight where it was.
+  assert.deepEqual(step("ArrowDown", -1, 1), [0, false]);
+  // Off Setup's last row onto T3's next: T3 moves there from the row above.
+  assert.deepEqual(step("ArrowDown", 1, 1), [-1, true]);
+  // Back up from that row into Setup's last, and on up off Setup's first onto
+  // T3's row above, which T3 moves to itself.
+  assert.deepEqual(step("ArrowUp", -1, 2), [1, false]);
+  assert.deepEqual(step("ArrowUp", 0, 2), [-1, true]);
+  // Came in from above, left upward: T3's highlight is already on that row.
+  assert.deepEqual(step("ArrowUp", 0, 1), [-1, false]);
+  // Came in from below, left downward: likewise.
+  assert.deepEqual(step("ArrowDown", 1, 2), [-1, false]);
+  // Elsewhere in T3's rows, and round T3's ends: T3's keys.
+  assert.deepEqual(step("ArrowDown", -1, 3), [-1, true]);
+  assert.deepEqual(step("ArrowDown", -1, 4), [-1, true]);
+  assert.deepEqual(step("ArrowUp", -1, 0), [-1, true]);
+
+  // Setup's group last (all of T3's above it): round from its last row to T3's first, and up from there into it.
+  const last = (key, own, at) => { const r = B.paletteStep({ key, own, ours: 2, theirs: 3, at, before: 3 }); return [r.own, r.pass]; };
+  assert.deepEqual(last("ArrowDown", 1, 2), [-1, true]);
+  assert.deepEqual(last("ArrowUp", -1, 0), [1, false]);
+  assert.deepEqual(last("ArrowUp", -1, -1), [1, false], "up from nothing lands on the bottom row, Setup's");
+  assert.deepEqual(last("ArrowDown", -1, 2), [0, false]);
 });
 
 test("the build step injects the bridge once, before </body>, or fails loudly", () => {

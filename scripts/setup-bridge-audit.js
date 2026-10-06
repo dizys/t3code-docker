@@ -289,7 +289,7 @@ const run = async (base) => {
     if (!found.theirs) expect(found.emptyHidden, "standing in for T3's \"No matching\" line", JSON.stringify(found));
 
     found = await search("setup");
-    expect(found && found.ours.join() === "setup" && found.ourLit === 0 && found.rowShaped, "\"setup\" lists Open setup, highlighted", JSON.stringify(found));
+    expect(found && found.ours[0] === "setup" && found.ourLit === 0 && found.rowShaped, "\"setup\" lists Open setup first, highlighted", JSON.stringify(found));
     expect(found.first !== false, "Setup's group comes first", JSON.stringify(found));
     expect(found.active === "t3-setup-cmd-0" && found.theirLitPainted !== true, "and only Setup's row reads as highlighted", JSON.stringify(found));
     await page.keyboard.press("Enter");
@@ -316,9 +316,23 @@ const run = async (base) => {
     expect(opened.open && opened.palette === 0 && opened.hash === "#devices", "it opens Setup on Devices, after arrow keys too", JSON.stringify(opened));
     await closeDialog();
 
+    // Setup's group sits where a group of commands does, after T3's Actions:
+    // a search T3's own commands also answer keeps Enter on T3's first result.
+    found = await search("open");
+    expect(found && found.ours.join() === "setup", "\"open\" finds Open setup, by its title", JSON.stringify(found));
+    if (found.theirs) {
+      expect(found.ourLit === -1 && found.first === false && /^base-ui/.test(found.active || ""),
+        "after T3's own Actions, leaving Enter with T3's first result", JSON.stringify(found));
+    }
+    found = await search("open setup");
+    expect(found && found.ours.join() === "setup" && found.ourLit === 0, "\"open setup\" is Open setup, highlighted", JSON.stringify(found));
+    await page.keyboard.press("Enter");
+    opened = await dialogRoute();
+    expect(opened.open && opened.palette === 0 && opened.hash === "", "and Enter opens it", JSON.stringify(opened));
+    await closeDialog();
     found = await search("set");
     if (found.theirs) {
-      expect(found.ours.join() === "setup" && found.ourLit === -1 && /^base-ui/.test(found.active || ""),
+      expect(found.ours[0] === "setup" && found.ourLit === -1 && /^base-ui/.test(found.active || ""),
         "\"set\" lists Open setup but leaves Enter with T3's first result", JSON.stringify(found));
     }
     found = await search("settings");

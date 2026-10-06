@@ -134,6 +134,19 @@ droot() { docker exec "$NAME" "$@"; }
 field() { printf '%s' "$2" | jq -r "$1" 2>/dev/null || printf ''; }
 
 driver_kind() { case "$1" in claude) echo claudeAgent ;; *) echo "$1" ;; esac; }
+# Where T3's binaryPath points for each agent, and the word T3 runs it with to
+# update it (docker/provider-integration/launchers.mjs).
+launcher_path() {
+  local dir=/home/t3/.local/share/t3-harness/launchers
+  case "$1" in
+    claude) echo "$dir/claude/.local/bin/claude" ;;
+    codex) echo "$dir/codex/packages/standalone/codex" ;;
+    opencode) echo "$dir/opencode/.opencode/bin/opencode" ;;
+    grok) echo "$dir/grok/grok" ;;
+    cursor) echo "$dir/cursor/cursor-agent" ;;
+  esac
+}
+update_word() { case "$1" in opencode) echo upgrade ;; *) echo update ;; esac; }
 mise_tool()   { case "$1" in cursor) echo cursor-agent ;; *) echo "$1" ;; esac; }
 
 mise_ls()     { dex mise ls --json 2>/dev/null || printf '{}'; }
@@ -401,26 +414,25 @@ else
 fi
 
 declare -A T3_VERSION=()
+settings_now="$(settings_body)"
 for id in $IDS; do
   d="$(driver_kind "$id")"
   body="$(cache_body "$d")"
   is "$id T3 snapshot reports installed" "true" "$(field '.installed // false' "$body")"
   T3_VERSION[$id]="$(field '.version // empty' "$body")"
+  # T3 runs each agent through its launcher, where T3 knows how to update it,
+  # and its own Update runs the launcher's update word: the manager's update.
+  is "$id T3 runs it through its launcher" "$(launcher_path "$id")" \
+    "$(field ".providers.${d}.binaryPath // empty" "$settings_now")"
   if [ "$id" = "cursor" ]; then
+    # T3 0.0.45 reports no update for Cursor here, launcher or not (its updater
+    # was null before launchers too). Its launcher is ready for when it does.
     info "cursor T3 version: ${T3_VERSION[$id]} (recorded ${VERSION[$id]}); updater: $(field '.versionAdvisory.updateCommand // "null"' "$body")"
-  elif [ "$id" = "grok" ]; then
-    # Since 0.0.44 T3 offers Grok's own `update` wherever it is installed, as
-    # it does Cursor's. Pressing it updates the managed executable in place
-    # rather than a second copy elsewhere, which is the part that matters.
-    has "$id T3 snapshot reports the managed version" "${VERSION[$id]}" "${T3_VERSION[$id]}"
-    is "$id T3's own updater targets the managed executable" "${EXE[$id]} update" \
-      "$(field '.versionAdvisory.updateCommand // ""' "$body")"
   else
+    is "$id T3 offers its own Update" "true" "$(field '.versionAdvisory.canUpdate // false' "$body")"
+    is "$id T3's Update goes through the launcher" "$(launcher_path "$id") $(update_word "$id")" \
+      "$(field '.versionAdvisory.updateCommand // ""' "$body")"
     has "$id T3 snapshot reports the managed version" "${VERSION[$id]}" "${T3_VERSION[$id]}"
-    is "$id T3 resolves the mise path manual-only" "null" \
-      "$(field '.versionAdvisory.updateCommand // null' "$body")"
-    is "$id T3 cannot update the managed path" "false" \
-      "$(field '.versionAdvisory.canUpdate // false' "$body")"
     if [ "$id" = "claude" ] || [ "$id" = "codex" ]; then
       is "$id T3 snapshot is ready" "ready" "$(field '.status // empty' "$body")"
     fi
@@ -503,6 +515,19 @@ if [ "$VARIANT" = "browser" ]; then
   rm -f /tmp/e2e-browser-cd-$$.log
 fi
 
+section "T3's own Update runs the manager's update"
+# What T3 runs when Update now is pressed. Every agent is at mise's latest
+# here, so it changes nothing, but it has to go through the manager: its
+# answer, its record, and the launcher still running the same executable.
+claude_launcher="$(launcher_path claude)"
+launcher_update="$(dex "$claude_launcher" update 2>&1)" && code=0 || code=$?
+is "claude's update through its launcher succeeds" "0" "$code"
+has "and is the manager's update" "update claude: ok" "$launcher_update"
+is "claude's executable is the same" "${HASH_BEFORE[claude]}" "$(exe_hash claude)"
+has "the launcher still runs the recorded version" "${VERSION[claude]}" "$(dex "$claude_launcher" --version 2>&1 | head -1)"
+is "T3 still runs it through the launcher" "$claude_launcher" \
+  "$(field '.providers.claudeAgent.binaryPath // empty' "$(settings_body)")"
+
 section "Uninstall retracts the managed path and preserves credentials"
 uninstall_out="$(droot t3-harness uninstall opencode --json)"
 is "opencode uninstalls" "true" "$(field '.ok' "$uninstall_out")"
@@ -512,6 +537,7 @@ is "uninstall provider sync succeeded" "true" "$(field '.sync.ok' "$uninstall_ou
 settings_after="$(settings_body)"
 is "opencode's managed path is retracted from T3 settings" "null" \
   "$(field '.providers.opencode.binaryPath // null' "$settings_after")"
+is "and its launcher is gone" "no" "$(dex sh -c "test -e '$(launcher_path opencode)' && echo yes || echo no")"
 is "opencode credentials survive uninstall" "e2e-test-key" \
   "$(dex sh -c 'cat /home/t3/.local/share/opencode/auth.json' | jq -r '.anthropic.key')"
 is "no opencode request remains in mise" "0" \

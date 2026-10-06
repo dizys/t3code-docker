@@ -606,15 +606,24 @@ sys.exit(0 if all(h[i]["runnable"] and h[i]["version"] for i in ("claude", "code
 check "every agent is runnable at a recorded version" "retry 10 agents_runnable"
 
 # T3 learns about each agent through its settings file, as soon as the agent
-# lands. Read it the way T3 does.
+# lands. Read it the way T3 does: each points at the agent's launcher, which
+# runs the managed executable (and hands T3's own Update to the manager).
 t3_points_at_managed_agents() {
-  docker exec -u t3 "$NAME" cat /home/t3/.t3/userdata/settings.json | python3 -c '
-import json, sys
-p = json.load(sys.stdin).get("providers", {})
-drivers = ("claudeAgent", "codex", "opencode", "grok", "cursor")
-sys.exit(0 if all(p.get(d, {}).get("binaryPath", "").startswith("/home/t3/.local/share/mise/installs/") for d in drivers) else 1)'
+  docker exec -u t3 "$NAME" python3 -c '
+import json, re
+p = json.load(open("/home/t3/.t3/userdata/settings.json")).get("providers", {})
+ok = True
+for d in ("claudeAgent", "codex", "opencode", "grok", "cursor"):
+    path = p.get(d, {}).get("binaryPath", "")
+    ok = ok and path.startswith("/home/t3/.local/share/t3-harness/launchers/") \
+        and re.search(r"^exec .?/home/t3/\.local/share/mise/installs/", open(path).read(), re.M) is not None
+raise SystemExit(0 if ok else 1)'
 }
-check "T3 is pointed at every managed agent" t3_points_at_managed_agents
+check "T3 is pointed at every managed agent, through its launcher" t3_points_at_managed_agents
+launcher_runs_the_agent() {
+  docker exec -u t3 "$NAME" /home/t3/.local/share/t3-harness/launchers/claude/.local/bin/claude --version >/dev/null
+}
+check "a launcher runs its agent" launcher_runs_the_agent
 
 # Cursor's package carries its own node and rg. Installed through mise's
 # registry as-is, they shadowed the image's for every agent and terminal.
@@ -857,6 +866,7 @@ uninstall_retracts_t3_wiring() {
   code="$(lifecycle_post uninstall grok)"
   { [ "$code" = 200 ] || { [ "$code" = 202 ] && operation_result grok; }; } || return 1
   [ -z "$(grok_binary_path)" ] &&
+  ! docker exec -u t3 "$NAME" test -e /home/t3/.local/share/t3-harness/launchers/grok/grok &&
   status_json | jq -e '.harnesses[] | select(.id == "grok") | .installed == false' >/dev/null
 }
 check "uninstall from the page removes the agent and T3's path to it" uninstall_retracts_t3_wiring
@@ -867,7 +877,8 @@ install_answers_then_finishes() {
   [ "$code" = 202 ] || return 1
   operation_result grok &&
   status_json | jq -e '.harnesses[] | select(.id == "grok") | .runnable' >/dev/null &&
-  case "$(grok_binary_path)" in /home/t3/.local/share/mise/installs/grok/*) true ;; *) false ;; esac
+  [ "$(grok_binary_path)" = /home/t3/.local/share/t3-harness/launchers/grok/grok ] &&
+  docker exec -u t3 "$NAME" grep -q '^exec .*/home/t3/.local/share/mise/installs/grok/' /home/t3/.local/share/t3-harness/launchers/grok/grok
 }
 check "install from the page answers at once and finishes in the background" install_answers_then_finishes
 

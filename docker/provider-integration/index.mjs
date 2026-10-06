@@ -6,8 +6,10 @@
 // about that selection through a CLI, but it does expose the supported
 // `binaryPath` seam per provider, and it watches its settings file, so a write
 // is picked up live. This module is the one place that turns manager facts into
-// that write - no PATH shim, no bundle patch, and nothing that touches a
-// provider's own updater.
+// that write - no PATH shim and no bundle patch. What it writes there is a
+// launcher (launchers.mjs) for the managed executable, at a path T3 knows how
+// to update, so T3's own "Update now" runs the manager's update instead of a
+// provider's updater over the managed install.
 //
 // `sync()` is read-only with respect to the toolchain: it asks the manager for
 // status (which never installs or updates) and edits only the settings file.
@@ -16,6 +18,7 @@
 import os from "node:os";
 
 import { createFs } from "./fsutil.mjs";
+import { launcherDirFor, launcherPathFor, launcherScript } from "./launchers.mjs";
 import { PROVIDERS } from "./providers.mjs";
 import {
   applyManaged,
@@ -26,6 +29,7 @@ import {
   settingsPathFor,
   statePathFor,
   t3ManagesItself,
+  writeFileAtomic,
   writeJsonAtomic,
 } from "./settings.mjs";
 
@@ -46,6 +50,9 @@ export function createProviderIntegration(options = {}) {
   const baseDir = options.baseDir ?? baseDirFor(env, home);
   const settingsPath = options.settingsPath ?? settingsPathFor(baseDir);
   const statePath = options.statePath ?? statePathFor(baseDir);
+  const launcherDir = options.launcherDir ?? launcherDirFor(env, home);
+  // What a launcher hands T3's update call to.
+  const harnessCli = options.harnessCli ?? (env.T3_HARNESS_CLI || "/usr/local/bin/t3-harness");
   const now = options.now ?? Date.now;
 
   async function readState() {
@@ -58,6 +65,15 @@ export function createProviderIntegration(options = {}) {
 
   function writeState(state) {
     return writeJsonAtomic(fs, statePath, state, 0o600);
+  }
+
+  /** Write one agent's launcher for `executable`, unless it already says exactly that. */
+  async function writeLauncher(provider, executable) {
+    const file = launcherPathFor(launcherDir, provider.id);
+    const script = launcherScript({ id: provider.id, name: provider.name, executable, harnessCli });
+    const current = await fs.readFile(file, "utf8").catch(() => null);
+    if (current !== script) await writeFileAtomic(fs, file, script, 0o755);
+    return file;
   }
 
   /**
@@ -132,14 +148,18 @@ export function createProviderIntegration(options = {}) {
         continue;
       }
 
-      const desired = fact.runnable && fact.executable ? fact.executable : null;
-      if (desired) {
+      const target = fact.runnable && fact.executable ? fact.executable : null;
+      if (target) {
+        // The launcher first: T3 must never be pointed at a file not there yet.
+        const desired = await writeLauncher(provider, target);
         const dead = new Set();
         for (const value of binaryPathsFor(settings, provider.driver)) {
           if (value.startsWith("/") && value !== desired && !(await fs.exists(value))) dead.add(value);
         }
+        // Ours to replace: what this module wrote last, and the managed
+        // executable itself, which images before launchers wrote.
         const result = applyManaged(settings, provider.driver, desired, {
-          owned: recorded,
+          owned: [recorded, target],
           defaultBinary: provider.defaultBinary,
           dead,
         });
@@ -151,12 +171,12 @@ export function createProviderIntegration(options = {}) {
         // someone pointed T3 elsewhere their value wins, and this module stops
         // claiming it so a later Uninstall cannot retract it.
         if (binaryPathsFor(settings, provider.driver).includes(desired)) {
-          managed[provider.id] = { driver: provider.driver, executable: desired, at: now() };
-          applied.push({ id: provider.id, driver: provider.driver, executable: desired });
+          managed[provider.id] = { driver: provider.driver, executable: desired, target, at: now() };
+          applied.push({ id: provider.id, driver: provider.driver, executable: desired, target });
         } else {
           delete managed[provider.id];
         }
-        if (result.kept) kept.push({ id: provider.id, driver: provider.driver, executable: desired });
+        if (result.kept) kept.push({ id: provider.id, driver: provider.driver, executable: desired, target });
       } else if (recorded) {
         const result = clearManaged(settings, provider.driver, recorded);
         if (result.changed) {
@@ -165,6 +185,8 @@ export function createProviderIntegration(options = {}) {
         }
         delete managed[provider.id];
         cleared.push({ id: provider.id, driver: provider.driver, executable: recorded });
+        // Uninstalled: nothing for a launcher to run.
+        await fs.rm(launcherPathFor(launcherDir, provider.id)).catch(() => {});
       } else {
         unchanged.push(provider.id);
       }
@@ -175,7 +197,8 @@ export function createProviderIntegration(options = {}) {
     }
 
     const stateChanged = Object.keys(managed).length !== Object.keys(previous.managed).length
-      || Object.entries(managed).some(([id, value]) => previous.managed[id]?.executable !== value.executable);
+      || Object.entries(managed).some(([id, value]) => previous.managed[id]?.executable !== value.executable
+        || previous.managed[id]?.target !== value.target);
     if (stateChanged || settingsChanged) {
       await writeState({ schema: SCHEMA, managed });
     }
@@ -197,9 +220,10 @@ export function createProviderIntegration(options = {}) {
 
   return {
     sync,
-    paths: { baseDir, settingsPath, statePath },
+    paths: { baseDir, settingsPath, statePath, launcherDir },
   };
 }
 
 export { PROVIDERS, driverFor, idFor } from "./providers.mjs";
 export { applyManaged, clearManaged, settingsPathFor, statePathFor, baseDirFor } from "./settings.mjs";
+export { LAUNCHERS, launcherDirFor, launcherPathFor, launcherScript } from "./launchers.mjs";

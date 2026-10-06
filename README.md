@@ -292,14 +292,22 @@ all**, and they queue. If an update fails, the previous version stays
 installed. Nothing installs or updates on its own; the setup page checks for
 new releases in the background every hour.
 
+T3 Code's own **Update** in Settings → Providers does the same as the row's.
+T3 Code runs each agent through a small launcher the setup service writes, in
+`~/.local/share/t3-harness/launchers`, at a path T3 Code knows how to update.
+The launcher runs the exact release installed here, and hands T3 Code's update
+to `t3-harness update`, with the same queue, version record and rollback. Run
+the agent's own updater over a managed install instead, and this page and T3
+Code would disagree about what is installed.
+
 mise only offers a release as the newest once it has been out for a day
 (`minimum_release_age`), in case it is pulled or compromised soon after
-publishing. T3 Code's own provider settings check npm instead, so they can show
-an update before mise offers it, and they have no button for it, because T3
-Code leaves agents installed through mise to this page. Here the row says the
-release is out and when mise will offer it, for example "2.1.288 is out · mise
-offers it in 21 hours", and **Install 2.1.288 now** in the menu installs it
-right away, because naming an exact version skips the wait.
+publishing. T3 Code checks npm instead, so it can show an update before mise
+offers it; its Update then installs mise's newest, and it says the agent
+still needs an update until the day is up. Here the row says the release is
+out and when mise will offer it, for example "2.1.288 is out · mise offers it
+in 21 hours", and **Install 2.1.288 now** in the menu installs it right away,
+because naming an exact version skips the wait.
 
 From a shell:
 

@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { createProviderIntegration } from "../docker/provider-integration/index.mjs";
+import { LAUNCHERS, launcherPathFor, launcherScript } from "../docker/provider-integration/launchers.mjs";
 import { PROVIDERS, driverFor, idFor } from "../docker/provider-integration/providers.mjs";
 import {
   applyManaged,
@@ -19,19 +20,24 @@ const HOME = "/home/t3";
 const BASE = "/home/t3/.t3";
 const SETTINGS = "/home/t3/.t3/userdata/settings.json";
 const STATE = "/home/t3/.t3/provider-integration.json";
+const LAUNCHER_DIR = "/home/t3/.local/share/t3-harness/launchers";
+const launcher = (id) => launcherPathFor(LAUNCHER_DIR, id);
 
 function memoryFs(initial = {}) {
   const files = new Map(Object.entries(initial));
+  const modes = new Map();
   const dirs = new Set();
   return {
     files,
+    modes,
     dirs,
     async readFile(file) {
       if (!files.has(file)) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       return files.get(file);
     },
-    async writeFile(file, data) {
+    async writeFile(file, data, options) {
       files.set(file, String(data));
+      if (options?.mode) modes.set(file, options.mode);
     },
     async mkdir(dir) {
       dirs.add(dir);
@@ -40,6 +46,11 @@ function memoryFs(initial = {}) {
       if (!files.has(from)) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       files.set(to, files.get(from));
       files.delete(from);
+      if (modes.has(from)) modes.set(to, modes.get(from));
+      modes.delete(from);
+    },
+    async rm(file) {
+      files.delete(file);
     },
     async stat(file) {
       if (!files.has(file) && !dirs.has(file)) {
@@ -191,24 +202,30 @@ test("sync applies a runnable executable and records what it wrote", async () =>
   assert.equal(report.ok, true);
   assert.equal(report.settingsChanged, true);
   assert.deepEqual(report.applied, [
-    { id: "claude", driver: "claudeAgent", executable: "/mise/claude/2.1.270/claude" },
+    { id: "claude", driver: "claudeAgent", executable: launcher("claude"), target: "/mise/claude/2.1.270/claude" },
   ]);
 
+  // T3 runs the launcher, which runs the managed executable.
   const settings = json(fs, SETTINGS);
-  assert.equal(settings.providers.claudeAgent.binaryPath, "/mise/claude/2.1.270/claude");
+  assert.equal(settings.providers.claudeAgent.binaryPath, launcher("claude"));
+  assert.ok(launcher("claude").endsWith("/.local/bin/claude"), "where T3 recognises Claude's own installer");
+  assert.match(fs.files.get(launcher("claude")), /^exec '\/mise\/claude\/2\.1\.270\/claude' "\$@"$/m);
+  assert.equal(fs.modes.get(launcher("claude")), 0o755);
   assert.equal(settings.providers.codex.homePath, "/home/t3/.codex");
   assert.equal(settings.defaultTheme, "dark");
 
   const state = json(fs, STATE);
   assert.deepEqual(state.managed.claude, {
     driver: "claudeAgent",
-    executable: "/mise/claude/2.1.270/claude",
+    executable: launcher("claude"),
+    target: "/mise/claude/2.1.270/claude",
     at: 42,
   });
 });
 
 test("sync retracts a managed path on uninstall and leaves user values alone", async () => {
   const fs = memoryFs({
+    [launcher("claude")]: "#!/bin/sh\nexec /mise/claude/old/claude \"$@\"\n",
     [SETTINGS]: JSON.stringify({
       providers: {
         claudeAgent: { binaryPath: "/mise/claude/old/claude", homePath: "/h" },
@@ -238,6 +255,7 @@ test("sync retracts a managed path on uninstall and leaves user values alone", a
 
   const state = json(fs, STATE);
   assert.deepEqual(state.managed, {});
+  assert.equal(fs.files.has(launcher("claude")), false, "nothing left to launch");
 });
 
 test("sync adopts an existing explicit default instance without disturbing it", async () => {
@@ -260,7 +278,7 @@ test("sync adopts an existing explicit default instance without disturbing it", 
 
   await integration.sync();
   const instance = json(fs, SETTINGS).providerInstances.codex;
-  assert.equal(instance.config.binaryPath, "/mise/codex/bin/codex");
+  assert.equal(instance.config.binaryPath, launcher("codex"));
   assert.equal(instance.config.homePath, "/custom");
   assert.equal(instance.enabled, false);
 });
@@ -333,10 +351,10 @@ test("sync keeps a binaryPath someone set, and replaces only T3's default name",
   assert.deepEqual(report.kept.map((entry) => entry.id), ["codex"]);
   const written = JSON.parse(fs.files.get(SETTINGS));
   assert.equal(written.providers.codex.binaryPath, wrapper, "the wrapper survives");
-  assert.equal(written.providers.claudeAgent.binaryPath, claudePath, "the default name is replaced");
+  assert.equal(written.providers.claudeAgent.binaryPath, launcher("claude"), "the default name is replaced");
   const recorded = JSON.parse(fs.files.get(STATE));
   assert.equal(recorded.managed.codex, undefined, "a kept value is not claimed");
-  assert.equal(recorded.managed.claude.executable, claudePath);
+  assert.equal(recorded.managed.claude.executable, launcher("claude"));
 
   // Running again, and then after an uninstall, never touches the wrapper.
   await integration.sync();
@@ -364,9 +382,9 @@ test("a binaryPath to an executable that no longer exists is replaced", async ()
   const report = await createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness }).sync();
   assert.deepEqual(report.kept, []);
   const written = JSON.parse(fs.files.get(SETTINGS));
-  assert.equal(written.providers.claudeAgent.binaryPath, claudePath);
+  assert.equal(written.providers.claudeAgent.binaryPath, launcher("claude"));
   assert.equal(written.providers.claudeAgent.enabled, true);
-  assert.equal(written.providerInstances.cursor.config.binaryPath, cursorPath);
+  assert.equal(written.providerInstances.cursor.config.binaryPath, launcher("cursor"));
 });
 
 test("sync leaves Codex alone when T3's own managed setup owns it", async () => {
@@ -421,9 +439,57 @@ test("an update replaces the recorded path", async () => {
     ]),
   });
 
+  // From an image before launchers, which pointed T3 at the executable itself.
   await integration.sync();
-  assert.equal(json(fs, SETTINGS).providers.claudeAgent.binaryPath, "/new/claude");
-  assert.equal(json(fs, STATE).managed.claude.executable, "/new/claude");
+  assert.equal(json(fs, SETTINGS).providers.claudeAgent.binaryPath, launcher("claude"));
+  assert.equal(json(fs, STATE).managed.claude.executable, launcher("claude"));
+  assert.equal(json(fs, STATE).managed.claude.target, "/new/claude");
+
+  // And the next update: T3's path stays, and the launcher runs the new release.
+  const updated = createProviderIntegration({
+    fs,
+    home: HOME,
+    baseDir: BASE,
+    harness: fakeHarness([fact("claude", { runnable: true, executable: "/newer/claude" })]),
+  });
+  const report = await updated.sync();
+  assert.equal(report.settingsChanged, false, "T3's settings are left as they are");
+  assert.equal(json(fs, SETTINGS).providers.claudeAgent.binaryPath, launcher("claude"));
+  assert.match(fs.files.get(launcher("claude")), /^exec '\/newer\/claude' "\$@"$/m);
+  assert.equal(json(fs, STATE).managed.claude.target, "/newer/claude");
+});
+
+test("the managed executable itself, as an older image wrote it, is ours to replace", async () => {
+  const exe = "/home/t3/.local/share/mise/installs/claude/2.1.285/claude";
+  const fs = memoryFs({ [exe]: "", [SETTINGS]: JSON.stringify({ providers: { claudeAgent: { binaryPath: exe } } }) });
+  const harness = fakeHarness([fact("claude", { runnable: true, executable: exe })]);
+  const report = await createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness }).sync();
+  assert.deepEqual(report.kept, [], "with no record of having written it");
+  assert.equal(json(fs, SETTINGS).providers.claudeAgent.binaryPath, launcher("claude"));
+});
+
+test("each launcher sits where T3 offers its own update, and hands that update to the manager", () => {
+  // T3 Code 0.0.45's checks (providerMaintenance.ts), and what it runs.
+  const shape = {
+    claude: [(p) => p.endsWith("/.local/bin/claude"), "update"],
+    codex: [(p) => p.includes("/packages/standalone/"), "update"],
+    opencode: [(p) => p.endsWith("/.opencode/bin/opencode"), "upgrade"],
+    grok: [() => true, "update"],
+    cursor: [() => true, "update"],
+  };
+  assert.deepEqual(Object.keys(LAUNCHERS).sort(), PROVIDERS.map((p) => p.id).sort(), "one for every managed agent");
+  for (const provider of PROVIDERS) {
+    const [recognised, update] = shape[provider.id];
+    const file = launcher(provider.id);
+    assert.ok(recognised(file), `${provider.id}: ${file}`);
+    assert.equal(path.basename(file), provider.defaultBinary, `${provider.id} keeps its command's name`);
+    const script = launcherScript({ id: provider.id, name: provider.name, executable: "/mise/x", harnessCli: "/usr/local/bin/t3-harness" });
+    assert.ok(script.includes(`if [ "$#" -eq 1 ] && [ "$1" = '${update}' ]; then exec '/usr/local/bin/t3-harness' update '${provider.id}'; fi`), provider.id);
+  }
+  // Any path, quoted for sh.
+  const odd = launcherScript({ id: "claude", name: "Claude Code", executable: "/odd dir/it's/claude", harnessCli: "/usr/local/bin/t3-harness" });
+  assert.match(odd, /^exec '\/odd dir\/it'\\''s\/claude' "\$@"$/m);
+  assert.throws(() => launcherScript({ id: "nope", name: "x", executable: "/x", harnessCli: "/y" }));
 });
 
 test("the CLI resolves, reports exit codes, and syncs through the real file IO", () => {
@@ -446,12 +512,15 @@ test("the CLI resolves, reports exit codes, and syncs through the real file IO",
       ].join("\n"),
     );
     const exe = path.join(dir, "claude");
-    writeFileSync(exe, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(exe, "#!/bin/sh\necho claude \"$@\"\n", { mode: 0o755 });
+    const harnessCli = path.join(dir, "t3-harness");
+    writeFileSync(harnessCli, "#!/bin/sh\necho t3-harness \"$@\"\n", { mode: 0o755 });
     const cli = new URL("../docker/provider-integration/cli.mjs", import.meta.url).pathname;
     const env = {
       ...process.env,
       FAKE_EXE: exe,
       T3_HARNESS_MODULE: harnessModule,
+      T3_HARNESS_CLI: harnessCli,
       HOME: dir,
       T3CODE_HOME: path.join(dir, ".t3"),
     };
@@ -468,11 +537,19 @@ test("the CLI resolves, reports exit codes, and syncs through the real file IO",
     const synced = run("sync", "--json");
     assert.equal(synced.status, 0);
     const report = JSON.parse(synced.stdout);
-    assert.deepEqual(report.applied, [{ id: "claude", driver: "claudeAgent", executable: exe }]);
+    const launched = path.join(dir, ".local", "share", "t3-harness", "launchers", "claude", ".local", "bin", "claude");
+    assert.deepEqual(report.applied, [{ id: "claude", driver: "claudeAgent", executable: launched, target: exe }]);
     const settings = JSON.parse(
       readFileSync(path.join(dir, ".t3", "userdata", "settings.json"), "utf8"),
     );
-    assert.equal(settings.providers.claudeAgent.binaryPath, exe);
+    assert.equal(settings.providers.claudeAgent.binaryPath, launched);
+
+    // Run as T3 runs it: anything goes to the managed executable, T3's update
+    // call to the manager.
+    const launch = (...args) => spawnSync(launched, args, { env, encoding: "utf8" });
+    assert.equal(launch("--version").stdout, "claude --version\n");
+    assert.equal(launch("update", "--force").stdout, "claude update --force\n", "claude's own update with other words is claude's");
+    assert.equal(launch("update").stdout, "t3-harness update claude\n");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

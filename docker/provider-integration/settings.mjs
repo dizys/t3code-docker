@@ -41,11 +41,13 @@ export function statePathFor(baseDir) {
 
 /**
  * Whether the managed path may be written over `current`. Only values nobody
- * chose are ours to replace: absent, empty, T3's own default name, the exact
- * path this module wrote last time, or an absolute path that no longer exists
- * (`dead`) - an old image's /opt/npm-global/bin/claude, say, which T3 could
- * never launch again. A wrapper script or a different install someone pointed
- * T3 at in its settings stays theirs.
+ * chose are ours to replace: absent, empty, T3's own default name, a path this
+ * module wrote or manages (`owned`: what it wrote last time, and the managed
+ * executable itself, which an older image wrote before launchers), or an
+ * absolute path that no longer exists (`dead`) - an old image's
+ * /opt/npm-global/bin/claude, say, which T3 could never launch again. A
+ * wrapper script or a different install someone pointed T3 at in its settings
+ * stays theirs.
  */
 export function replaceable(current, { owned = null, defaultBinary = null, dead = null } = {}) {
   if (current === undefined || current === null) return true;
@@ -53,7 +55,7 @@ export function replaceable(current, { owned = null, defaultBinary = null, dead 
   if (value === "") return true;
   if (defaultBinary && value === defaultBinary) return true;
   if (dead?.has(value)) return true;
-  return owned !== null && value === owned;
+  return [].concat(owned ?? []).filter(Boolean).includes(value);
 }
 
 /** Both places T3 may hold a provider's binaryPath, for the dead-path check. */
@@ -173,10 +175,15 @@ export async function readJson(fs, file) {
   }
 }
 
-/** Replace a file atomically, so a crash never leaves it half-written. */
-export async function writeJsonAtomic(fs, file, value, mode = 0o600) {
+/** Replace a file atomically, so a crash never leaves it half-written, and nothing runs half of it. */
+export async function writeFileAtomic(fs, file, text, mode = 0o600) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
-  await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode });
+  await fs.writeFile(tmp, text, { encoding: "utf8", mode });
   await fs.rename(tmp, file);
+}
+
+/** Replace a JSON file atomically. */
+export function writeJsonAtomic(fs, file, value, mode = 0o600) {
+  return writeFileAtomic(fs, file, `${JSON.stringify(value, null, 2)}\n`, mode);
 }

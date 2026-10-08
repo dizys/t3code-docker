@@ -70,8 +70,9 @@ Usage: t3-harness <command> [options]
   (npm:prettier, github:owner/repo). --version applies to agents, and to
   installing an added tool, where a prefix (3.12) takes the newest under it.
 
-Install resolves mise's latest to an exact version and records it; update is
-always explicit. Uninstalling an agent preserves its credentials. After a
+Install resolves mise's latest to an exact version and records it. Agent Update
+takes the newest stable release immediately, and never selects an older one
+unless --version names it. Uninstalling an agent preserves its credentials. After a
 successful agent change the new selection is synced into T3's provider
 settings so a running server picks it up.
 
@@ -229,7 +230,7 @@ export T3_HARNESS_COMMAND="$command" T3_HARNESS_ARG="${1:-}"
       }
       const result = await manager.sourceControl[command](arg);
       if (wantJson) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
-      else if (result?.ok) process.stdout.write(`${command} ${arg}: ok${result.toolchain?.version ? ` (${result.toolchain.version})` : ""}\n`);
+      else if (result?.ok) process.stdout.write(`${command} ${arg}: ${result.message || `ok${result.toolchain?.version ? ` (${result.toolchain.version})` : ""}`}\n`);
       else process.stderr.write(`t3-harness: ${command} ${arg} failed [${result?.code ?? "failed"}]: ${result?.error ?? "unknown error"}\n`);
       if (!result?.ok) process.exit(1);
       return;
@@ -255,7 +256,7 @@ export T3_HARNESS_COMMAND="$command" T3_HARNESS_ARG="${1:-}"
       }
       const result = await manager.packages[command](arg, version ? { version } : {});
       if (wantJson) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
-      else if (result?.ok) process.stdout.write(`${command} ${result.package?.id ?? arg}: ok${command !== "uninstall" && result.package?.version ? ` (${result.package.version})` : ""}\n`);
+      else if (result?.ok) process.stdout.write(`${command} ${result.package?.id ?? arg}: ${result.message || `ok${command !== "uninstall" && result.package?.version ? ` (${result.package.version})` : ""}`}\n`);
       else process.stderr.write(`t3-harness: ${command} ${arg} failed [${result?.code ?? "failed"}]: ${result?.error ?? "unknown error"}\n`);
       if (!result?.ok) process.exit(result?.code === "invalid-tool" || result?.code === "managed-elsewhere" ? 2 : 1);
       return;
@@ -267,7 +268,7 @@ export T3_HARNESS_COMMAND="$command" T3_HARNESS_ARG="${1:-}"
       }
       const result = await manager.toolchains[command](arg);
       if (wantJson) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
-      else if (result?.ok) process.stdout.write(`${command} ${arg}: ok${result.toolchain?.version ? ` (${result.toolchain.version})` : ""}\n`);
+      else if (result?.ok) process.stdout.write(`${command} ${arg}: ${result.message || `ok${result.toolchain?.version ? ` (${result.toolchain.version})` : ""}`}\n`);
       else process.stderr.write(`t3-harness: ${command} ${arg} failed [${result?.code ?? "failed"}]: ${result?.error ?? "unknown error"}\n`);
       if (!result?.ok) process.exit(1);
       return;
@@ -319,7 +320,7 @@ export T3_HARNESS_COMMAND="$command" T3_HARNESS_ARG="${1:-}"
     else if (result?.ok) {
       const h = result.harness;
       const where = h?.executable ?? "no executable";
-      process.stdout.write(`${command} ${arg}: ok${h?.installedVersion ? ` (${h.installedVersion})` : ""} -> ${where}\n`);
+      process.stdout.write(`${command} ${arg}: ${result.message || `ok${h?.installedVersion ? ` (${h.installedVersion})` : ""} -> ${where}`}\n`);
       if (sync && sync.ok === false) process.stderr.write(`t3-harness: provider sync failed: ${sync.error}\n`);
     } else {
       process.stderr.write(`t3-harness: ${command} ${arg} failed [${result?.code ?? "failed"}]: ${result?.error ?? "unknown error"}\n`);

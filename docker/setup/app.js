@@ -276,7 +276,7 @@
       if (op.state === 'ok') {
         if (op.warning) notices.set(key, { tone: 'warn', text: op.warning });
         else notices.delete(key);
-        Kit.toast(M.DONE[op.kind] + ' ' + pending.name);
+        Kit.toast(op.message || M.DONE[op.kind] + ' ' + pending.name, op.changed === false ? { tone: 'info' } : {});
       } else if (op.state === 'cancelled') {
         notices.delete(key);
         Kit.toast('Cancelled: ' + pending.kind + ' ' + pending.name, { tone: 'info' });
@@ -313,7 +313,7 @@
     } else {
       if (target === 'harness') versionDrafts.delete(id);
       notices.delete(key);
-      Kit.toast(M.DONE[kind] + ' ' + name);
+      Kit.toast(res.data.message || M.DONE[kind] + ' ' + name, res.data.changed === false ? { tone: 'info' } : {});
     }
     render();
     await loadStatus();

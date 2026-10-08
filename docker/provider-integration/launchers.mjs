@@ -16,7 +16,8 @@
 // runs the exact executable the harness manager installed, with whatever
 // arguments it was given, except the one call T3 makes to update it (`update`,
 // or OpenCode's `upgrade`, alone), which it hands to `t3-harness update <id>`:
-// the same managed update as the setup page's, under its lock, with its exact
+// the same managed update as the setup page's: newest stable immediately,
+// never implicitly older, under its lock, with its exact
 // version record and rollback. That update syncs the provider settings, which
 // writes the launcher again for the new release, so T3's check after the
 // update finds the version it moved to.

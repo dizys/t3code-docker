@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+import { compareVersions } from "../docker/harness/version.mjs";
 
 const source = readFileSync(new URL("../docker/setup/client/model.js", import.meta.url), "utf8");
 const context = vm.createContext({ URL });
@@ -74,6 +75,21 @@ test("versions compare by number, not by text", () => {
   assert.equal(M.isNewer("2.1.286", "2.1.286"), false);
   assert.equal(M.isNewer(null, "2.1.286"), false, "unknown is never an update");
   assert.equal(M.isNewer("2.1.290", null), false);
+});
+
+test("the manager and the page agree on stable, preview, build and date versions", () => {
+  for (const [left, right, expected] of [
+    ["1.2.3", "1.2.3-rc.1", 1],
+    ["1.2.3-rc.10", "1.2.3-rc.2", 1],
+    ["1.2.3-1", "1.2.3-alpha", -1],
+    ["1.2.3+build.2", "1.2.3+build.1", 0],
+    ["v1.2.3", "1.2.3", 0],
+    ["1.10.0", "1.9.0", 1],
+    ["2026.10.02-abc", "2026.10.01-def", 1],
+  ]) {
+    assert.equal(compareVersions(left, right), expected, `${left} vs ${right}`);
+    assert.equal(M.compareVersions(left, right), expected, `${left} vs ${right} in the page`);
+  }
 });
 
 test("relative times read the way a person says them", () => {
@@ -801,31 +817,36 @@ test("a release mise still holds back installs when named in full, never through
   assert.equal(M.releaseIndex(listed, "2.1"), 1, "the highlight sits on the release that installs");
 });
 
-test("a release out but still held back by mise says when it will be offered, and installs now from the menu", () => {
+test("agents offer new stable releases immediately, including from an older saved cache", () => {
   const out = Date.parse("2026-10-02T09:00:00Z"); // three hours before NOW
   const s = statusWith({
     releaseAgeMs: DAY,
     harnesses: [harness("claude", { installedVersion: "2.1.287", version: "2.1.287", latestVersion: "2.1.287", newestVersion: "2.1.288", newestReleasedAt: new Date(out).toISOString() })],
   });
   const claude = row(s, "claude");
-  assert.equal(claude.updateAvailable, false, "mise does not offer it yet");
-  assert.equal(claude.status.text, "Signed in · 2.1.288 is out · mise offers it in 21 hours");
-  const now = claude.menu.find((m) => m.cmd === "release.now");
-  assert.equal(now.label, "Install 2.1.288 now");
-  assert.deepEqual(plain(now.args), { version: "2.1.288" });
-  // An older install with an update mise offers: the update leads, the held release waits in the menu.
+  assert.equal(claude.updateAvailable, true);
+  assert.equal(claude.status.text, "Signed in · 2.1.288 is available");
+  assert.equal(claude.action.cmd, "harness.update");
+  assert.equal(claude.menu.some((m) => m.cmd === "release.now"), false);
   const behind = row(statusWith({ releaseAgeMs: DAY, harnesses: [harness("claude", { installedVersion: "2.1.286", version: "2.1.286", latestVersion: "2.1.287", newestVersion: "2.1.288", newestReleasedAt: new Date(out).toISOString() })] }), "claude");
   assert.equal(behind.action.cmd, "harness.update");
-  assert.equal(behind.status.text, "Signed in · 2.1.287 is available");
-  assert.ok(behind.menu.some((m) => m.cmd === "release.now"));
+  assert.equal(behind.status.text, "Signed in · 2.1.288 is available");
   // Already on it, or no date to say when: nothing claims a wait it cannot time.
   assert.equal(row(statusWith({ harnesses: [harness("claude", { installedVersion: "2.1.288", version: "2.1.288", latestVersion: "2.1.287", newestVersion: "2.1.288" })] }), "claude").held, null);
   const undated = row(statusWith({ harnesses: [harness("claude", { installedVersion: "2.1.287", version: "2.1.287", latestVersion: "2.1.287", newestVersion: "2.1.288" })] }), "claude");
-  assert.equal(undated.status.text, "Signed in · 2.1.288 is out · mise offers it once it has been out a day");
+  assert.equal(undated.status.text, "Signed in · 2.1.288 is available");
   // A toolchain says so too, but only takes mise's newest: no menu item.
   const go = M.toolchainRows(statusWith({ releaseAgeMs: DAY, toolchains: [toolchain("go", { version: "1.27.1", latestVersion: "1.27.1", newestVersion: "1.27.2", newestReleasedAt: new Date(out).toISOString() })] }), ui(), NOW)[0];
   assert.equal(go.status.text, "Installed · 1.27.2 is out · mise offers it in 21 hours");
   assert.equal(go.menu.some((m) => m.cmd === "release.now"), false);
+});
+
+test("an unchanged update is described as keeping the version in activity", () => {
+  const message = "Claude Code 2.1.290 is newer than the available 2.1.273; keeping 2.1.290.";
+  const s = statusWith({ operations: {
+    "harness:claude": { kind: "update", state: "ok", changed: false, message, finishedAt: NOW - MIN },
+  } });
+  assert.equal(M.activity(s, ui(), NOW).finished[0].text, message);
 });
 
 test("Antigravity reads as an agent T3 Code installs and signs in itself", () => {

@@ -291,7 +291,7 @@ function createWorld(fs, { arch = "x64" } = {}) {
       const scm = SOURCE_CONTROL.find((entry) => entry.miseTool === name);
       const executable = path.join(install, entryForTool(name)?.executable ?? `bin/${scm?.bin ?? name}`);
       fs.seedFile(executable, "", 0o755);
-      world.binVersions.set(executable, version);
+      world.binVersions.set(executable, world.runVersionOverride[tool] ?? version);
       world.selected[name] = executable;
       world.tools[name] = [
         ...world.tools[name]?.filter((entry) => entry.source).map((entry) => ({ ...entry, active: false })) ?? [],
@@ -557,6 +557,180 @@ test("update on a harness that was never installed is refused", async () => {
   const result = await manager.update("grok");
   assert.equal(result.ok, false);
   assert.equal(result.code, "not-installed");
+});
+
+test("agent updates immediately take a new stable release, using a fresh lookup", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  world.waiting.claude = ["2.1.274"];
+  const installed = await manager.install("claude");
+  assert.equal(installed.harness.installedVersion, "2.1.273", "first-start installs still respect the release age");
+  const originalRun = world.run;
+  let latestEnv;
+  world.run = async (argv, options) => {
+    if (argv[3] === "latest") latestEnv = options.env;
+    return originalRun(argv, options);
+  };
+  const updated = await managerFor(world).update("claude");
+  assert.equal(updated.ok, true, updated.error);
+  assert.equal(updated.harness.installedVersion, "2.1.274");
+  assert.equal(latestEnv.MISE_FETCH_REMOTE_VERSIONS_CACHE, "0s");
+  assert.ok(world.calls.includes("mise -C /home/t3 latest --minimum-release-age 0s claude"));
+});
+
+test("a floating agent update never downgrades an exact version ahead of mise", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  await manager.install("claude", { version: "2.1.290" });
+  const before = world.useSpecs.length;
+  for (const options of [{}, { version: "latest" }]) {
+    const result = await manager.update("claude", options);
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.code, "up-to-date");
+    assert.equal(result.changed, false);
+    assert.match(result.message, /2\.1\.290.*newer.*2\.1\.273.*keeping 2\.1\.290/);
+    assert.equal(result.harness.installedVersion, "2.1.290");
+    assert.equal(result.harness.runnable, true);
+    assert.equal(result.harness.failed, false);
+  }
+  assert.equal(world.useSpecs.length, before, "no install or selection changes");
+  assert.equal((await manager.update("claude", { version: "2.1.270" })).harness.installedVersion, "2.1.270", "an explicitly named downgrade remains available");
+});
+
+test("updates compare the selection after taking the lock, even with a stale manager record", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  await manager.install("claude", { version: "2.1.270" });
+  const before = world.useSpecs.length;
+  const result = await manager.update("claude", {
+    onStarted() {
+      const selected = world.tools.claude.find((entry) => entry.active);
+      selected.version = "2.1.290";
+      selected.requested_version = "2.1.290";
+    },
+  });
+  assert.equal(result.changed, false);
+  assert.equal(result.harness.installedVersion, "2.1.290");
+  assert.equal(result.harness.recordedVersion, "2.1.270");
+  assert.equal(world.useSpecs.length, before);
+});
+
+test("an unchanged agent update verifies the executable and reports that it kept the version", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  await manager.install("claude");
+  const before = world.useSpecs.length;
+  const result = await manager.update("claude");
+  assert.equal(result.changed, false);
+  assert.match(result.message, /2\.1\.273 is already up to date/);
+  assert.equal(world.useSpecs.length, before);
+  world.failProbe = ["claude"];
+  const broken = await manager.update("claude");
+  assert.equal(broken.ok, false, "a broken executable must not be called up to date");
+});
+
+test("an agent updated in place is protected using the version the executable reports", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  const installed = await manager.install("claude", { version: "2.1.270" });
+  world.binVersions.set(installed.harness.executable, "2.1.290");
+  const before = world.useSpecs.length;
+  const result = await manager.update("claude");
+  assert.equal(result.changed, false);
+  assert.equal(result.harness.installedVersion, "2.1.290", "show the running release");
+  assert.equal(result.harness.configuredVersion, "2.1.270", "keep the mise pin");
+  assert.equal(world.useSpecs.length, before);
+});
+
+test("an update verifies the requested release and rolls back when the executable reports another version", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  await manager.install("claude", { version: "2.1.270" });
+  world.runVersionOverride["claude@2.1.273"] = "2.1.271";
+  const result = await manager.update("claude");
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "version-mismatch");
+  assert.match(result.error, /reported 2\.1\.271 after installing 2\.1\.273/);
+  assert.equal(result.harness.installedVersion, "2.1.270");
+  assert.equal(result.harness.runnable, true);
+});
+
+test("an older binary under the current mise pin must not be reported as up to date", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  const installed = await manager.install("claude");
+  world.binVersions.set(installed.harness.executable, "2.1.270");
+  const before = world.useSpecs.length;
+  const result = await manager.update("claude");
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.changed, true);
+  assert.equal(result.harness.installedVersion, "2.1.273");
+  assert.equal(world.useSpecs.length, before + 1);
+});
+
+test("toolchain, source control and package updates keep versions ahead of mise", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  await manager.toolchains.install("go");
+  await manager.sourceControl.install("glab");
+  await manager.packages.install("jq");
+  const before = world.useSpecs.length;
+  world.latest.go = "1.27.0";
+  world.latest.glab = "1.119.0";
+  world.versions.jq = ["1.7.1"];
+  for (const [ops, id] of [[manager.toolchains, "go"], [manager.sourceControl, "glab"], [manager.packages, "jq"]]) {
+    const result = await ops.update(id);
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.changed, false);
+    assert.match(result.message, /newer than.*keeping/);
+  }
+  assert.equal(world.useSpecs.length, before);
+});
+
+test("unchanged toolchains and packages skip selection while source control can still repair extensions", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  await manager.toolchains.install("go");
+  await manager.packages.install("jq");
+  await manager.sourceControl.install("az");
+  const before = world.useSpecs.length;
+  assert.equal((await manager.toolchains.update("go")).changed, false);
+  assert.equal((await manager.packages.update("jq")).changed, false);
+  assert.equal((await manager.sourceControl.update("az")).changed, false);
+  assert.equal(world.useSpecs.length, before);
+  world.fs.files.delete(path.join(HOME, ".azure/cliextensions/azure-devops/metadata.json"));
+  world.fs.dirs.delete(path.join(HOME, ".azure/cliextensions/azure-devops"));
+  const repaired = await manager.sourceControl.update("az");
+  assert.equal(repaired.ok, true, repaired.error);
+  assert.equal(repaired.changed, true);
+  assert.equal(world.useSpecs.length, before + 1, "a Repair at the same release still adds the missing extension");
+});
+
+test("a preview advances to its stable release and build metadata alone does not trigger an update", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  await manager.install("codex", { version: "0.154.1-rc.10" });
+  const stable = await manager.update("codex");
+  assert.equal(stable.ok, true, stable.error);
+  assert.equal(stable.harness.installedVersion, "0.154.1");
+  await manager.install("codex", { version: "0.154.1+build.2" });
+  const same = await manager.update("codex");
+  assert.equal(same.changed, false);
+  assert.equal(same.harness.installedVersion, "0.154.1+build.2");
+});
+
+test("a failed selection check never authorizes an update", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  await manager.install("claude");
+  const before = world.useSpecs.length;
+  const originalRun = world.run;
+  let locked = false;
+  world.run = async (argv, options) => argv[3] === "ls" && locked
+    ? world.fail("mise selection unavailable") : originalRun(argv, options);
+  const result = await managerFor(world).update("claude", { onStarted() { locked = true; } });
+  assert.equal(result.code, "version-check-failed");
+  assert.equal(world.useSpecs.length, before);
 });
 
 test("status and resolve are read-only even after an install", async () => {
@@ -1437,7 +1611,7 @@ test("the newest-release check says what mise offers and what it is still holdin
   assert.equal(world.calls.filter((call) => call.includes("settings get minimum_release_age")).length, 1);
   assert.deepEqual(await manager.latestRelease("claude"), { version: "2.1.273", newest: null, newestAt: null });
   world.waiting.claude = ["2.1.274"];
-  assert.deepEqual(await manager.latestRelease("claude"), { version: "2.1.273", newest: "2.1.274", newestAt: "2026-10-02T20:00:00.000Z" });
+  assert.deepEqual(await manager.latestRelease("claude"), { version: "2.1.274", newest: null, newestAt: null }, "agent Update takes the new stable release immediately");
   world.waiting.jq = ["1.8.3"];
   assert.deepEqual(await manager.packages.latestRelease("jq"), { version: "1.8.2", newest: "1.8.3", newestAt: "2026-10-02T20:00:00.000Z" });
   assert.deepEqual(await manager.toolchains.latestRelease("go"), { version: "1.27.1", newest: null, newestAt: null }, "a tool mise cannot list still answers");

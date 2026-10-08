@@ -296,18 +296,20 @@ T3 Code's own **Update** in Settings → Providers does the same as the row's.
 T3 Code runs each agent through a small launcher the setup service writes, in
 `~/.local/share/t3-harness/launchers`, at a path T3 Code knows how to update.
 The launcher runs the exact release installed here, and hands T3 Code's update
-to `t3-harness update`, with the same queue, version record and rollback. Run
+to `t3-harness update`, with the same lock, version record and rollback. Run
 the agent's own updater over a managed install instead, and this page and T3
 Code would disagree about what is installed.
 
-mise only offers a release as the newest once it has been out for a day
-(`minimum_release_age`), in case it is pulled or compromised soon after
-publishing. T3 Code checks npm instead, so it can show an update before mise
-offers it; its Update then installs mise's newest, and it says the agent
-still needs an update until the day is up. Here the row says the release is
-out and when mise will offer it, for example "2.1.288 is out · mise offers it
-in 21 hours", and **Install 2.1.288 now** in the menu installs it right away,
-because naming an exact version skips the wait.
+Pressing **Update** for an agent installs the newest stable release immediately,
+both here and in T3 Code. It checks releases afresh and skips mise's 24-hour
+release wait. First-start installs, toolchains and added tools still follow
+`minimum_release_age`.
+
+An update never selects an older version just because mise's release list is
+behind. If you already installed a newer release, it keeps that version and
+says so; if you are already current, it reports that without reinstalling.
+To switch to an older agent release deliberately, use **Install a specific
+version…** or `t3-harness update <id> --version <exact-version>`.
 
 From a shell:
 

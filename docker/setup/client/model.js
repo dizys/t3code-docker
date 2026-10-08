@@ -65,23 +65,41 @@ const T3Model = (() => {
   const DATABASE_PROCESSES = /^(postgres|mysqld|mariadbd|redis-server|mongod|clickhouse)/;
 
   // ------------------------------------------------------------ versions --
-  const splitVersion = (v) => String(v ?? '').trim().replace(/^v/i, '').split(/[.+-]/).filter(Boolean);
-  /** -1, 0 or 1. Numeric parts compare as numbers, the rest as strings. */
-  const compareVersions = (a, b) => {
-    const left = splitVersion(a);
-    const right = splitVersion(b);
+  // Keep the ordering in docker/harness/version.mjs: previews precede their
+  // stable release, and build metadata never creates an update.
+  const parseVersion = (v) => {
+    const text = String(v ?? '').trim().replace(/^v/i, '');
+    const numeric = /^(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(text);
+    return numeric
+      ? { numeric: true, core: numeric[1].split('.'), pre: numeric[2]?.split('.') ?? null }
+      : { numeric: false, core: text.split(/[.+-]/).filter(Boolean), pre: null };
+  };
+  const compareParts = (left, right, prerelease) => {
     for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
       const x = left[i];
       const y = right[i];
       if (x === undefined) return -1;
       if (y === undefined) return 1;
-      if (/^\d+$/.test(x) && /^\d+$/.test(y)) {
+      const xNumeric = /^\d+$/.test(x);
+      const yNumeric = /^\d+$/.test(y);
+      if (prerelease && xNumeric !== yNumeric) return xNumeric ? -1 : 1;
+      if (xNumeric && yNumeric) {
         if (Number(x) !== Number(y)) return Number(x) < Number(y) ? -1 : 1;
       } else if (x !== y) {
         return x < y ? -1 : 1;
       }
     }
     return 0;
+  };
+  /** -1, 0 or 1 for numeric releases, prereleases and date versions. */
+  const compareVersions = (a, b) => {
+    const left = parseVersion(a);
+    const right = parseVersion(b);
+    const core = compareParts(left.core, right.core);
+    if (core !== 0 || !left.numeric || !right.numeric) return core;
+    if (left.pre === null) return right.pre === null ? 0 : 1;
+    if (right.pre === null) return -1;
+    return compareParts(left.pre, right.pre, true);
   };
   /** Whether `latest` is a newer release than `installed`. Unknown is no. */
   const isNewer = (latest, installed) => Boolean(latest && installed && compareVersions(latest, installed) > 0);
@@ -249,9 +267,11 @@ const T3Model = (() => {
     const meta = AGENTS[h.id] || { name: h.name || h.id, mono: String(h.id || '?').slice(0, 2).toUpperCase(), hue: '--id-toolchain', how: '' };
     const act = activityOf(status, 'harness', h.id, ui);
     const version = h.installedVersion || h.version || null;
-    const latest = h.latestVersion || null;
+    // Older cache files can still carry an age-held release separately.
+    // Explicit agent updates now take it, so promote it immediately.
+    const latest = isNewer(h.newestVersion, h.latestVersion) || (!h.latestVersion && h.newestVersion)
+      ? h.newestVersion : h.latestVersion || null;
     const updateAvailable = Boolean(h.installed && isNewer(latest, version));
-    const held = h.installed ? heldRelease(h, version, status, now) : null;
     const runningKind = act.serverQueued ? null : (act.ownOp && act.ownOp.kind) || (act.pending && act.pending.kind)
       || (h.inProgress ? h.operation || 'install' : null) || (act.fromSetup ? 'install' : null) || act.busy;
     const isKey = meta.flow === 'key';
@@ -366,17 +386,16 @@ const T3Model = (() => {
           ? plural(names.length, 'provider key') + ' · ' + names.join(', ')
           : 'Signed in · ' + methodText(h);
       } else {
-        row.status.text = 'Signed in · ' + (updateAvailable ? latest + ' is available' : held ? held.text : methodText(h));
+        row.status.text = 'Signed in · ' + (updateAvailable ? latest + ' is available' : methodText(h));
       }
       if (updateAvailable) row.action = { cmd: 'harness.update', label: 'Update' };
       else if (isKey) row.action = { cmd: 'harness.apikey', label: 'Add key', icon: 'key-round' };
     }
     row.notice = distinctNotice(notice, row.status);
-    row.held = held;
+    row.held = null;
 
     // Everything else is one press away in the menu.
     if (updateAvailable) row.menu.push({ cmd: 'harness.update', label: 'Update to ' + latest, icon: 'circle-arrow-up' });
-    if (held) row.menu.push({ cmd: 'release.now', label: 'Install ' + held.version + ' now', icon: 'download', args: { version: held.version } });
     row.menu.push({ cmd: 'harness.version', label: 'Install a specific version…', icon: 'history' });
     if (h.canSetKey) row.menu.push({ cmd: 'harness.apikey', label: isKey ? 'Add a provider key…' : 'Use an API key…', icon: 'key-round' });
     if (h.canSignIn && h.runnable && row.state !== 'signin') row.menu.push({ cmd: 'harness.signin', label: 'Sign in again', icon: 'log-in' });
@@ -1225,7 +1244,7 @@ const T3Model = (() => {
       finished.push({
         key,
         ok: op.state === 'ok',
-        text: op.state === 'ok' ? (DONE[op.kind] || 'Finished') + ' ' + name : (FAILED[op.kind] || 'Failed') + ': ' + name,
+        text: op.state === 'ok' ? op.message || (DONE[op.kind] || 'Finished') + ' ' + name : (FAILED[op.kind] || 'Failed') + ': ' + name,
         at: op.finishedAt,
       });
     }

@@ -516,14 +516,24 @@ if [ "$VARIANT" = "browser" ]; then
 fi
 
 section "T3's own Update runs the manager's update"
-# What T3 runs when Update now is pressed. Every agent is at mise's latest
-# here, so it changes nothing, but it has to go through the manager: its
-# answer, its record, and the launcher still running the same executable.
+# Updates take newly published stable releases too, whereas initial installs
+# respect mise's release age. An update may advance the version on a release
+# day, but it must never go backwards or change the old executable in place.
 claude_launcher="$(launcher_path claude)"
+claude_before="${VERSION[claude]}"
 launcher_update="$(dex "$claude_launcher" update 2>&1)" && code=0 || code=$?
 is "claude's update through its launcher succeeds" "0" "$code"
-has "and is the manager's update" "update claude: ok" "$launcher_update"
-is "claude's executable is the same" "${HASH_BEFORE[claude]}" "$(exe_hash claude)"
+has "and is the manager's update" "update claude:" "$launcher_update"
+is "claude's old executable is untouched" "${HASH_BEFORE[claude]}" "$(exe_hash claude)"
+claude_after="$(dex t3-harness status claude --json)"
+VERSION[claude]="$(field '.harness.installedVersion' "$claude_after")"
+EXE[claude]="$(field '.harness.executable' "$claude_after")"
+is "the update never downgrades" "true" \
+  "$(dex /usr/local/bin/node --input-type=module -e 'import { compareVersions } from "/opt/t3-harness/version.mjs"; console.log(compareVersions(process.argv[1], process.argv[2]) >= 0)' "${VERSION[claude]}" "$claude_before")"
+if [ "$claude_before" = "${VERSION[claude]}" ]; then
+  has "it reports an unchanged version" "already up to date" "$launcher_update"
+fi
+HASH_BEFORE[claude]="$(exe_hash claude)"
 has "the launcher still runs the recorded version" "${VERSION[claude]}" "$(dex "$claude_launcher" --version 2>&1 | head -1)"
 is "T3 still runs it through the launcher" "$claude_launcher" \
   "$(field '.providers.claudeAgent.binaryPath // empty' "$(settings_body)")"

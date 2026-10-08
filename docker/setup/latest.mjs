@@ -1,7 +1,7 @@
 // The newest release of each agent and toolchain, so a row can say "2.1.290 is
 // available" without anyone asking - and, past that, the newest release mise
-// is still holding back for its minimum release age, so the row can say one is
-// out before mise offers it.
+// is still holding back for toolchains and added tools. Agent updates take
+// new stable releases immediately, without the release-age wait.
 //
 // `mise latest` asks a registry, which takes a second or two online and up to
 // its timeout offline - far too slow and too flaky for a status poll. So it

@@ -552,7 +552,8 @@ const HARNESS_IDS = new Set(["claude", "codex", "opencode", "grok", "cursor"]);
 
 const lifecycleHttpStatus = (code) => {
   switch (code) {
-    case "ok": return 200;
+    case "ok":
+    case "up-to-date": return 200;
     case "busy": return 409;
     case "unknown-harness":
     case "unknown-toolchain": return 404;
@@ -1817,6 +1818,8 @@ const finishJob = (job, { result, sync }) => {
     state: result?.ok ? "ok" : cancelled ? "cancelled" : "failed",
     error: result?.ok || cancelled ? null : String(result?.error ?? "failed").slice(0, 300),
     warning: result?.ok ? syncWarning(job.id, sync) : null,
+    changed: result?.changed ?? null,
+    message: result?.message ?? null,
     progress: null,
     finishedAt: Date.now(),
   });
@@ -1838,7 +1841,9 @@ const finishJob = (job, { result, sync }) => {
   if (result?.ok) {
     const facts = result.harness ?? result.toolchain ?? result.package ?? null;
     const version = job.kind === "uninstall" ? null : facts?.installedVersion ?? facts?.version ?? null;
-    recordEvent(`${job.target}.${PAST[job.kind]}`, `${DONE_TEXT[job.kind]} ${name}${version && job.kind === "update" ? " to" : ""}`, version);
+    recordEvent(`${job.target}.${result.changed === false ? "checked" : PAST[job.kind]}`,
+      result.message || `${DONE_TEXT[job.kind]} ${name}${version && job.kind === "update" ? " to" : ""}`,
+      result.message ? null : version);
   } else if (!cancelled) {
     recordEvent(`${job.target}.failed`, `Could not ${job.kind} ${name}`);
   }
@@ -2012,6 +2017,8 @@ const startLifecycle = async (target, kind, input) => {
   const body = {
     ok: Boolean(result?.ok),
     code: result?.code ?? "failed",
+    ...(result?.changed !== undefined ? { changed: result.changed } : {}),
+    ...(result?.message ? { message: result.message } : {}),
     ...(result?.error ? { error: result.error } : {}),
     ...(result?.harness ? { harness: toPublicHarness(result.harness) } : {}),
     ...(result?.toolchain ? { toolchain: result.toolchain } : {}),

@@ -34,7 +34,7 @@ export const CATALOGUE = Object.freeze([
     miseTool: "claude",
     executable: "claude",
     versionArgs: ["--version"],
-    versionPattern: "(\\d+\\.\\d+\\.\\d+)",
+    versionPattern: "(\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?)",
     minimumVersion: null,
     // Both release assets exist for x64 and arm64.
     architectures: ["x64", "arm64"],
@@ -51,7 +51,7 @@ export const CATALOGUE = Object.freeze([
     miseTool: "codex",
     executable: "bin/codex",
     versionArgs: ["--version"],
-    versionPattern: "(\\d+\\.\\d+\\.\\d+)",
+    versionPattern: "(\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?)",
     minimumVersion: null,
     architectures: ["x64", "arm64"],
     credentials: {
@@ -67,7 +67,7 @@ export const CATALOGUE = Object.freeze([
     miseTool: "opencode",
     executable: "opencode",
     versionArgs: ["--version"],
-    versionPattern: "(\\d+\\.\\d+\\.\\d+)",
+    versionPattern: "(\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?)",
     minimumVersion: MINIMUM_OPENCODE_VERSION,
     architectures: ["x64", "arm64"],
     credentials: {
@@ -83,7 +83,7 @@ export const CATALOGUE = Object.freeze([
     miseTool: "grok",
     executable: "grok",
     versionArgs: ["--version"],
-    versionPattern: "(\\d+\\.\\d+\\.\\d+)",
+    versionPattern: "(\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?)",
     minimumVersion: null,
     architectures: ["x64", "arm64"],
     credentials: {

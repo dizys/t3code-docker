@@ -57,11 +57,11 @@ export async function listTools(ctx) {
 // release published at all.
 const ANY_AGE = ["--minimum-release-age", "0s"];
 
-export async function latest(ctx, tool, { signal, anyAge = false } = {}) {
+export async function latest(ctx, tool, { signal, anyAge = false, fresh = false } = {}) {
   // Normally well under two seconds. A network that drops packets instead of
   // refusing them would otherwise hold the lock for the whole mise timeout.
   const result = await ctx.run(miseArgs(ctx, ["latest", ...(anyAge ? ANY_AGE : []), tool]), {
-    env: readEnv(ctx.env),
+    env: { ...readEnv(ctx.env), ...(fresh ? { MISE_FETCH_REMOTE_VERSIONS_CACHE: "0s" } : {}) },
     cwd: ctx.home,
     timeoutMs: ctx.timeouts.latest ?? ctx.timeouts.mise,
     ...(signal ? { signal } : {}),

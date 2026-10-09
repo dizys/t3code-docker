@@ -610,10 +610,10 @@
   };
 
   const deviceRow = (d, { revoke, fresh } = {}) => html`
-    <div class="tc-row tc-row--compact" data-key="dev-${d.id}">
+    <div class="tc-row tc-row--compact tc-device-row" data-key="dev-${d.id}">
       <span class="tc-tile tc-tile--icon" aria-hidden="true">${icon(d.icon)}</span>
-      <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name">${d.name}</span>${fresh ? html`<span class="tc-badge tc-badge--ok">New</span>` : ''}</div><span class="tc-status" title="${d.seenTitle}">${[d.status, d.ends].filter(Boolean).join(' · ')}</span></div>
-      ${revoke ? html`<div class="tc-row-actions"><button class="tc-btn tc-btn--ghost tc-btn--sm" type="button" data-cmd="device.rename" data-id="${d.id}" aria-label="Rename ${d.name}">Rename</button><button class="tc-btn tc-btn--danger tc-btn--sm" type="button" data-cmd="device.revoke" data-id="${d.id}" aria-label="Revoke ${d.name}">Revoke</button></div>`
+      <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name" title="${d.name}">${d.name}</span>${fresh ? html`<span class="tc-badge tc-badge--ok">New</span>` : ''}</div><span class="tc-status" title="${d.seenTitle}">${[d.status, d.ends].filter(Boolean).join(' · ')}</span></div>
+      ${revoke ? html`<div class="tc-row-actions"><button class="tc-btn tc-btn--ghost tc-btn--sm" type="button" data-cmd="device.rename" data-key="rename-${d.id}" data-id="${d.id}" aria-label="Rename ${d.name}">Rename</button><button class="tc-btn tc-btn--danger tc-btn--sm" type="button" data-cmd="device.revoke" data-id="${d.id}" aria-label="Revoke ${d.name}">Revoke</button></div>`
         : d.connected ? html`<span class="tc-dot tc-dot--ok" role="img" aria-label="Connected"></span>` : html`<span></span>`}
     </div>`;
 
@@ -2640,58 +2640,75 @@
     : target === 'package' ? M.packageRows(state.status, ui, now())
       : [...M.toolchainRows(state.status, ui, now()), ...M.sourceControlRows(state.status, ui, now())]).find((r) => r.id === id);
 
-  const deviceSheet = { layer: null, id: null, label: '', saving: false, error: null };
-  const deviceSheetBody = () => html`
-    <div class="tc-sheet-head"><span class="tc-tile tc-tile--icon tc-tile--lg" aria-hidden="true">${icon('pencil')}</span><div class="tc-sheet-head-text"><h2 class="tc-sheet-title" id="device-title">Rename device</h2><span class="tc-small tc-muted">Choose a name you can recognise in the device list.</span></div><span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-sheet="close" aria-label="Close">${icon('x')}</button></div>
-    <div class="tc-sheet-body">
-      <div class="tc-field"><label class="tc-label" for="device-label">Label</label><input id="device-label" name="label" class="tc-input" value="${deviceSheet.label}" maxlength="64" autocomplete="off" spellcheck="false" aria-describedby="device-hint"${deviceSheet.saving ? raw(' disabled') : ''}><span class="tc-hint" id="device-hint">Leave blank to use the original device name.</span></div>
-      ${deviceSheet.error ? notice('danger', 'circle-alert', 'Label not saved', deviceSheet.error) : ''}
+  const deviceRename = { layer: null, device: null, label: '', initial: '', saving: false, error: null, invalid: false };
+  const deviceRenameChanged = () => deviceRename.label.trim() !== deviceRename.initial.trim();
+  const deviceRenameBody = () => html`
+    <div class="tc-dialog-body tc-device-rename-body">
+      <div class="tc-device-rename-head"><div><h2 class="tc-dialog-title" id="device-title">Rename device</h2><p class="tc-dialog-desc" id="device-desc">Choose a name you can recognise.</p></div><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-device-close aria-label="Close"${deviceRename.saving ? raw(' disabled') : ''}>${icon('x')}</button></div>
+      <div class="tc-device-rename-context" id="device-current"><span class="tc-tile tc-tile--icon" aria-hidden="true">${icon(deviceRename.device.icon)}</span><div class="tc-row-main"><span class="tc-device-rename-name" title="${deviceRename.device.name}">${deviceRename.device.name}</span><span class="tc-status">${deviceRename.device.kind}</span></div></div>
+      <div class="tc-field">
+        <div class="tc-device-rename-label"><label class="tc-label" for="device-label">Device label</label><span class="tc-hint" id="device-count" aria-label="${deviceRename.label.length} of 64 characters">${String(deviceRename.label.length)} / 64</span></div>
+        <input id="device-label" name="label" class="tc-input" value="${deviceRename.label}" maxlength="64" placeholder="e.g. Work phone" autocomplete="off" spellcheck="false" aria-invalid="${String(deviceRename.invalid)}" aria-describedby="device-hint device-count${deviceRename.error ? ' device-error' : ''}"${deviceRename.saving ? raw(' disabled') : ''}>
+        <span class="tc-hint" id="device-hint">Leave blank to use the original device name.</span>
+        ${deviceRename.error ? html`<div class="tc-device-rename-error" id="device-error" role="alert">${icon('circle-alert')}<span>${deviceRename.error}</span></div>` : ''}
+      </div>
     </div>
-    <div class="tc-sheet-foot"><span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost" type="button" data-sheet="close">Cancel</button><button class="tc-btn tc-btn--primary" type="submit" data-key="device-save"${deviceSheet.saving ? raw(' disabled') : ''}>${deviceSheet.saving ? html`<span class="tc-spinner" aria-hidden="true"></span>Saving` : 'Save'}</button></div>`;
+    <div class="tc-dialog-foot tc-device-rename-foot"><button class="tc-btn tc-btn--ghost" type="button" data-device-close${deviceRename.saving ? raw(' disabled') : ''}>Cancel</button><button class="tc-btn tc-btn--primary" type="submit" data-key="device-save"${deviceRename.saving || !deviceRenameChanged() ? raw(' disabled') : ''}>${deviceRename.saving ? html`<span class="tc-spinner" aria-hidden="true"></span>Saving` : 'Save changes'}</button></div>`;
 
-  const openDeviceSheet = (id, trigger) => {
-    if (deviceSheet.layer) return;
+  const openDeviceRename = (id, trigger) => {
+    if (deviceRename.layer) return;
     const device = M.deviceRows((state.status || {}).sessions, now()).find((row) => row.id === id);
     if (!device) { Kit.toast('This device is no longer paired.', { tone: 'info' }); return; }
-    Object.assign(deviceSheet, { id, label: device.label, saving: false, error: null });
+    Object.assign(deviceRename, { device, label: device.label, initial: device.label, saving: false, error: null, invalid: false });
     const layer = Kit.open({
-      kind: 'sheet',
-      panel: { tag: 'form', class: 'tc-sheet ' + (Kit.isPhone() ? 'tc-sheet--bottom' : 'tc-sheet--inset'), role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'device-title', novalidate: true },
+      kind: 'center',
+      panel: { tag: 'form', class: 'tc-dialog tc-device-rename', role: 'dialog', 'aria-modal': 'true', 'aria-busy': 'false', 'aria-labelledby': 'device-title', 'aria-describedby': 'device-desc device-current', novalidate: true },
       returnTo: trigger,
-      backdrop: 'ignore',
-      render: deviceSheetBody,
+      backdrop: 'close',
+      render: deviceRenameBody,
       focus: '#device-label',
-      onClose: () => { deviceSheet.layer = null; },
+      onEscape: () => { if (!deviceRename.saving) layer.close('escape'); },
+      onClose: () => { deviceRename.layer = null; },
     });
-    deviceSheet.layer = layer;
+    deviceRename.layer = layer;
     const panel = layer.panel;
+    const renderForm = () => {
+      layer.render();
+      panel.setAttribute('aria-busy', String(deviceRename.saving));
+      layer.el.querySelector('.tc-backdrop').inert = deviceRename.saving;
+    };
     panel.querySelector('#device-label').select();
     panel.addEventListener('click', (event) => {
-      if (event.target.closest('[data-sheet="close"]')) layer.close('cancel');
+      if (!deviceRename.saving && event.target.closest('[data-device-close]')) layer.close('cancel');
     });
-    panel.addEventListener('input', () => {
-      if (deviceSheet.error) { deviceSheet.error = null; layer.render(); }
+    panel.addEventListener('input', (event) => {
+      if (event.target.id !== 'device-label' || deviceRename.saving) return;
+      deviceRename.label = event.target.value;
+      deviceRename.error = null;
+      deviceRename.invalid = false;
+      renderForm();
     });
     panel.addEventListener('submit', async (event) => {
       event.preventDefault();
-      if (deviceSheet.saving) return;
+      if (deviceRename.saving || !deviceRenameChanged()) return;
       const label = panel.querySelector('#device-label').value.trim();
-      deviceSheet.saving = true;
-      deviceSheet.error = null;
-      layer.render();
+      deviceRename.saving = true;
+      deviceRename.error = null;
+      deviceRename.invalid = false;
+      renderForm();
       const res = await api('/devices/rename', { body: { id, label } });
       if (res.ok) {
         if (state.status) state.status.sessions = (state.status.sessions || []).map((session) => session.sessionId === id ? res.data.session : session);
         render();
         loadStatus();
-        Kit.toast(res.data.label ? 'Renamed to ' + M.deviceName(res.data.session) : 'Original device name restored');
+        Kit.toast(res.data.label ? 'Device renamed' : 'Original device name restored');
       }
-      if (deviceSheet.layer !== layer) {
+      if (deviceRename.layer !== layer) {
         if (!res.ok) Kit.toast(res.error, { tone: 'danger' });
         return;
       }
-      deviceSheet.saving = false;
-      if (!res.ok) { deviceSheet.error = res.error; layer.render(); return; }
+      deviceRename.saving = false;
+      if (!res.ok) { deviceRename.error = res.error; deviceRename.invalid = res.status === 400; renderForm(); panel.querySelector('#device-label').focus(); return; }
       layer.close('saved');
     });
   };
@@ -2864,7 +2881,7 @@
     },
     'pair.ttl': (a) => { pair.ttl = a.value; render(); },
     'device.revoke': (a) => confirmRevoke('session', a.id),
-    'device.rename': (a, el) => openDeviceSheet(a.id, el),
+    'device.rename': (a, el) => openDeviceRename(a.id, el),
     'link.revoke': (a) => confirmRevoke('pairing', a.id),
 
     'agents.filter': (a) => { state.agentFilter = a.value; render(); },

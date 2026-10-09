@@ -29,6 +29,11 @@ try {
 
 const URL = process.argv[2] || "http://127.0.0.1:13775/";
 const KEY = process.argv[3] || "k";
+// A disposable paired session created by the smoke test. Only this explicit
+// fixture is renamed; running the geometry audit alone never edits a device.
+const DEVICE_ID = process.env.T3_UI_AUDIT_DEVICE_ID || "";
+const DEVICE_LABEL = 'Work phone <not markup> & "desk"';
+const DEVICE_LONG_LABEL = 'W'.repeat(64);
 const CHROME = process.env.CHROME_PATH
   || (require("node:fs").existsSync("/usr/bin/chromium") ? "/usr/bin/chromium"
       : "/opt/pw-browsers/chromium-1194/chrome-linux/chrome");
@@ -69,6 +74,10 @@ const audit = () => {
   const DRAWN_OUTSIDE = ".tc-empty-media";
   for (const el of document.querySelectorAll("body *")) {
     if (!visible(el) || el.matches(DRAWN_OUTSIDE)) continue;
+    // Native text controls scroll a long value inside their editing viewport.
+    // scrollWidth measures that value, not content painted outside the field;
+    // the surrounding layout and the field's actual box are still measured.
+    if (el.matches("input, textarea")) continue;
     const style = getComputedStyle(el);
     if (style.overflowX !== "visible" && style.overflowX !== "clip") continue;
     if (el.scrollWidth - el.clientWidth > 1 && el.clientWidth > 0) {
@@ -304,6 +313,61 @@ const audit = () => {
       await page.evaluate((r) => { location.hash = r; }, route);
       await page.waitForSelector(`#page-${route}:not([hidden]) .tc-section, #page-${route}:not([hidden]) .tc-group`, { timeout: 60000 });
     }]),
+    ["rename device", async (page) => {
+      if (!DEVICE_ID) return;
+      await page.evaluate(() => { location.hash = "devices"; });
+      await page.click(`[data-cmd="device.rename"][data-id="${DEVICE_ID}"]`);
+      await page.waitForSelector(".tc-layer #device-label");
+      const layout = await page.evaluate(() => {
+        const form = document.querySelector('.tc-device-rename');
+        const box = form.getBoundingClientRect();
+        const field = form.querySelector('#device-label');
+        const actions = [...form.querySelectorAll('.tc-device-rename-foot .tc-btn')];
+        return { width: innerWidth, height: innerHeight, x: box.x, y: box.y, w: box.width, h: box.height,
+          input: field.getBoundingClientRect().height, actions: actions.map(b => b.getBoundingClientRect().height),
+          saveDisabled: form.querySelector('[data-key="device-save"]').disabled, focused: document.activeElement === field };
+      });
+      if (!layout.saveDisabled || !layout.focused) throw new Error('Renaming should focus the label and wait for a change before saving');
+      if (layout.width >= 1024) {
+        if (layout.w > 480 || layout.h > 420 || Math.abs(layout.x + layout.w / 2 - layout.width / 2) > 2
+          || Math.abs(layout.y + layout.h / 2 - layout.height / 2) > 2) throw new Error('Desktop renaming should use a compact, centred dialog');
+      } else if (Math.abs(layout.y + layout.h - layout.height) > 2 || layout.input < 44 || layout.actions.some(h => h < 44)) {
+        throw new Error('Touch renaming should use a bottom sheet with comfortable input and action targets');
+      }
+    }],
+    ["renamed device", async (page) => {
+      if (!DEVICE_ID) return;
+      await page.fill(".tc-layer #device-label", DEVICE_LABEL);
+      await page.click('.tc-layer [data-key="device-save"]');
+      await page.waitForSelector(".tc-layer", { state: "detached" });
+      await page.waitForFunction(([id, label]) => document.querySelector(`[data-key="dev-${id}"] .tc-row-name`)?.textContent === label, [DEVICE_ID, DEVICE_LABEL]);
+    }],
+    ["long device label", async (page) => {
+      if (!DEVICE_ID) return;
+      await page.click(`[data-cmd="device.rename"][data-id="${DEVICE_ID}"]`);
+      await page.waitForSelector(".tc-layer #device-label");
+      if (await page.inputValue(".tc-layer #device-label") !== DEVICE_LABEL) throw new Error("The rename field lost the saved label");
+      await page.fill(".tc-layer #device-label", DEVICE_LONG_LABEL);
+      await page.click('.tc-layer [data-key="device-save"]');
+      await page.waitForSelector(".tc-layer", { state: "detached" });
+      await page.waitForFunction(([id, label]) => document.querySelector(`[data-key="dev-${id}"] .tc-row-name`)?.textContent === label, [DEVICE_ID, DEVICE_LONG_LABEL]);
+    }],
+    ["rename long label", async (page) => {
+      if (!DEVICE_ID) return;
+      await page.click(`[data-cmd="device.rename"][data-id="${DEVICE_ID}"]`);
+      await page.waitForSelector(".tc-layer #device-label");
+      if (await page.inputValue(".tc-layer #device-label") !== DEVICE_LONG_LABEL) throw new Error("The rename field lost a maximum-length label");
+    }],
+    ["restored device", async (page) => {
+      if (!DEVICE_ID) return;
+      await page.fill(".tc-layer #device-label", "");
+      await page.click('.tc-layer [data-key="device-save"]');
+      await page.waitForSelector(".tc-layer", { state: "detached" });
+      await page.waitForFunction(([id, label]) => {
+        const row = document.querySelector(`[data-key="dev-${id}"] .tc-row-name`);
+        return row && row.textContent !== label;
+      }, [DEVICE_ID, DEVICE_LONG_LABEL]);
+    }],
     ["row menu", async (page) => {
       await page.evaluate(() => { location.hash = "agents"; });
       await page.waitForSelector("#page-agents [data-cmd='row.menu']", { timeout: 60000 });

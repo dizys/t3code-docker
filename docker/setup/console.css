@@ -316,6 +316,39 @@ html.tc-locked { overflow: hidden; }
 .tc-log-tail { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-lg); background: var(--surface-sunken); font: 400 12px/18px var(--font-mono); color: var(--fg-muted); white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: auto; }
 .tc-saved-keys-wrap { gap: var(--space-2); }
 .tc-dialog-field { margin-top: var(--space-3); }
+
+/* A device name is a small edit: a compact dialog, with the device beside
+   the field and the actions directly below it. At touch widths it becomes
+   a short bottom sheet using the same form and focus behaviour. */
+.tc-device-row .tc-row-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-device-rename-body { gap: var(--space-4); padding-bottom: var(--space-4); }
+.tc-device-rename-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+.tc-device-rename-head > div { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.tc-device-rename-head > .tc-btn { flex: none; margin: -4px 0 0; }
+.tc-device-rename-context { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3);
+  border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--surface-sunken); }
+.tc-device-rename-context > .tc-tile { flex: none; }
+.tc-device-rename-name { font-size: 14px; font-weight: 500; line-height: 20px; overflow-wrap: anywhere; }
+.tc-device-rename-label { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.tc-device-rename-label > .tc-hint { font-variant-numeric: tabular-nums; }
+.tc-device-rename .tc-input { height: var(--control-lg); }
+.tc-device-rename-error { display: flex; align-items: flex-start; gap: var(--space-2); color: var(--danger-text); font-size: 12px; line-height: 18px; }
+.tc-device-rename-error > .tc-icon { flex: none; margin-top: 1px; }
+.tc-device-rename-foot { padding-top: 0; }
+.tc-device-rename-foot [data-key="device-save"] { min-width: 120px; }
+@media (max-width: 639.98px) {
+  .tc-device-row:has(> .tc-row-actions) { grid-template-columns: auto minmax(0, 1fr); }
+  .tc-device-row > .tc-row-actions { grid-column: 2 / -1; justify-content: flex-start; margin-top: var(--space-2); }
+  .tc-root[data-density="touch"] .tc-device-row > .tc-row-actions .tc-btn { --_h: var(--touch); }
+}
+@media (max-width: 1023.98px) {
+  .tc-device-rename::before { content: ""; display: block; width: 36px; height: 4px; margin: var(--space-2) auto 0; border-radius: 2px; background: var(--border-strong); }
+  .tc-device-rename-body { padding: 20px 20px 16px; }
+  .tc-root[data-density="touch"] .tc-device-rename .tc-input { height: var(--touch); }
+  .tc-root[data-density="touch"] .tc-device-rename .tc-btn { --_h: var(--touch); }
+  .tc-layer--center > .tc-device-rename .tc-device-rename-foot { flex-direction: row; padding: 0 20px 20px; }
+  .tc-layer--center > .tc-device-rename .tc-device-rename-foot .tc-btn { flex: 1; width: auto; }
+}
 @media (max-width: 1023.98px) {
   .tc-signin-open > a { flex: 1 1 auto; }
   .tc-signin-code { flex-direction: column; }

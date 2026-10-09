@@ -473,7 +473,7 @@ T3_COOKIE=""
 t3_browser_session() {
   T3_COOKIE="$(docker exec "$NAME" node -e '
     const { execFileSync } = require("node:child_process");
-    const out = execFileSync("t3", ["auth", "pairing", "create", "--base-url", "http://127.0.0.1", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const out = execFileSync("t3", ["auth", "pairing", "create", "--base-url", "http://127.0.0.1", "--label", "Rename test browser", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     const { credential } = JSON.parse(out.slice(out.indexOf("{")));
     fetch("http://127.0.0.1:3773/api/auth/browser-session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ credential }) })
       .then((r) => process.stdout.write((r.headers.get("set-cookie") || "").split(";")[0]));
@@ -497,6 +497,36 @@ check "a state change from another site is refused" \
   "[ \"\$(revoke_code -H 'sec-fetch-site: cross-site')\" = 403 ] && [ \"\$(revoke_code -H 'sec-fetch-site: same-site')\" = 403 ]"
 check "a T3 session changes nothing unless the browser says it came from here" \
   "[ \"\$(revoke_code)\" = 401 ]"
+
+T3_LABEL_DEVICE=""
+paired_device_labels() {
+  local before renamed restored reply payload invalid
+  before="$(docker exec "$NAME" curl -fsS --max-time 25 -H "cookie: $T3_COOKIE" http://127.0.0.1:3774/status)" || return 1
+  T3_LABEL_DEVICE="$(printf '%s' "$before" | jq -r '.sessions[] | select(.client.label == "Rename test browser") | .sessionId')"
+  [ -n "$T3_LABEL_DEVICE" ] || return 1
+  payload="$(jq -cn --arg id "$T3_LABEL_DEVICE" '{id:$id,label:"Work browser"}')"
+  [ "$(console_code -H "cookie: $T3_COOKIE" -H 'sec-fetch-site: cross-site' -H 'content-type: application/json' -d "$payload" http://127.0.0.1:3774/devices/rename)" = 403 ] || return 1
+  [ "$(console_code -H 'content-type: application/json' -d "$payload" http://127.0.0.1:3774/devices/rename)" = 401 ] || return 1
+  reply="$(docker exec "$NAME" curl -fsS --max-time 25 -H "cookie: $T3_COOKIE" -H 'sec-fetch-site: same-origin' -H 'content-type: application/json' -d "$payload" http://127.0.0.1:3774/devices/rename)" || return 1
+  printf '%s' "$reply" | jq -e '.ok and .changed and .session.setupLabel == "Work browser"' >/dev/null || return 1
+  renamed="$(docker exec "$NAME" curl -fsS --max-time 25 -H "cookie: $T3_COOKIE" http://127.0.0.1:3774/status)" || return 1
+  python3 - "$T3_LABEL_DEVICE" "$before" "$renamed" <<'PY' || return 1
+import json, sys
+id, before, after = sys.argv[1], json.loads(sys.argv[2]), json.loads(sys.argv[3])
+old = next(s for s in before['sessions'] if s['sessionId'] == id)
+new = next(s for s in after['sessions'] if s['sessionId'] == id)
+assert new['setupLabel'] == 'Work browser'
+assert old['client'] == new['client'] and old['expiresAt'] == new['expiresAt']
+assert after['viewer']['via'] == 't3', 'renaming invalidated the paired browser'
+PY
+  invalid="$(jq -cn --arg id "$T3_LABEL_DEVICE" '{id:$id,label:("x" * 65)}')"
+  [ "$(console_code -H "cookie: $T3_COOKIE" -H 'sec-fetch-site: same-origin' -H 'content-type: application/json' -d "$invalid" http://127.0.0.1:3774/devices/rename)" = 400 ] || return 1
+  [ "$(console_code -H "cookie: $T3_COOKIE" -H 'sec-fetch-site: same-origin' -H 'content-type: application/json' -d '{"id":"missing-device","label":"Name"}' http://127.0.0.1:3774/devices/rename)" = 404 ] || return 1
+  payload="$(jq -cn --arg id "$T3_LABEL_DEVICE" '{id:$id,label:""}')"
+  restored="$(docker exec "$NAME" curl -fsS --max-time 25 -H "cookie: $T3_COOKIE" -H 'sec-fetch-site: same-origin' -H 'content-type: application/json' -d "$payload" http://127.0.0.1:3774/devices/rename)" || return 1
+  printf '%s' "$restored" | jq -e '.ok and .label == null and .session.client.label == "Rename test browser" and (.session | has("setupLabel") | not)' >/dev/null
+}
+check "a paired browser can rename its label and restore it without losing access" paired_device_labels
 hello_says_only_what_it_may() {
   local stranger member
   stranger="$(docker exec "$NAME" curl -fsS --max-time 25 http://127.0.0.1:3774/__setup/hello)" || return 1
@@ -1090,6 +1120,7 @@ console_layout_is_clean() {
   docker exec \
     -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
     -e CHROME_PATH=/usr/bin/chromium \
+    -e T3_UI_AUDIT_DEVICE_ID="$T3_LABEL_DEVICE" \
     "$NAME" node /tmp/ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" \
     >"$UI_AUDIT_LOG" 2>&1
 }

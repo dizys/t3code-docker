@@ -185,6 +185,11 @@ own for clients such as the desktop app that ask for a server URL and a code
 separately. When the device pairs, the page says **Paired with …** and offers
 **Open T3 Code**; it also tells you if the link expires or is revoked first.
 Paired devices and unused links are listed below, each with **Revoke**.
+Choose **Rename** beside a paired device to change its label without pairing
+again. Labels are saved on the state volume and survive restarts; leave the
+label blank to restore the device's original name.
+The rename form is a compact dialog on desktop and a bottom sheet on a phone.
+Enter saves changes; Escape cancels.
 
 Each row shows the one action its state needs (**Install**, **Sign in**,
 **Update** or **Retry**) and keeps the rest in its **⋯** menu, which is a

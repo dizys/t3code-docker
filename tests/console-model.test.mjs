@@ -514,6 +514,7 @@ test("devices read as what they are and when they were last seen", () => {
   assert.equal(rows[1].status, "macOS desktop app · active now");
   assert.equal(rows[1].icon, "laptop");
   assert.equal(rows[2].name, "Mobile app", "no label: what it is");
+  assert.equal(rows[2].label, "", "the rename field does not mistake a device kind for a saved label");
   assert.equal(rows[2].status, "not connected yet", "and not said twice");
   assert.equal(rows[3].name, "Chrome on Linux", "how T3 paired it is not a name");
   assert.equal(rows[3].status, "active now");
@@ -521,6 +522,16 @@ test("devices read as what they are and when they were last seen", () => {
   assert.equal(M.deviceName({ subject: "one-time-token", client: { browser: "Safari", os: "iOS" } }), "Safari on iOS");
   assert.equal(M.deviceName({ client: { label: "iPhone" } }), "iPhone");
   assert.equal(M.deviceName(null), "Client");
+});
+
+test("a saved device label wins over native labels and subjects throughout Setup", () => {
+  const session = { sessionId: "phone", setupLabel: "Work phone", label: "CLI label", subject: "build-bot", client: { label: "iPhone", browser: "Safari", os: "iOS" } };
+  assert.equal(M.deviceName(session), "Work phone");
+  const row = M.deviceRows([session], NOW)[0];
+  assert.equal(row.name, "Work phone");
+  assert.equal(row.label, "Work phone");
+  assert.match(row.status, /^Safari on iOS/);
+  assert.equal(M.deviceName({ ...session, setupLabel: undefined }), "iPhone", "removing the override restores the native name");
 });
 
 // ------------------------------------------------------------------- palette --

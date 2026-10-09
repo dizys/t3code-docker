@@ -28,6 +28,7 @@ import { createLatestCache } from "./latest.mjs";
 import { createT3Api } from "./t3-api.mjs";
 import { createAntigravity } from "./antigravity.mjs";
 import { createT3Sessions } from "./t3-session.mjs";
+import { createDeviceLabels } from "./device-labels.mjs";
 import { clientAddress } from "./client-address.mjs";
 import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
 import { connectState, jsonFrom, parseLinkOutput } from "./connect.mjs";
@@ -139,6 +140,11 @@ const t3Api = createT3Api({
 const antigravity = createAntigravity({ api: t3Api });
 const T3_AGENT_IDS = new Set(["antigravity"]);
 const isConsoleSession = (session) => session?.subject === CONSOLE_SUBJECT;
+const deviceLabels = createDeviceLabels({
+  stateDir: STATE_DIR,
+  listSessions: () => listJson(["auth", "session", "list", "--json"]),
+  isDevice: (session) => !isConsoleSession(session),
+});
 
 // A browser signed in to T3 Code with terminal access may use the console
 // without the key: see t3-session.mjs for why that grants nothing new.
@@ -728,7 +734,8 @@ const status = async () => {
     }, { harnesses: [], degraded: [] }),
   ]);
   const antigravityRow = await antigravityRead;
-  const devices = Array.isArray(sessions) ? sessions.filter((session) => !isConsoleSession(session)) : sessions;
+  const paired = Array.isArray(sessions) ? sessions.filter((session) => !isConsoleSession(session)) : sessions;
+  const devices = Array.isArray(paired) ? await attempt("device labels", () => deviceLabels.apply(paired), paired) : paired;
   noticeSetupProgress(setup);
   noticeSessions(devices);
   // Added tools, with what the registry says about each; their ids feed the
@@ -2050,7 +2057,7 @@ const cancelLifecycle = (target, rawId) => {
   return { http: 404, body: { ok: false, code: "not-running", error: "Nothing is running or waiting for that row." } };
 };
 
-const ROUTES = ["/login", "/logout", "/hello", "/status", "/pair", "/revoke", "/ports",
+const ROUTES = ["/login", "/logout", "/hello", "/status", "/pair", "/revoke", "/devices/rename", "/ports",
   "/public-url/clear", "/public-url", "/setup-key/reveal", "/setup-key/replace", "/connect/unlink", "/t3/restart",
   "/ports/expose", "/ports/unexpose",
   "/harnesses/install", "/harnesses/update", "/harnesses/uninstall", "/harnesses/cancel", "/harnesses/versions", "/harnesses/enable", "/harnesses",
@@ -2468,6 +2475,18 @@ const server = createServer(async (req, res) => {
         try { session.child.kill(); } catch {}
       }
       return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method === "POST" && route === "/devices/rename") {
+      let input;
+      try {
+        input = JSON.parse((await readBody(req)) || "{}");
+      } catch {
+        return sendJson(res, 400, { ok: false, error: "Expected a device and label." });
+      }
+      const { http, body } = await deviceLabels.rename(input);
+      if (body.ok && body.changed) recordEvent("device.renamed", `${body.label ? "Renamed" : "Restored"} ${Model.deviceName(body.session)}`);
+      return sendJson(res, http, body);
     }
 
     if (req.method === "POST" && route === "/revoke") {

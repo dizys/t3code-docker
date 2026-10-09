@@ -29,6 +29,10 @@ try {
 
 const URL = process.argv[2] || "http://127.0.0.1:13775/";
 const KEY = process.argv[3] || "k";
+// A disposable paired session created by the smoke test. Only this explicit
+// fixture is renamed; running the geometry audit alone never edits a device.
+const DEVICE_ID = process.env.T3_UI_AUDIT_DEVICE_ID || "";
+const DEVICE_LABEL = 'Work phone <not markup> & "desk"';
 const CHROME = process.env.CHROME_PATH
   || (require("node:fs").existsSync("/usr/bin/chromium") ? "/usr/bin/chromium"
       : "/opt/pw-browsers/chromium-1194/chrome-linux/chrome");
@@ -304,6 +308,32 @@ const audit = () => {
       await page.evaluate((r) => { location.hash = r; }, route);
       await page.waitForSelector(`#page-${route}:not([hidden]) .tc-section, #page-${route}:not([hidden]) .tc-group`, { timeout: 60000 });
     }]),
+    ["rename device", async (page) => {
+      if (!DEVICE_ID) return;
+      await page.evaluate(() => { location.hash = "devices"; });
+      await page.click(`[data-cmd="device.rename"][data-id="${DEVICE_ID}"]`);
+      await page.waitForSelector(".tc-layer #device-label");
+    }],
+    ["renamed device", async (page) => {
+      if (!DEVICE_ID) return;
+      await page.fill(".tc-layer #device-label", DEVICE_LABEL);
+      await page.click('.tc-layer [data-key="device-save"]');
+      await page.waitForSelector(".tc-layer", { state: "detached" });
+      await page.waitForFunction(([id, label]) => document.querySelector(`[data-key="dev-${id}"] .tc-row-name`)?.textContent === label, [DEVICE_ID, DEVICE_LABEL]);
+    }],
+    ["restored device", async (page) => {
+      if (!DEVICE_ID) return;
+      await page.click(`[data-cmd="device.rename"][data-id="${DEVICE_ID}"]`);
+      await page.waitForSelector(".tc-layer #device-label");
+      if (await page.inputValue(".tc-layer #device-label") !== DEVICE_LABEL) throw new Error("The rename field lost the saved label");
+      await page.fill(".tc-layer #device-label", "");
+      await page.click('.tc-layer [data-key="device-save"]');
+      await page.waitForSelector(".tc-layer", { state: "detached" });
+      await page.waitForFunction(([id, label]) => {
+        const row = document.querySelector(`[data-key="dev-${id}"] .tc-row-name`);
+        return row && row.textContent !== label;
+      }, [DEVICE_ID, DEVICE_LABEL]);
+    }],
     ["row menu", async (page) => {
       await page.evaluate(() => { location.hash = "agents"; });
       await page.waitForSelector("#page-agents [data-cmd='row.menu']", { timeout: 60000 });

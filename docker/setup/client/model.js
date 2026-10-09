@@ -982,7 +982,7 @@ const T3Model = (() => {
   // browser paired by link), which is no name for a device; what the browser
   // is, is.
   const HOW_PAIRED = new Set(['one-time-token', 'desktop-bootstrap']);
-  const deviceLabel = (c) => (c.client && c.client.label) || c.label || (c.subject && !HOW_PAIRED.has(c.subject) ? c.subject : null);
+  const deviceLabel = (c) => c.setupLabel || (c.client && c.client.label) || c.label || (c.subject && !HOW_PAIRED.has(c.subject) ? c.subject : null);
   /** What to call a paired device: its label, else what it is ("Safari on iOS"). */
   const deviceName = (session) => deviceLabel(session || {}) || deviceKind((session || {}).client);
   const deviceRows = (sessions, now) => (sessions || []).map((c) => {
@@ -994,6 +994,7 @@ const T3Model = (() => {
     return {
       id: c.sessionId,
       name,
+      label: label || '',
       kind: deviceKind(c.client),
       icon: deviceIcon(c.client),
       connected: Boolean(c.connected),

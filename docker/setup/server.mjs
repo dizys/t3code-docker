@@ -20,6 +20,7 @@ import {
   withTimeout,
   createProviderCache,
   createHarnessCache,
+  createListCache,
 } from "./cache.mjs";
 import { loadAssets, renderConsole, renderUnlock, contentSecurityPolicy } from "./page.mjs";
 import { parseListeners, processLabel, looksLikeDatabase } from "./ports.mjs";
@@ -522,7 +523,11 @@ const BROWSER = (() => {
 // budget - not the probe timeout - is what keeps the endpoint within its five
 // seconds.
 const HARNESS_BUDGET_MS = 4000;
-const T3_LIST_BUDGET_MS = 4000;
+// Separate display caches: the existing 15-second CLI timeout bounds each
+// background read, while status requests never wait for process startup.
+const authLists = Object.fromEntries(["pairing", "session"].map((kind) => [kind,
+  createListCache({ read: () => listJson(["auth", kind, "list", "--json"]) }),
+]));
 
 const harnessCache = createHarnessCache({
   full: async () => {
@@ -728,8 +733,8 @@ const status = async () => {
   // is how a console tells you a comfortable lie. Whatever answers, answers.
   // Every leg is bounded so the whole stays inside the five-second offline
   // budget: health is localhost, the harness snapshot races its authenticated
-  // refresh against a local fallback, and the `t3 auth` lists are local
-  // SQLite reads with a backstop for a locked database.
+  // refresh against a local fallback. Display-only `t3 auth` lists refresh
+  // independently: CLI startup can exceed the request budget under CPU load.
   const degraded = [];
   // Taken before the facts below are read, never after: an operation that ends
   // while they are read then shows as still running beside the newer facts,
@@ -761,14 +766,14 @@ const status = async () => {
   // source control CLIs too, whose sign-ins are read once it has.
   const toolchainRead = attemptTimed("toolchains", async () => (await loadHarness()).toolchains.status(), HARNESS_BUDGET_MS,
     { toolchains: [], sourceControl: [], degraded: [] });
-  const [server, harnessSnap, pairings, sessions, toolchainSnap, setup, scmSnap] = await Promise.all([
+  authLists.pairing.snapshot();
+  authLists.session.snapshot();
+  const [server, harnessSnap, toolchainSnap, setup, scmSnap] = await Promise.all([
     attempt("server health", health, { ok: false, detail: "health check failed" }),
     attempt("agent probes", () => harnessLifecycleStatus(true), {
       harnesses: [], degraded: [],
       cache: { at: null, stale: true, source: "unavailable", refreshing: false },
     }),
-    attemptTimed("pairing links", () => listJson(["auth", "pairing", "list", "--json"]), T3_LIST_BUDGET_MS, []),
-    attemptTimed("paired devices", () => listJson(["auth", "session", "list", "--json"]), T3_LIST_BUDGET_MS, null),
     toolchainRead,
     attempt("first-start setup", async () => {
       const manager = await loadHarness();
@@ -781,6 +786,11 @@ const status = async () => {
     }, { harnesses: [], degraded: [] }),
   ]);
   const antigravityRow = await antigravityRead;
+  // Include any CLI results that finished beside the other status reads.
+  const pairingRead = authLists.pairing.snapshot();
+  const sessionRead = authLists.session.snapshot();
+  const pairings = pairingRead.value ?? [];
+  const sessions = sessionRead.value;
   const paired = Array.isArray(sessions) ? sessions.filter((session) => !isConsoleSession(session)) : sessions;
   const devices = Array.isArray(paired) ? await attempt("device labels", () => deviceLabels.apply(paired), paired) : paired;
   noticeSetupProgress(setup);
@@ -885,6 +895,8 @@ const status = async () => {
     operations: operationsSeen,
     pairings,
     sessions: devices ?? [],
+    authLists: Object.fromEntries([["pairing", pairingRead], ["session", sessionRead]]
+      .map(([kind, { value, ...cache }]) => [kind, { ...cache, available: value !== null }])),
     events,
     degraded,
   };
@@ -894,14 +906,17 @@ const status = async () => {
 const listJson = async (args) => {
   const { stdout } = await t3(args);
   const start = stdout.indexOf("[");
-  if (start < 0) return [];
-  return JSON.parse(stdout.slice(start));
+  if (start < 0) throw new Error("T3 Code returned no list");
+  const rows = JSON.parse(stdout.slice(start));
+  if (!Array.isArray(rows)) throw new Error("T3 Code returned an invalid list");
+  return rows;
 };
 
 const revoke = async ({ kind, id }) => {
   if (kind !== "session" && kind !== "pairing") throw new Error("unknown kind");
   if (!/^[A-Za-z0-9-]{1,64}$/.test(String(id ?? ""))) throw new Error("bad id");
   await t3(["auth", kind, "revoke", String(id)]);
+  authLists[kind].invalidate();
   return { ok: true };
 };
 
@@ -915,6 +930,7 @@ const mintPairing = async ({ ttl, label }) => {
   if (label) args.push("--label", label);
   const { stdout } = await t3(args);
   const issued = JSON.parse(stdout.slice(stdout.indexOf("{")));
+  authLists.pairing.invalidate();
   let qr = null;
   try {
     const { stdout: svg } = await run("qrencode", ["-t", "SVG", "-m", "1", "-o", "-", issued.pairUrl]);

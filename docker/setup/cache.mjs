@@ -68,6 +68,41 @@ export function isStale(at, now, ttlMs) {
   return now - at >= ttlMs;
 }
 
+/** Display-only CLI lists. A slow read warms the next poll without holding up
+ * /status. Never use these snapshots to authorize or validate a mutation.
+ * Invalidation fences off reads started before a successful mutation. */
+export function createListCache({ read, now = Date.now, ttlMs = 15_000, retryMs = 15_000 }) {
+  let value = null, at = null, error = null, pending = null;
+  let generation = 0, lastStart = null;
+  const refresh = () => {
+    if (pending || (lastStart !== null && now() - lastStart < retryMs)) return;
+    lastStart = now();
+    const seen = generation;
+    pending = Promise.resolve().then(read).then((rows) => {
+      if (!Array.isArray(rows)) throw new Error("Expected a list from T3 Code");
+      if (seen !== generation) return;
+      value = rows;
+      at = now();
+      error = null;
+    }).catch((cause) => {
+      if (seen === generation) error = String(cause?.message ?? cause).slice(0, 200);
+    }).finally(() => { pending = null; });
+  };
+  return {
+    snapshot() {
+      if (isStale(at, now(), ttlMs)) refresh();
+      return { value, at, stale: isStale(at, now(), ttlMs), refreshing: pending !== null, error };
+    },
+    invalidate() {
+      generation += 1;
+      value = null;
+      at = null;
+      error = null;
+      lastStart = null;
+    },
+  };
+}
+
 /**
  * The OpenCode provider catalogue behind GET /providers.
  *

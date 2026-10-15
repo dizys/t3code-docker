@@ -16,6 +16,7 @@ import {
   isStale,
   createProviderCache,
   createHarnessCache,
+  createListCache,
 } from "../docker/setup/cache.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -406,4 +407,52 @@ test("one poll answers within its budget even when the refresh never lands", asy
   assert.equal(snap.source, "cheap");
   assert.deepEqual(snap.harnesses, [{ id: "claude" }]);
   assert.ok(took < 520, `answered in ${took}ms, budget 400ms`);
+});
+
+// Auth list reads must outlive a status request, without duplicate CLI work.
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+
+test('list snapshots return immediately, share pending reads, and warm later polls', async () => {
+  const clock = manualClock(); const gate = deferred(); let calls = 0;
+  const cache = createListCache({ read: () => { calls++; return gate.promise; }, now: clock.now });
+  const first = cache.snapshot();
+  assert.equal(first.value, null); assert.equal(first.refreshing, true); assert.equal(first.error, null);
+  await settle(); clock.advance(6000);
+  for (let i = 0; i < 20; i++) cache.snapshot();
+  assert.equal(calls, 1);
+  gate.resolve([{ sessionId: 'phone' }]); await settle();
+  assert.deepEqual(cache.snapshot().value, [{ sessionId: 'phone' }]);
+  assert.equal(cache.snapshot().stale, false); assert.equal(cache.snapshot().refreshing, false);
+});
+
+test('list refresh failures retain previous rows, report stale state, and throttle retries', async () => {
+  const clock = manualClock(); let calls = 0; let fail = false;
+  const cache = createListCache({ now: clock.now, read: async () => { calls++; if (fail) throw new Error('CLI timeout'); return [{ id: 'link' }]; } });
+  cache.snapshot(); await settle(); fail = true; clock.advance(15000);
+  const pending = cache.snapshot(); assert.equal(pending.stale, true); assert.equal(pending.value.length, 1);
+  await settle(); const failed = cache.snapshot();
+  assert.equal(failed.error, 'CLI timeout'); assert.equal(failed.value.length, 1);
+  for (let i = 0; i < 20; i++) cache.snapshot(); assert.equal(calls, 2);
+  fail = false; clock.advance(15000); cache.snapshot(); await settle();
+  assert.equal(cache.snapshot().error, null); assert.equal(cache.snapshot().stale, false);
+});
+
+test('invalidation discards pre-mutation reads and clears rows until a fresh read', async () => {
+  const old = deferred(); let calls = 0;
+  const cache = createListCache({ read: () => ++calls === 1 ? old.promise : Promise.resolve([]) });
+  cache.snapshot(); await settle(); cache.invalidate();
+  assert.equal(cache.snapshot().value, null);
+  old.resolve([{ sessionId: 'revoked' }]); await settle();
+  assert.equal(cache.snapshot().value, null); await settle();
+  assert.deepEqual(cache.snapshot().value, []); assert.equal(calls, 2);
+});
+
+test('invalid list responses are unavailable, while a verified empty list is available', async () => {
+  let response = {}; const clock = manualClock();
+  const cache = createListCache({ read: async () => response, now: clock.now });
+  cache.snapshot(); await settle();
+  assert.equal(cache.snapshot().value, null); assert.match(cache.snapshot().error, /Expected a list/);
+  response = []; clock.advance(15000); cache.snapshot(); await settle();
+  assert.deepEqual(cache.snapshot().value, []); assert.equal(cache.snapshot().error, null);
 });

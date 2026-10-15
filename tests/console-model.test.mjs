@@ -1164,3 +1164,13 @@ test("a signed-in CLI offers another host and signing out; az signs in with a de
   assert.ok(M.paletteItems(s, null, ui(), NOW).some((i) => i.label === "Sign GitLab CLI out of gitlab.com…"));
   assert.match(M.SOURCE_CONTROL.glab.tokenPage("gitlab.example.com"), /^https:\/\/gitlab\.example\.com\/-\/user_settings\/personal_access_tokens\?/);
 });
+
+test('unavailable device snapshots do not prompt pairing a first device', () => {
+  const s = { server: { ok: true }, publicUrl: 'https://t3.example', sessions: [],
+    authLists: { session: { available: false, stale: true, refreshing: true }, pairing: { available: false } } };
+  const view = M.readiness(s, {});
+  assert.equal(view.title, 'Reading paired devices');
+  assert.equal(view.steps.find((step) => step.id === 'pair').action, null);
+  s.authLists.session.available = true;
+  assert.equal(M.readiness(s, {}).title, 'Pair your first device');
+});

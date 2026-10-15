@@ -205,7 +205,8 @@
       }
       render();
       clearTimeout(statusTimer);
-      if (!document.hidden && !locked) statusTimer = setTimeout(loadStatus, busyNow(state.status) ? FAST_MS : POLL_MS);
+      const readingDevices = Object.values(state.status?.authLists || {}).some((entry) => entry.refreshing);
+      if (!document.hidden && !locked) statusTimer = setTimeout(loadStatus, busyNow(state.status) || readingDevices ? FAST_MS : POLL_MS);
     })().finally(() => { statusLoading = null; });
     return statusLoading;
   };
@@ -504,7 +505,20 @@
     // A part that could not be read says so, instead of rendering as "none".
     if ((s.degraded || []).length) {
       out.push(notice('warn', 'triangle-alert', 'Some of this is unreadable right now',
-        'Could not read ' + M.listOf(s.degraded.map((d) => d.what)) + '. Those parts show as empty; the container may still be starting.'));
+        'Could not read ' + M.listOf(s.degraded.map((d) => d.what)) + '. Try refreshing in a moment.'));
+    }
+    if (route === 'devices' || route === 'overview') {
+      const lists = Object.values(s.authLists || {});
+      const unavailable = lists.some((entry) => !entry.available);
+      const failed = lists.some((entry) => entry.error);
+      if (unavailable || failed) {
+        out.push(notice(failed ? 'warn' : null, failed ? 'triangle-alert' : 'refresh-cw',
+          failed ? 'Device details could not refresh' : 'Reading device details',
+          failed ? 'T3 Code has not returned a fresh list. Available details are from the last successful check; missing details are unavailable. The console retries automatically.'
+            : 'Pairing links and paired devices are loading in the background. This page updates automatically.'));
+      } else if (lists.some((entry) => entry.stale)) {
+        out.push(notice(null, 'history', null, 'Device details are from the last successful check while a fresh read finishes.'));
+      }
     }
     const setup = s.setup;
     if (setup && (route === 'overview' || route === 'agents' || route === 'toolchains' || route === 'sourcecontrol')) {
@@ -609,7 +623,7 @@
     const readout = (label, value, sub) => html`<div class="tc-readout"><span class="tc-readout-label">${label}</span><span class="tc-readout-value">${value}</span>${sub ? html`<span class="tc-small tc-muted">${sub}</span>` : ''}</div>`;
     const paths = s.paths || {};
     return section('glance-title', 'At a glance', html`<div class="tc-group"><div class="tc-readouts">
-      ${readout('Devices', sessions.length + ' paired', lastSeen)}
+      ${readout('Devices', s.authLists?.session.available === false ? 'Not available yet' : sessions.length + ' paired', s.authLists?.session.available === false ? 'Reading in the background' : s.authLists?.session.stale ? 'From the last check' : lastSeen)}
       ${readout('Agents', signed + ' of ' + installed.length + ' signed in', updates ? M.plural(updates, 'update') + ' available' : 'all current')}
       ${readout('Ports', published.length ? html`${dot('info')}${published.length} published` : 'None published', published.length ? published.map((p) => p.port + (p.startedAt ? ' · ' + M.duration((n - p.startedAt) / 1000) : '')).join(', ') : ports ? M.plural(M.portRows(ports, ui, n).length, 'port') + ' listening' : '')}
       ${Number.isFinite(paths.volumeBytes) ? readout('Volume', M.formatBytes(paths.volumeBytes), paths.volume) : ''}
@@ -687,6 +701,9 @@
   const trackPairing = (s) => {
     const m = pair.minted;
     if (!m || m.outcome) return;
+    if (m.expiresAt && Date.parse(m.expiresAt) < now()) { m.outcome = 'expired'; return; }
+    // Missing or stale snapshots cannot establish a pairing or revocation.
+    if (s.authLists && Object.values(s.authLists).some((entry) => !entry.available || entry.stale)) return;
     const sessions = s.sessions || [];
     if (m.baseline === null) { m.baseline = new Set(sessions.map((c) => c.sessionId)); return; }
     const fresh = sessions.find((c) => !m.baseline.has(c.sessionId));
@@ -698,11 +715,13 @@
       return;
     }
     const listed = (s.pairings || []).some((l) => l.id === m.id);
-    if (listed) m.seen = true;
-    if (m.expiresAt && Date.parse(m.expiresAt) < now()) { m.outcome = 'expired'; return; }
+    if (listed) { m.seen = true; m.missingAt = null; }
+    else if (s.authLists && m.missingAt == null) m.missingAt = s.authLists.pairing.at;
     // Only call it revoked once the list has shown the link at least once: the
     // status read that follows a mint can land before the pairing is listed.
-    if (m.seen && !listed) m.outcome = 'revoked';
+    // A consumed link can disappear before the independent session read catches
+    // the new device. Wait for a session read after the first missing result.
+    if (m.seen && !listed && (!s.authLists || s.authLists.session.at >= m.missingAt)) m.outcome = 'revoked';
   };
 
   const mint = async () => {
@@ -736,7 +755,7 @@
       qr: res.data.qr,
       label,
       ttl: pair.ttl,
-      baseline: s ? new Set((s.sessions || []).map((c) => c.sessionId)) : null,
+      baseline: s && s.authLists?.session.available !== false ? new Set((s.sessions || []).map((c) => c.sessionId)) : null,
       seen: false,
       outcome: null,
     };
@@ -830,6 +849,11 @@
       ${section('pair-title', 'Pair a device', ceremony ? pairCeremony(m, s, n) : pairForm(s), { actions: sub ? muted(sub) : null })}
       ${section('paired-title', 'Paired devices', devices.length
         ? html`<div class="tc-group"><div class="tc-list">${devices.map((d) => deviceRow(d, { revoke: true, fresh: d.id === pair.freshSession }))}</div></div>`
+        : s.authLists?.session.available === false ? html`<div class="tc-group"><div class="tc-empty" role="status">
+            ${emptyIcon('smartphone')}
+            <span class="tc-empty-title">Device list is not available yet</span>
+            <span class="tc-empty-desc">Reading paired devices in the background. This page updates automatically.</span>
+          </div></div>`
         : html`<div class="tc-group"><div class="tc-empty">
             ${emptyIcon('smartphone')}
             <span class="tc-empty-title">No devices paired yet</span>

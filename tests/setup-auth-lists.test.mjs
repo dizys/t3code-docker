@@ -52,7 +52,9 @@ if(action==='list') {
   assert.equal(warm.sessions[0].sessionId,'phone');assert.equal(warm.authLists.session.stale,false);
   assert.deepEqual(warm.pairings,[]);assert.equal(warm.authLists.pairing.available,true);
   await request('/revoke',{kind:'session',id:'phone'});
-  const invalidated=await request('/status');assert.equal(invalidated.authLists.session.available,false);assert.deepEqual(invalidated.sessions,[]);
+  // A fast refresh may already have completed; either way the revoked row
+  // must disappear from the first status response after the mutation.
+  const invalidated=await request('/status');assert.deepEqual(invalidated.sessions,[]);
   for(let i=0;i<100;i++){warm=await request('/status');if(warm.authLists.session.available)break;await pause(20)}
   assert.equal(warm.authLists.session.available,true);assert.deepEqual(warm.sessions,[]);
 });

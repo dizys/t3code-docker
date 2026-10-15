@@ -529,10 +529,20 @@ check "a T3 session changes nothing unless the browser says it came from here" \
 
 T3_LABEL_DEVICE=""
 paired_device_labels() {
-  local before renamed restored reply payload invalid
-  before="$(docker exec "$NAME" curl -fsS --max-time 25 -H "cookie: $T3_COOKIE" http://127.0.0.1:3774/status)" || return 1
-  T3_LABEL_DEVICE="$(printf '%s' "$before" | jq -r '.sessions[] | select(.client.label == "Rename test browser") | .sessionId')"
-  [ -n "$T3_LABEL_DEVICE" ] || return 1
+  local before renamed restored reply payload invalid deadline
+  # Status serves display snapshots while its shared CLI reads finish. A
+  # browser paired after the previous snapshot appears on a later refresh.
+  deadline=$((SECONDS + 45))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    before="$(docker exec "$NAME" curl -fsS --max-time 25 -H "cookie: $T3_COOKIE" http://127.0.0.1:3774/status)" || return 1
+    T3_LABEL_DEVICE="$(printf '%s' "$before" | jq -r '.sessions[] | select(.client.label == "Rename test browser") | .sessionId')"
+    [ -n "$T3_LABEL_DEVICE" ] && break
+    sleep 1
+  done
+  if [ -z "$T3_LABEL_DEVICE" ]; then
+    printf 'Device snapshot did not include the paired test browser within 45 seconds\n' >&2
+    return 1
+  fi
   payload="$(jq -cn --arg id "$T3_LABEL_DEVICE" '{id:$id,label:"Work browser"}')"
   [ "$(console_code -H "cookie: $T3_COOKIE" -H 'sec-fetch-site: cross-site' -H 'content-type: application/json' -d "$payload" http://127.0.0.1:3774/devices/rename)" = 403 ] || return 1
   [ "$(console_code -H 'content-type: application/json' -d "$payload" http://127.0.0.1:3774/devices/rename)" = 401 ] || return 1

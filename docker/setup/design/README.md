@@ -49,12 +49,14 @@ Each of these is a bug in the handoff, not a restyle. Keep them when syncing.
 Not in the handoff. Keep them when syncing.
 
 - **Agent marks.** `T3C.agentMark(id)` draws an agent's own mark (Claude Code,
-  Codex, OpenCode, Grok, Cursor, Antigravity) as T3 Code's provider settings
+  Codex, OpenCode, Grok, Cursor, Muse Code, Antigravity) as T3 Code's provider settings
   draw it, from `AGENT_MARKS` in `ui.js`, and `.tc-tile--mark` sets it on a
   neutral tile in place of a monogram. One-colour marks fill with
   `currentColor` so they follow the theme; Claude keeps its orange, OpenCode's
   two tones are `--agentmark-ink` and `--agentmark-hole` in `tokens.css`, and
-  Antigravity's gradient mark is a 64px image. The class is `tc-agentmark`
+  Muse Code uses the Meta blue gradient SVG from T3 Code's Muse provider
+  definition, with gradient IDs scoped per instance. Antigravity's gradient
+  mark is a 64px image. The class is `tc-agentmark`
   rather than `tc-brand`, which is the sidebar's brand block.
 - **Provider marks.** The same function draws the source control providers'
   marks (GitHub, GitLab, Forgejo, Azure DevOps) from `PROVIDER_MARKS`, as T3

@@ -19,7 +19,7 @@ const T3Model = (() => {
     opencode: { name: 'OpenCode', mark: 'opencode', mono: 'OC', hue: '--id-opencode', how: 'API key, per provider', flow: 'key', command: null },
     grok: { name: 'Grok Build', mark: 'grok', mono: 'GB', hue: '--id-grok', how: 'device code', flow: 'device', command: 'grok login --device-auth' },
     cursor: { name: 'Cursor', mark: 'cursor', mono: 'CU', hue: '--id-cursor', how: 'browser sign-in', flow: 'browser', command: 'cursor-agent login' },
-    muse: { name: 'Muse Code', mark: null, mono: 'MC', hue: '--id-toolchain', how: 'device code', flow: 'device', command: 'muse login', keyCommand: 'muse auth set --api-key-stdin', requiresNightly: true },
+    muse: { name: 'Muse Code', mark: 'muse', mono: 'MC', hue: '--id-toolchain', how: 'device code', flow: 'device', command: 'muse login', keyCommand: 'muse auth set --api-key-stdin', requiresNightly: true },
     // Installed and signed in by T3 Code itself (managedBy: 't3').
     antigravity: { name: 'Antigravity', mark: 'antigravity', mono: 'AG', hue: '--id-toolchain', how: 'Google sign-in', flow: 'redirect', command: null },
   };

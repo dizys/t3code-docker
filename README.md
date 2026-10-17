@@ -1100,6 +1100,10 @@ The `browser` and `core` targets replace `full` and `slim`; see [Upgrading from
 Behind a TLS-intercepting proxy, put the CA certificate (PEM) in `ca-certs/` and
 build with `--build-arg APT_HTTPS=true`.
 
+Maintainers can enable a public Docker Hub mirror at `dizys/t3code-docker`.
+See [Docker Hub publishing](docs/dockerhub-publishing.md) for account setup,
+verified release copying, and retries without rebuilding.
+
 ## Security
 
 An agent with a shell in this container can run anything, and the container is

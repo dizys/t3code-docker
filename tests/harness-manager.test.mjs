@@ -1617,6 +1617,101 @@ test("latest asks mise for the newest release without installing it", async () =
   await assert.rejects(manager.latest("nope"), /unknown harness/);
 });
 
+test("fresh release checks bypass mise caches for agents, toolchains and packages", async () => {
+  const world = createWorld(new MemoryFs());
+  const calls = [];
+  const run = world.run;
+  world.run = async (argv, options) => {
+    calls.push({ argv, env: options.env });
+    return run(argv, options);
+  };
+  const manager = managerFor(world);
+  await manager.latestRelease("claude", { fresh: true });
+  await manager.toolchains.latestRelease("rust", { fresh: true });
+  await manager.packages.latestRelease("jq", { fresh: true });
+  const lookups = calls.filter(({ argv }) => ["latest", "ls-remote"].includes(argv[3]));
+  assert.equal(lookups.length, 5);
+  assert.ok(lookups.every(({ env }) => env.MISE_FETCH_REMOTE_VERSIONS_CACHE === "0s"));
+  assert.ok(lookups[0].argv.includes("--minimum-release-age"), "agents still take new stable releases immediately");
+  assert.equal(lookups[1].argv.includes("--minimum-release-age"), false, "toolchains keep the release-age policy");
+});
+
+test("explicit tool, source control and package updates resolve fresh eligible versions", async () => {
+  const world = createWorld(new MemoryFs());
+  const run = world.run;
+  let stale = false;
+  const lookups = [];
+  world.run = async (argv, options) => {
+    if (argv[3] === "latest" && stale) {
+      lookups.push({ argv, env: options.env });
+      if (options.env.MISE_FETCH_REMOTE_VERSIONS_CACHE !== "0s") {
+        return { code: 0, stdout: "1.0.0\n", stderr: "" };
+      }
+    }
+    return run(argv, options);
+  };
+  const manager = managerFor(world);
+  for (const [ops, id] of [[manager.toolchains, "go"], [manager.sourceControl, "glab"], [manager.packages, "jq"]]) {
+    assert.equal((await ops.install(id)).ok, true);
+  }
+  world.latest.go = "1.27.2";
+  world.latest.glab = "1.121.0";
+  world.versions.jq.push("1.8.3");
+  world.waiting.go = ["1.27.3"];
+  world.waiting.jq = ["1.8.4"];
+  stale = true;
+  const go = await manager.toolchains.update("go");
+  const glab = await manager.sourceControl.update("glab");
+  const jq = await manager.packages.update("jq");
+  assert.equal(go.toolchain.version, "1.27.2");
+  assert.equal(glab.toolchain.version, "1.121.0");
+  assert.equal(jq.package.version, "1.8.3");
+  assert.equal(lookups.length, 3);
+  assert.ok(lookups.every(({ argv, env }) => env.MISE_FETCH_REMOTE_VERSIONS_CACHE === "0s" && !argv.includes("--minimum-release-age")), "fresh updates keep the release-age policy");
+});
+
+test("release pickers bypass mise caches for agent distributions and added tools", async () => {
+  const world = createWorld(new MemoryFs());
+  const run = world.run;
+  const lookups = [];
+  world.run = async (argv, options) => {
+    if (["latest", "ls-remote"].includes(argv[3])) {
+      lookups.push({ argv, env: options.env });
+      if (options.env.MISE_FETCH_REMOTE_VERSIONS_CACHE !== "0s") throw new Error("stale registry cache used");
+    }
+    return run(argv, options);
+  };
+  const manager = managerFor(world);
+  world.waiting.claude = ["2.1.274"];
+  const claude = await manager.versions("claude");
+  assert.equal(claude.releases[0].version, "2.1.274");
+  assert.equal(claude.releases[0].waiting, true);
+  const opencode = await manager.versions("opencode");
+  assert.ok(opencode.releases.some((row) => row.version.startsWith("1.")));
+  assert.ok(opencode.releases.some((row) => row.version.startsWith("2.")));
+  const jq = await manager.packages.versions("jq");
+  assert.equal(jq.releases[0].version, "1.8.2");
+  assert.equal(lookups.length, 8);
+});
+
+test("an exact newly published package selection refreshes both version lookups", async () => {
+  const world = createWorld(new MemoryFs());
+  const run = world.run;
+  const lookups = [];
+  world.run = async (argv, options) => {
+    if (argv[3] === "latest") lookups.push({ argv, env: options.env });
+    return run(argv, options);
+  };
+  world.waiting.jq = ["1.8.3"];
+  const result = await managerFor(world).packages.install("jq", { version: "1.8.3" });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.package.version, "1.8.3");
+  assert.equal(lookups.length, 2);
+  assert.ok(lookups.every(({ env }) => env.MISE_FETCH_REMOTE_VERSIONS_CACHE === "0s"));
+  assert.equal(lookups[0].argv.includes("--minimum-release-age"), false);
+  assert.equal(lookups[1].argv.includes("--minimum-release-age"), true, "only the exact-version fallback bypasses release age");
+});
+
 test("the runner stops a cancelled program and everything it started", async () => {
   const { createRunner } = await import("../docker/harness/io.mjs");
   const run = createRunner();

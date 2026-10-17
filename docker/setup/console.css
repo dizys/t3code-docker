@@ -283,7 +283,7 @@ html.tc-locked { overflow: hidden; }
 }
 .tc-status.tc-status--prose { display: block; }
 /* A status line's words wrap beside their dot instead of dropping under it. */
-.tc-status-text { flex: 1 1 0%; min-width: 0; }
+.tc-status-text { flex: 1 1 0%; min-width: 0; overflow-wrap: anywhere; }
 .tc-version-arrow { color: var(--fg-subtle); }
 
 /* An operation inside a row (Updating): narration, figure, bar. */

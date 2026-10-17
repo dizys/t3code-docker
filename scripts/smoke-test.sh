@@ -98,10 +98,12 @@ LEGACY_ENV=(-e GOROOT=/usr/local/go -e GOPATH=/home/t3/go
 # ...and the PATH it declared, which the startup-pairing container below runs with.
 LEGACY_PATH=/usr/local/bun/bin:/usr/local/deno/bin:/usr/local/cargo/bin:/usr/local/go/bin:/home/t3/go/bin:/opt/cursor/.local/bin:/opt/npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# Forward an optional CI token by name, without writing it into logs or images.
 docker run -d --name "$NAME" \
   -p "127.0.0.1:${PORT}:3773" \
   -e "T3_PUBLIC_URL=${PUBLIC_URL}" \
   -e "T3_SETUP_KEY=${SETUP_KEY}" \
+  -e GITHUB_TOKEN \
   "${LEGACY_ENV[@]}" \
   "$IMAGE" >/dev/null
 
@@ -419,6 +421,9 @@ assert runtime['supported'] is True, 'T3 upgrade supervisor'
 assert runtime['channel'] == 'stable', 'initial release channel'
 assert runtime['version'] == s['server']['version'], 'selected T3 release matches running server'
 assert set(runtime['releases']) <= {'stable', 'nightly'}, 'only public release channels'
+assert 'checkedAt' in runtime and 'checkError' in runtime, 'selected channel freshness'
+assert isinstance(s['updates']['refreshing'], bool), 'update check progress'
+assert isinstance(s['updates']['errors'], dict), 'per-source update check errors'
 assert all('latestVersion' in h for h in s['harnesses']), 'harness latestVersion'
 assert all('latestVersion' in t for t in s['toolchains']), 'toolchain latestVersion'
 assert 'volumeKind' in s['paths'] and 'volumeBytes' in s['paths'], 'storage facts'
@@ -428,6 +433,29 @@ assert s['storage']['policy']['retainManagedVersions'] is True, 'managed version
 "
 }
 check "status carries what the console reads" status_has_console_fields
+
+# Exercise the shipped picker lookup without a registry or an installation.
+release_pickers_refresh() {
+  docker exec -i "$NAME" node --input-type=module <<'JS'
+import assert from 'node:assert/strict';
+import { createHarnessManager } from '/opt/t3-harness/index.mjs';
+let published = '1.0.0';
+const manager = createHarnessManager({
+  run: async (argv, { env }) => {
+    assert.ok(['latest', 'ls-remote'].includes(argv[3]), 'picker is read-only');
+    assert.equal(env.MISE_FETCH_REMOTE_VERSIONS_CACHE, '0s', 'bypass mise cache');
+    return { code: 0, stderr: '', stdout: argv[3] === 'latest' ? published : JSON.stringify([{ version: published }]) };
+  },
+});
+for (const [ops, id] of [[manager, 'claude'], [manager.packages, 'jq']]) {
+  published = '1.0.0';
+  assert.equal((await ops.versions(id)).releases[0].version, '1.0.0');
+  published = '1.0.1';
+  assert.equal((await ops.versions(id)).releases[0].version, '1.0.1');
+}
+JS
+}
+check "release pickers refresh mise version lists without installing" release_pickers_refresh
 
 t3_update_access_is_gated() {
   local payload
@@ -593,7 +621,7 @@ auto_update_settings_work() {
     -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
     "$NAME" node /tmp/auto-update-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
 }
-check "automatic update settings keep categories independent and warn before T3 Code opt-in" auto_update_settings_work
+check "update checks show progress and failures; automatic settings keep categories independent" auto_update_settings_work
 
 context_instructions_work() {
   docker cp scripts/context-api-audit.mjs "$NAME:/tmp/context-api-audit.mjs" >/dev/null 2>&1 || return 1
@@ -1255,7 +1283,7 @@ console_layout_is_clean() {
     -e CHROME_PATH=/usr/bin/chromium \
     -e T3_UI_AUDIT_DEVICE_ID="$T3_LABEL_DEVICE" \
     "$NAME" node /tmp/ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" \
-    >"$UI_AUDIT_LOG" 2>&1
+    >>"$UI_AUDIT_LOG" 2>&1
 }
 check "the console has no layout defects" console_layout_is_clean
 

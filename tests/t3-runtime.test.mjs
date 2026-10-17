@@ -153,6 +153,69 @@ test("an unavailable nightly tag does not block a fresh stable release check", a
   assert.equal((await manager.status()).checkError, null);
 });
 
+test("a failed selected channel keeps its successful timestamp across restarts", async (t) => {
+  const { env } = await world(t);
+  let offline = false;
+  const options = { env, fetcher: async (url) => {
+    if (offline && url.endsWith("/latest")) throw new Error("stable offline");
+    return registry(url);
+  } };
+  const manager = createRuntimeManager(options);
+  await manager.check();
+  const before = await manager.status();
+  assert.ok(before.checkedAt);
+  offline = true;
+  const failed = await manager.check();
+  assert.match(failed.error, /stable offline/, "Nightly success does not mask Stable failure");
+  const after = await manager.status();
+  assert.equal(after.checkedAt, before.checkedAt);
+  assert.equal(after.releases.stable.version, before.releases.stable.version);
+  assert.match(after.checkError, /stable offline/);
+  const restarted = await createRuntimeManager(options).status();
+  assert.equal(restarted.checkedAt, before.checkedAt);
+  assert.match(restarted.checkError, /stable offline/);
+  offline = false;
+  assert.equal((await manager.check()).error, null);
+  assert.equal((await manager.status()).checkError, null);
+});
+
+test("Stable success does not mask a failed selected Nightly channel", async (t) => {
+  const { env, paths } = await world(t);
+  await fakeRuntime(paths, NIGHTLY);
+  await writeJson(paths.selection, { schema: 1, channel: "nightly", version: NIGHTLY });
+  const manager = createRuntimeManager({ env, fetcher: async (url) => url.endsWith("/nightly") ? new Response("missing", { status: 404 }) : registry(url) });
+  const result = await manager.check();
+  assert.match(result.error, /404/);
+  assert.equal(result.channels.stable.version, "0.0.45");
+  const status = await manager.status();
+  assert.equal(status.checkedAt, null);
+  assert.match(status.checkError, /404/);
+});
+
+test("switching checks report the requested channel independently of the selected one", async (t) => {
+  const { env } = await world(t);
+  const calls = [];
+  const manager = createRuntimeManager({ env, fetcher: async (url) => {
+    calls.push(url);
+    if (url.endsWith('/latest')) throw new Error('stable offline');
+    return registry(url);
+  } });
+  const [stable, nightly] = await Promise.all([manager.check(), manager.check({ channel: 'nightly' })]);
+  assert.match(stable.error, /stable offline/);
+  assert.equal(nightly.error, null);
+  assert.equal(nightly.channels.nightly.version, NIGHTLY);
+  assert.equal(calls.length, 2, 'concurrent channel checks share the registry requests');
+  await assert.rejects(manager.check({ channel: 'preview' }), /Stable or Nightly/);
+});
+
+test("legacy cached releases are shown without claiming a verified channel timestamp", async (t) => {
+  const { env, paths } = await world(t);
+  await writeJson(paths.releases, { checkedAt: 1234, channels: { stable: { version: "0.0.45" } } });
+  const status = await createRuntimeManager({ env }).status();
+  assert.equal(status.releases.stable.version, "0.0.45");
+  assert.equal(status.checkedAt, null);
+});
+
 async function fakeRuntime(paths, version, mode = "ready", bundled = false, auth = {}) {
   const dir = bundled ? path.dirname(paths.binary) : path.join(paths.versions, version);
   await fs.mkdir(dir, { recursive: true });

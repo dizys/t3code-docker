@@ -238,7 +238,7 @@ assert_immutable_infrastructure() { # label
 
 recreate() { # extra docker-run arguments...
   docker rm -f "$NAME" >/dev/null 2>&1 || true
-  docker run -d --name "$NAME" -e "T3_SETUP_KEY=${SETUP_KEY}" -e T3_PREINSTALL=none \
+  docker run -d --name "$NAME" -e "T3_SETUP_KEY=${SETUP_KEY}" -e T3_PREINSTALL=none -e GITHUB_TOKEN \
     "$@" -v "${VOLUME}:/home/t3" -v "${WORKSPACE_VOLUME}:/workspace" "$IMAGE" >/dev/null
   wait_usable
 }

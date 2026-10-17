@@ -118,6 +118,7 @@ const T3Model = (() => {
     return { ...runtime, busy, phaseText: busy ? phases[op.phase] : null,
       available: Boolean(release && isNewer(release, runtime.version)),
       latest: release || null,
+      verified: Boolean(release && runtime.checkedAt && !runtime.checkError),
       error: op && ['failed', 'rolled-back', 'interrupted'].includes(op.phase) ? op.error : null };
   };
 
@@ -609,7 +610,7 @@ const T3Model = (() => {
       row.status.text = (meta.detail ? meta.detail + ' · ' : 'Installed · ') + latest + ' is available';
       row.action = { cmd: cmd('update'), label: 'Update' };
     } else {
-      row.status.text = [meta.detail || 'Installed', follows ? 'follows ' + follows : held ? held.text : latest ? 'up to date' : null].filter(Boolean).join(' · ');
+      row.status.text = [meta.detail || 'Installed', follows ? 'follows ' + follows : held ? held.text : status.updates?.errors?.[target + ':' + t.id] ? 'Update check failed' : latest ? 'up to date' : null].filter(Boolean).join(' · ');
     }
     row.held = held;
     if (updateAvailable) row.menu.push({ cmd: cmd('update'), label: 'Update to ' + latest, icon: 'circle-arrow-up' });

@@ -381,3 +381,29 @@ export function createHarnessCache({
 
   return { snapshot, snapshotCheap, invalidate, peek, get refreshing() { return coalescer.pending; } };
 }
+
+/** Share pending reads and optionally retain successful answers for a TTL.
+ * Clearing detaches old reads: their completion cannot replace a newer answer. */
+export function createTtlCache({ ttlMs, limit = 200, now = Date.now }) {
+  const entries = new Map();
+  const cached = (key, load) => {
+    const hit = entries.get(key);
+    if (hit && (hit.pending || now() - hit.at < ttlMs)) return hit.value;
+    const entry = { at: now(), pending: true, value: null };
+    entry.value = Promise.resolve().then(load).then((result) => {
+      if (entries.get(key) === entry) {
+        entry.at = now();
+        entry.pending = false;
+      }
+      return result;
+    }, (error) => {
+      if (entries.get(key) === entry) entries.delete(key);
+      throw error;
+    });
+    entries.set(key, entry);
+    if (entries.size > limit) entries.delete(entries.keys().next().value);
+    return entry.value;
+  };
+  cached.clear = () => entries.clear();
+  return cached;
+}

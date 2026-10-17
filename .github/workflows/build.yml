@@ -158,6 +158,7 @@ jobs:
 
       - name: Smoke test
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           VARIANT: ${{ matrix.target }}
           PLATFORM_DIGEST: ${{ steps.platform.outputs.digest }}
         run: |
@@ -176,6 +177,7 @@ jobs:
       - name: Harness lifecycle E2E (native amd64)
         if: matrix.platform == 'amd64'
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           VARIANT: ${{ matrix.target }}
           PLATFORM_DIGEST: ${{ steps.platform.outputs.digest }}
         run: |

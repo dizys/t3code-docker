@@ -17,6 +17,7 @@ import {
   createProviderCache,
   createHarnessCache,
   createListCache,
+  createTtlCache,
 } from "../docker/setup/cache.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -455,4 +456,47 @@ test('invalid list responses are unavailable, while a verified empty list is ava
   assert.equal(cache.snapshot().value, null); assert.match(cache.snapshot().error, /Expected a list/);
   response = []; clock.advance(15000); cache.snapshot(); await settle();
   assert.deepEqual(cache.snapshot().value, []); assert.equal(cache.snapshot().error, null);
+});
+
+
+test("release-list cache shares pending reads but refreshes each new opening", async () => {
+  const cache = createTtlCache({ ttlMs: 0 });
+  let finish, calls = 0;
+  const load = () => { calls++; return new Promise((resolve) => { finish = resolve; }); };
+  const first = cache("claude", load);
+  const concurrent = cache("claude", load);
+  assert.equal(first, concurrent);
+  await Promise.resolve();
+  finish("1");
+  assert.deepEqual(await Promise.all([first, concurrent]), ["1", "1"]);
+  const reopened = cache("claude", load);
+  await Promise.resolve();
+  finish("2");
+  assert.equal(await reopened, "2");
+  assert.equal(calls, 2);
+});
+
+for (const rejectOld of [false, true]) test(`clearing release lists ignores an older ${rejectOld ? "failure" : "success"}`, async () => {
+  const cache = createTtlCache({ ttlMs: 1000 });
+  let finish, fail;
+  const old = cache("claude", () => new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+  await Promise.resolve();
+  cache.clear();
+  assert.equal(await cache("claude", async () => "new"), "new");
+  if (rejectOld) {
+    fail(new Error("old read failed"));
+    await assert.rejects(old, /old read failed/);
+  } else { finish("old"); await old; }
+  assert.equal(await cache("claude", async () => "unexpected reload"), "new");
+});
+
+test("metadata cache retains successful results until expiry and retries failures", async () => {
+  const clock = manualClock();
+  const cache = createTtlCache({ ttlMs: 1000, now: clock.now });
+  assert.equal(await cache("tool", async () => "first"), "first");
+  clock.advance(999);
+  assert.equal(await cache("tool", async () => "too soon"), "first");
+  clock.advance(1);
+  await assert.rejects(cache("tool", async () => { throw new Error("offline"); }), /offline/);
+  assert.equal(await cache("tool", async () => "recovered"), "recovered");
 });

@@ -667,7 +667,7 @@ export function createHarnessManager(options = {}) {
   function updateToolchain(id, options = {}) {
     return runToolchain(id, "update", async (entry, previous, op) => {
       op.phase("resolving");
-      const target = await mise.latest(ctx, releaseSpec(entry), { signal: op.signal });
+      const target = await mise.latest(ctx, releaseSpec(entry), { signal: op.signal, fresh: true });
       assertVersion(target);
       const selected = await globalVersion(entry.miseTool);
       if (keepNewer(entry, selected, target, op)) return {};
@@ -836,10 +836,10 @@ export function createHarnessManager(options = {}) {
     const spec = version ? `${id}@${version}` : id;
     let target;
     try {
-      target = await mise.latest(ctx, spec, { signal: op.signal });
+      target = await mise.latest(ctx, spec, { signal: op.signal, fresh: true });
     } catch (error) {
       if (!version || error?.code === "cancelled") throw error;
-      const named = await mise.latest(ctx, spec, { signal: op.signal, anyAge: true }).catch((retry) => {
+      const named = await mise.latest(ctx, spec, { signal: op.signal, anyAge: true, fresh: true }).catch((retry) => {
         if (retry?.code === "cancelled") throw retry;
         return null;
       });
@@ -953,10 +953,10 @@ export function createHarnessManager(options = {}) {
     return mise.latest(ctx, parsed.id);
   }
 
-  async function latestPackageRelease(raw) {
+  async function latestPackageRelease(raw, options = {}) {
     const parsed = parseToolSpec(raw);
     if (!parsed.ok) throw new Error(parsed.error);
-    return releaseSummary(parsed.id);
+    return releaseSummary(parsed.id, options);
   }
 
   /** Every release a tool's backend offers, newest first. Asks the network. */
@@ -1026,11 +1026,11 @@ export function createHarnessManager(options = {}) {
    * The newest stable agent release, without the release-age wait or an install. Asks
    * the registry, so it belongs in a background job, never on a status read.
    */
-  async function latest(id) {
+  async function latest(id, { fresh = false } = {}) {
     let entry = getHarness(id);
     if (!entry) throw new Error(`unknown harness: ${id}`);
     entry = await installationForRequest(entry, null);
-    return mise.latest(ctx, latestSpec(entry), { anyAge: true });
+    return mise.latest(ctx, latestSpec(entry), { anyAge: true, fresh });
   }
 
   async function latestToolchain(id) {
@@ -1051,8 +1051,8 @@ export function createHarnessManager(options = {}) {
    */
   async function releaseList(tool, { minimumVersion = null, releaseMajor = null } = {}) {
     const [listing, offered] = await Promise.all([
-      mise.lsRemote(ctx, tool, { json: true, anyAge: true }),
-      mise.latest(ctx, releaseMajor ? `${tool}@${releaseMajor}` : tool).catch(() => null),
+      mise.lsRemote(ctx, tool, { json: true, anyAge: true, fresh: true }),
+      mise.latest(ctx, releaseMajor ? `${tool}@${releaseMajor}` : tool, { fresh: true }).catch(() => null),
     ]);
     return {
       latest: offered,
@@ -1065,9 +1065,9 @@ export function createHarnessManager(options = {}) {
   }
 
   /** `{ version, newest, newestAt }`: what mise offers, and the newest release it is holding back. */
-  async function releaseSummary(tool) {
-    const version = await mise.latest(ctx, tool);
-    const releases = await mise.lsRemote(ctx, tool, { json: true, anyAge: true }).then(parseReleases, () => []);
+  async function releaseSummary(tool, { fresh = false } = {}) {
+    const version = await mise.latest(ctx, tool, { fresh });
+    const releases = await mise.lsRemote(ctx, tool, { json: true, anyAge: true, fresh }).then(parseReleases, () => []);
     const held = releases.find((release) => !release.prerelease && compareVersions(release.version, version) > 0) ?? null;
     return { version, newest: held?.version ?? null, newestAt: held?.releasedAt ?? null };
   }
@@ -1101,14 +1101,14 @@ export function createHarnessManager(options = {}) {
     };
   }
 
-  async function latestRelease(id) {
-    return { version: await latest(id), newest: null, newestAt: null };
+  async function latestRelease(id, options = {}) {
+    return { version: await latest(id, options), newest: null, newestAt: null };
   }
 
-  async function latestToolchainRelease(id) {
+  async function latestToolchainRelease(id, options = {}) {
     const entry = getManagedTool(id);
     if (!entry) throw new Error(`unknown toolchain: ${id}`);
-    return releaseSummary(releaseSpec(entry));
+    return releaseSummary(releaseSpec(entry), options);
   }
 
   // --- source control CLIs ------------------------------------------------

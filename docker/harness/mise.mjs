@@ -163,9 +163,9 @@ export async function registry(ctx) {
  * `{ version, created_at, release_url }`. `anyAge` includes the releases still
  * inside the minimum release age.
  */
-export async function lsRemote(ctx, tool, { json = false, anyAge = false } = {}) {
+export async function lsRemote(ctx, tool, { json = false, anyAge = false, fresh = false } = {}) {
   const result = await ctx.run(miseArgs(ctx, ["ls-remote", ...(json ? ["--json"] : []), ...(anyAge ? ANY_AGE : []), tool]), {
-    env: readEnv(ctx.env),
+    env: { ...readEnv(ctx.env), ...(fresh ? { MISE_FETCH_REMOTE_VERSIONS_CACHE: "0s" } : {}) },
     cwd: ctx.home,
     timeoutMs: ctx.timeouts.latest ?? ctx.timeouts.mise,
   });

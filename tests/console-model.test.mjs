@@ -1200,3 +1200,23 @@ test('auto-update view summarizes policy, checks and activity', () => {
   assert.equal(on.busy, 'An install or update is already running');
   assert.equal(on.lastResult, 'Queued 2 tool updates');
 });
+
+
+test("runtime freshness requires a successful check for the selected channel", () => {
+  const s = { t3: { runtime: { channel: 'stable', version: '0.0.45', releases: { stable: { version: '0.0.45' } }, checkedAt: NOW } } };
+  assert.equal(M.runtimeView(s).verified, true);
+  s.t3.runtime.checkError = 'offline';
+  assert.equal(M.runtimeView(s).verified, false);
+  s.t3.runtime.releases.stable.version = '0.0.46';
+  assert.equal(M.runtimeView(s).available, true, 'retain known updates when offline');
+  s.t3.runtime.checkError = null;
+  s.t3.runtime.checkedAt = null;
+  assert.equal(M.runtimeView(s).verified, false);
+});
+
+test("tool rows do not call a failed update check up to date", () => {
+  const s = { toolchains: [{ id: 'go', installed: true, version: '1.27.1', latestVersion: '1.27.1' }], updates: { errors: { 'toolchain:go': 'offline' } } };
+  assert.match(M.toolchainRows(s, ui(), NOW)[0].status.text, /Update check failed/);
+  s.toolchains[0].latestVersion = '1.27.2';
+  assert.equal(M.toolchainRows(s, ui(), NOW)[0].updateAvailable, true);
+});

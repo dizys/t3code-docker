@@ -5,7 +5,7 @@
 //
 // `mise latest` asks a registry, which takes a second or two online and up to
 // its timeout offline - far too slow and too flaky for a status poll. So it
-// runs here in the background, one tool at a time, at most every hour (as
+// runs here in the background, three tools at a time, at most every hour (as
 // often as T3 Code checks the same releases), and the answers are kept on the
 // state volume so a restart starts warm. A poll only ever reads memory. A
 // lookup that fails keeps the last answer: an unreachable registry is not news
@@ -14,7 +14,7 @@ const DEFAULT_TTL_MS = 60 * 60 * 1000;
 
 /**
  *   keys      () => ["harness:claude", "toolchain:go", ...]
- *   lookup    (key) => Promise<version | { version, newest?, newestAt? }>
+ *   lookup    (key, { fresh }) => Promise<version | { version, newest?, newestAt? }>
  *             (throws when it cannot say)
  *   read      () => Promise<string>       the saved cache, or throws
  *   write     (text) => Promise<void>
@@ -31,11 +31,14 @@ const entryOf = (answer, at) => {
   };
 };
 
-export function createLatestCache({ keys, lookup, read, write, ttlMs = DEFAULT_TTL_MS, now = Date.now }) {
+export function createLatestCache({ keys, lookup, read, write, ttlMs = DEFAULT_TTL_MS, retryMs = 60_000, now = Date.now }) {
   let versions = {};          // key -> { version, at, newest?, newestAt? }
   let checkedAt = null;       // when a full pass last finished
   let loaded = null;
   let running = null;
+  let runningManual = false;
+  let queued = null;
+  let failures = {};
 
   const load = () => {
     loaded ??= (async () => {
@@ -43,6 +46,7 @@ export function createLatestCache({ keys, lookup, read, write, ttlMs = DEFAULT_T
         const saved = JSON.parse(await read());
         if (saved && typeof saved === "object" && saved.versions && typeof saved.versions === "object") {
           versions = saved.versions;
+          failures = saved.failures && typeof saved.failures === "object" ? saved.failures : {};
           checkedAt = Number.isFinite(saved.checkedAt) ? saved.checkedAt : null;
         }
       } catch { /* nothing saved yet */ }
@@ -50,27 +54,49 @@ export function createLatestCache({ keys, lookup, read, write, ttlMs = DEFAULT_T
     return loaded;
   };
 
-  /**
-   * One pass over every key, unless a recent one already happened. `force`
-   * is the "Check for updates now" button. Concurrent callers share a pass.
-   */
-  const refresh = ({ force = false } = {}) => {
-    if (running) return running;
+  const lookupOne = async (key, fresh) => {
+    try {
+      const entry = entryOf(await lookup(key, { fresh }), now());
+      if (!entry) throw new Error("No release version returned");
+      versions[key] = entry;
+      delete failures[key];
+    } catch (error) {
+      failures[key] = { at: now(), error: String(error?.message ?? error).slice(0, 300) };
+    }
+  };
+  const save = async () => {
+    try { await write(JSON.stringify({ checkedAt, versions, failures }, null, 2)); }
+    catch { /* a read-only volume still has the answers in memory */ }
+  };
+
+  // Manual checks must start a fresh pass if a background pass is already
+  // underway: some of its rows may have been read before the button was pressed.
+  const refresh = ({ force = false, manual = force } = {}) => {
+    if (running) {
+      if (!manual || runningManual) return running;
+      queued ??= running.then(() => {
+        queued = null;
+        return refresh({ force: true });
+      });
+      return queued;
+    }
+    runningManual = manual;
     running = (async () => {
       await load();
-      if (!force && checkedAt && now() - checkedAt < ttlMs) return false;
-      for (const key of keys()) {
-        try {
-          const entry = entryOf(await lookup(key), now());
-          if (entry) versions[key] = entry;
-        } catch { /* keep what we had */ }
-      }
+      const due = keys().filter((key) => force || (failures[key]
+        ? now() - failures[key].at >= retryMs
+        : !versions[key]?.at || now() - versions[key].at >= ttlMs));
+      if (!due.length) return false;
+      // A slow source should not block every row behind it. Keep registry
+      // traffic bounded even when many user-added tools need checking.
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(3, due.length) }, async () => {
+        while (next < due.length) await lookupOne(due[next++], true);
+      }));
       checkedAt = now();
-      try {
-        await write(JSON.stringify({ checkedAt, versions }, null, 2));
-      } catch { /* a read-only volume still has the answers in memory */ }
+      await save();
       return true;
-    })().finally(() => { running = null; });
+    })().finally(() => { running = null; runningManual = false; });
     return running;
   };
 
@@ -80,19 +106,16 @@ export function createLatestCache({ keys, lookup, read, write, ttlMs = DEFAULT_T
    */
   const refreshOne = async (key) => {
     await load();
-    try {
-      const entry = entryOf(await lookup(key), now());
-      if (!entry) return;
-      versions[key] = entry;
-      await write(JSON.stringify({ checkedAt, versions }, null, 2));
-    } catch { /* the scheduled pass tries again */ }
+    await lookupOne(key, true);
+    await save();
   };
 
   return {
     load,
     refresh,
     refreshOne,
-    refreshing: () => Boolean(running),
+    refreshing: () => Boolean(running || queued),
+    errors: () => Object.fromEntries(keys().filter((key) => failures[key]).map((key) => [key, failures[key].error])),
     /**
      * For a row: `latestVersion` (what mise offers) and `latestCheckedAt`, and
      * `newestVersion`/`newestReleasedAt` for a release out but still held

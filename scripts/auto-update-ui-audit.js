@@ -41,19 +41,43 @@ const geometry = () => {
   const initial = await fetch(statusUrl, { headers: { 'x-t3-setup-key': key } });
   assert.equal(initial.ok, true, 'console must accept the supplied setup key');
   const fixtureStatus = await initial.json();
+  // Registry failures include long URLs. Keep that state in the viewport
+  // checks even when the live development home has no failed installations.
+  fixtureStatus.harnesses = fixtureStatus.harnesses.map((row) => row.id === 'opencode'
+    ? { ...row, installed: false, inProgress: false, failed: true, operation: 'install',
+      failure: 'GitHub rate limit exceeded: https://docs.github.com/rest/overview/resources-in-the-rest-api#rate-limiting Reference: sha512-' + 'a'.repeat(96) }
+    : row);
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || "/usr/bin/chromium", args: ["--no-sandbox"] });
   try {
-    const runs = [[390, 844], [1100, 1000]];
+    const runs = [[360, 800], [390, 844], [1100, 1000]];
     const widths = process.env.T3_AUTO_UPDATE_UI_WIDTHS?.split(',').map(Number);
     for (const [width, height] of runs.filter(([width]) => !widths || widths.includes(width))) for (const theme of ['light', 'dark']) {
       const context = await browser.newContext({ viewport: { width, height }, colorScheme: theme, reducedMotion: 'reduce' });
       const page = await context.newPage(), errors = [], saved = [];
       page.on('pageerror', (error) => errors.push(error.message));
       let policy = freshPolicy();
+      let updates = { refreshing: false, errors: {} };
+      const runtime = { ...fixtureStatus.t3?.runtime, channel: 'stable', version: '0.1.0',
+        releases: { stable: { version: '0.1.0' }, nightly: { version: '0.1.1-nightly.20261017.1' } }, checkedAt: 1, checking: false,
+        checkError: 'registry offline', operation: null, supported: true };
+
+      let requestedChannel;
       await page.route('**/*', async (route) => {
         const url = new URL(route.request().url()), method = route.request().method();
         if (url.pathname.endsWith('/status')) {
-          return route.fulfill({ json: { ...fixtureStatus, autoUpdate: { policy, state: {}, lastActivityAt: Date.now(), busy: null } } });
+          return route.fulfill({ json: { ...fixtureStatus, updates, t3: { ...fixtureStatus.t3, runtime }, autoUpdate: { policy, state: {}, lastActivityAt: Date.now(), busy: null } } });
+        }
+        if (url.pathname.endsWith('/updates/check')) {
+          if (url.pathname.endsWith('/t3/updates/check')) {
+            requestedChannel = route.request().postDataJSON().channel || runtime.channel;
+            const error = requestedChannel === runtime.channel ? runtime.checkError : null;
+            return route.fulfill({ status: error ? 502 : 200, json: {
+              ok: !error, error, channels: runtime.releases,
+              errors: runtime.checkError ? { stable: runtime.checkError } : {},
+            } });
+          }
+          updates = { refreshing: true, errors: {} };
+          return route.fulfill({ status: 202, json: { ok: true, code: 'checking' } });
         }
         if (/\/auto-update(?:\/policy)?$/.test(url.pathname)) {
           if (method === 'POST') {
@@ -132,8 +156,47 @@ const geometry = () => {
       assert.equal(saved[0].t3.checkMinutes, 90);
       assert.equal(saved[0].t3.idleMinutes, 15);
 
+      // Manual checks show progress, then retained-result warnings on both
+      // software pages. No real update or policy mutation leaves this audit.
+      await page.locator('[data-cmd="updates.check"]:visible').first().click();
+      await page.reload();
+      await page.getByText('Checking for updates', { exact: true }).waitFor();
+      await check('checking');
+      updates = { refreshing: false, errors: { 'harness:claude': 'offline', 'toolchain:go': 'offline' } };
+      await page.reload();
+      await page.locator('#page-agents').getByText('Some updates could not be checked', { exact: true }).waitFor();
+      await check('agent failure');
+      url.hash = 'toolchains'; await page.goto(url.href);
+      await page.locator('#page-toolchains').getByText('Some updates could not be checked', { exact: true }).waitFor();
+      await check('toolchain failure');
+
+      url.hash = 'environment'; await page.goto(url.href);
+      const card = page.getByRole('region', { name: 'T3 Code updates', exact: true });
+      await card.getByText('Could not verify updates', { exact: true }).waitFor();
+      assert.equal(await card.getByText('You’re up to date', { exact: true }).count(), 0);
+      await card.getByRole('button', { name: 'Check for updates', exact: true }).click();
+      await card.getByText('Could not verify updates', { exact: true }).waitFor();
+      await check('selected channel failure');
+      await page.screenshot({ path: path.join(output, `${tag}-check-failed.png`) });
+      await card.getByRole('button', { name: 'Nightly', exact: true }).click();
+      const switchDialog = page.getByRole('alertdialog', { name: 'Switch to Nightly?' });
+      await switchDialog.waitFor();
+      assert.equal(requestedChannel, 'nightly', 'switch checks the target channel even when Stable failed');
+      await switchDialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await switchDialog.waitFor({ state: 'hidden' });
+      runtime.checkError = null;
+      runtime.checkedAt = Date.now();
+      runtime.releases.stable.version = '0.1.1';
+      await card.getByRole('button', { name: 'Check for updates', exact: true }).click();
+      await card.getByText('Stable update available', { exact: true }).waitFor();
+      assert.equal(await card.getByRole('button', { name: 'Update and restart', exact: true }).count(), 1);
+      await check('recovered update');
+      runtime.releases.stable.version = runtime.version;
+      await card.getByRole('button', { name: 'Check for updates', exact: true }).click();
+      await card.getByText('You’re up to date', { exact: true }).waitFor();
+
       assert.deepEqual(errors, []); await context.close();
-      console.log(`PASS ${tag}: defaults, independent toggles, T3 Code warning, save payload`);
+      console.log(`PASS ${tag}: defaults, independent toggles, T3 Code warning, save payload, check progress, failures and recovery`);
     }
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

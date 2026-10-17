@@ -153,7 +153,8 @@
   const busyNow = (s) => Boolean(s && (
     storageUI.isBusy()
     ||
-    M.runtimeView(s)?.busy
+    s.updates?.refreshing
+    || M.runtimeView(s)?.busy
     || ui.runtimeChecking
     || (s.setup && s.setup.state === 'running')
     || pendingOps.size > 0
@@ -1035,6 +1036,12 @@
   };
 
   // --------------------------------------------------------------- agents --
+  const updateCheckNotice = (s, prefix) => {
+    const failed = Object.keys(s.updates?.errors || {}).filter((key) => prefix === 'harness' ? key.startsWith('harness:') : !key.startsWith('harness:'));
+    return s.updates?.refreshing
+      ? notice(null, 'refresh-cw', 'Checking for updates', 'New releases appear as each check finishes.')
+      : failed.length ? notice('warn', 'globe', 'Some updates could not be checked', 'Last known releases are shown. Check again to retry.') : '';
+  };
   const agentsPage = (s, n) => {
     const rows = M.agentRows(s, ui, n);
     const needs = rows.filter((r) => r.attention || r.updateAvailable);
@@ -1042,9 +1049,10 @@
     const filter = html`<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm tc-phone-only" type="button" data-cmd="updates.check" aria-label="Check for provider updates" title="Check for updates">${icon('refresh-cw')}</button><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm tc-phone-only" type="button" data-cmd="auto.settings" aria-label="Automatic update settings" title="Automatic update settings">${icon('settings-2')}</button><div class="tc-seg" role="group" aria-label="Show">${[['all', 'All'], ['attention', 'Needs you']].map(([value, label]) => html`<button type="button" aria-pressed="${String(state.agentFilter === value)}" data-cmd="agents.filter" data-value="${value}">${label}${value === 'attention' && needs.length ? html` <span class="tc-num">${needs.length}</span>` : ''}</button>`)}</div>`;
     return html`
       ${pageNotices('agents')}
+      ${updateCheckNotice(s, 'harness')}
       ${section('ag-title', 'Agents', html`<div class="tc-group">
         ${shown.length ? html`<div class="tc-list">${shown.map((row) => resourceRow(row))}</div>`
-          : rows.length ? html`<div class="tc-empty tc-empty--compact"><span class="tc-empty-title">Nothing needs you</span><span class="tc-empty-desc">Every installed agent is signed in and current.</span></div>`
+          : rows.length ? html`<div class="tc-empty tc-empty--compact"><span class="tc-empty-title">Nothing needs you</span><span class="tc-empty-desc">No known updates or sign-in issues.</span></div>`
             : html`<div class="tc-empty tc-empty--compact"><span class="tc-empty-desc">Agent state is not readable right now.</span></div>`}
         <div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>Then turn each provider on in T3 Code under Settings → Providers. Muse Code requires Nightly.</span></div>
       </div>`, { actions: filter })}
@@ -1079,6 +1087,7 @@
     const filter = filterable ? html`<div class="tc-inputwrap tc-tool-filter">${icon('search')}<input class="tc-input tc-input--sm" id="tool-filter" type="search" placeholder="Filter" aria-label="Filter added tools" autocomplete="off" spellcheck="false"></div>` : '';
     return html`
       ${pageNotices('toolchains')}
+      ${updateCheckNotice(s, 'toolchain')}
       ${section('tc-title', 'Toolchains', html`<div class="tc-group">
         ${rows.length ? html`<div class="tc-list">${rows.map((row) => resourceRow(row))}</div>`
           : html`<div class="tc-empty tc-empty--compact"><span class="tc-empty-desc">Toolchain state is not readable right now.</span></div>`}
@@ -1272,8 +1281,8 @@
         <div class="tc-seg" role="group" aria-label="T3 Code release channel">${['stable', 'nightly'].map((channel) => html`<button type="button" data-cmd="t3.channel" data-channel="${channel}" aria-pressed="${view.channel === channel}" ${busy || !view.supported ? 'disabled' : ''}>${channel === 'stable' ? icon('shield-check') : icon('moon')}${channel === 'stable' ? 'Stable' : 'Nightly'}</button>`)}</div>
       </div>
       <div class="tc-runtime-release" role="status" aria-live="polite">
-        <span class="tc-runtime-release-icon" aria-hidden="true">${busy ? html`<span class="tc-spinner" aria-hidden="true"></span>` : icon(view.available ? 'circle-arrow-up' : 'circle-check')}</span>
-        <div><span class="tc-row-name">${view.busy ? view.phaseText : checking ? 'Checking for updates' : view.available ? channelName + ' update available' : view.latest ? 'You’re up to date' : 'Updates haven’t been checked yet'}</span>
+        <span class="tc-runtime-release-icon" aria-hidden="true">${busy ? html`<span class="tc-spinner" aria-hidden="true"></span>` : icon(view.available ? 'circle-arrow-up' : view.checkError ? 'globe' : 'circle-check')}</span>
+        <div><span class="tc-row-name">${view.busy ? view.phaseText : checking ? 'Checking for updates' : view.available ? channelName + ' update available' : view.checkError ? 'Could not verify updates' : view.verified ? 'You’re up to date' : 'Updates haven’t been checked yet'}</span>
           <div class="tc-runtime-version tc-mono tc-mono--body"><span>${view.version || 'Unknown version'}</span>${targetVersion ? html` <span class="tc-runtime-version-target">${icon('arrow-right')} <span>${targetVersion}</span></span>` : ''}</div></div>
       </div>
       ${view.error ? notice('danger', 'circle-alert', 'T3 Code update did not finish', view.error) : ''}
@@ -2554,13 +2563,13 @@
       runtimePending = null;
     }
   };
-  const checkRuntime = async ({ quiet = false } = {}) => {
+  const checkRuntime = async ({ quiet = false, channel } = {}) => {
     if (ui.runtimeChecking) return null;
     const trigger = document.activeElement;
     ui.runtimeChecking = true;
     render();
     try {
-      const response = await api('/t3/updates/check', { body: {} });
+      const response = await api('/t3/updates/check', { body: { channel } });
       await loadStatus();
       if (!response.ok && !quiet) Kit.toast('Could not check T3 Code updates', { tone: 'danger', detail: response.error });
       return response.ok ? response.data : null;
@@ -2572,7 +2581,7 @@
   };
   const updateRuntime = async (channel = state.status?.t3?.runtime?.channel) => {
     if (M.runtimeView(state.status)?.busy || ui.runtimeChecking) return;
-    const checked = await checkRuntime();
+    const checked = await checkRuntime({ channel });
     if (checked?.errors?.[channel]) {
       Kit.toast('Could not check ' + (channel === 'nightly' ? 'Nightly' : 'Stable') + ' releases', { tone: 'danger', detail: checked.errors[channel] });
       return;
@@ -3235,7 +3244,7 @@
     },
     'updates.check': async () => {
       const res = await api('/updates/check', { body: {} });
-      Kit.toast(res.ok ? 'Checking for updates' : 'Could not check for updates', res.ok ? { tone: 'info', detail: 'Rows show any newer release within a minute.' } : { tone: 'danger', detail: res.error });
+      Kit.toast(res.ok ? 'Checking for updates' : 'Could not check for updates', res.ok ? { tone: 'info', detail: 'New releases appear as each check finishes.' } : { tone: 'danger', detail: res.error });
       setTimeout(loadStatus, 8000);
     },
     'auto.settings': (a, el) => openAutoUpdate(el),

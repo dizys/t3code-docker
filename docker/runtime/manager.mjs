@@ -127,25 +127,33 @@ export function createRuntimeManager({ env = process.env, fetcher = fetch, insta
   let checking = null;
   let releases = null;
   let preparing = false;
-  let checkError = null;
   let checkErrors = {};
-  const load = async () => { releases ??= await readJson(paths.releases, { checkedAt: null, channels: {} }).catch(() => ({ checkedAt: null, channels: {} })); };
-  const check = () => {
+  let loading = null;
+  const load = () => (loading ??= (async () => {
+    releases = await readJson(paths.releases, { checkedAt: null, channels: {} }).catch(() => ({ checkedAt: null, channels: {} }));
+    releases.channelCheckedAt ??= {};
+    checkErrors = releases.errors ?? {};
+  })());
+  const check = async ({ channel } = {}) => {
+    if (channel !== undefined && !CHANNELS.includes(channel)) throw new Error("Choose Stable or Nightly.");
     checking ??= (async () => {
       await load();
       const results = await Promise.allSettled(CHANNELS.map((channel) => packageRelease(channel, { fetcher })));
-      checkError = null;
       checkErrors = {};
       results.forEach((result, index) => {
-        if (result.status === "fulfilled") releases.channels[CHANNELS[index]] = result.value;
-        else checkErrors[CHANNELS[index]] = errorText(result.reason);
+        if (result.status === "fulfilled") {
+          releases.channels[CHANNELS[index]] = result.value;
+          releases.channelCheckedAt[CHANNELS[index]] = Date.now();
+        } else checkErrors[CHANNELS[index]] = errorText(result.reason);
       });
-      if (results.every((result) => result.status === "rejected")) checkError = Object.values(checkErrors)[0];
+      releases.errors = checkErrors;
       releases.checkedAt = Date.now();
       await writeJson(paths.releases, releases);
-      return { ...releases, errors: checkErrors, error: checkError };
+      return { ...releases, errors: checkErrors };
     })().finally(() => { checking = null; });
-    return checking;
+    const result = await checking;
+    channel ??= (await readSelection(paths)).channel;
+    return { ...result, error: result.errors[channel] ?? null };
   };
   const status = async () => {
     await load();
@@ -160,7 +168,7 @@ export function createRuntimeManager({ env = process.env, fetcher = fetch, insta
     }
     const hasHistory = (name) => fs.access(path.join(paths.home, "userdata", name)).then(() => true, () => false);
     const separateHistory = await hasHistory("state.sqlite") && await hasHistory("statev2.sqlite");
-    return { ...selection, version: runtime.version, bundled: runtime.bundled, separateHistory, releases: releases.channels, checkedAt: releases.checkedAt, checking: Boolean(checking), checkError: checkErrors[selection.channel] || checkError, operation, supported: supervised() };
+    return { ...selection, version: runtime.version, bundled: runtime.bundled, separateHistory, releases: releases.channels, checkedAt: releases.channelCheckedAt[selection.channel] ?? null, checking: Boolean(checking), checkError: checkErrors[selection.channel] ?? null, operation, supported: supervised() };
   };
   const update = async ({ channel, version } = {}) => {
     if (!CHANNELS.includes(channel) || !exactVersion(version) || channelOf(version) !== channel) return { http: 400, body: { ok: false, error: "Choose a published Stable or Nightly release." } };

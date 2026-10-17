@@ -78,10 +78,10 @@ html.tc-locked { overflow: hidden; }
 @media (max-width: 639.98px) {
   .tc-row:has(> .tc-row-actions--wrap) { grid-template-columns: auto minmax(0, 1fr); }
   .tc-row > .tc-row-actions--wrap { grid-column: 2 / -1; justify-content: flex-start; }
-  /* A plain row has no leading tile to indent under: its actions go under
-     the whole main block. */
-  .tc-row--plain:has(> .tc-row-actions--wrap) { grid-template-columns: minmax(0, 1fr); }
-  .tc-row--plain > .tc-row-actions--wrap { grid-column: 1 / -1; }
+  /* Only rows without a leading tile put actions under the whole main block.
+     A stale plain modifier must not move an icon row into a single column. */
+  .tc-row--plain:not(:has(> .tc-tile, > .tc-row-lead)):has(> .tc-row-actions--wrap) { grid-template-columns: minmax(0, 1fr); }
+  .tc-row--plain:not(:has(> .tc-tile, > .tc-row-lead)) > .tc-row-actions--wrap { grid-column: 1 / -1; }
 }
 /* A 28px input, for inline values beside small buttons. */
 .tc-input--sm { height: var(--control-sm); font-size: 13px; }
@@ -293,7 +293,8 @@ html.tc-locked { overflow: hidden; }
 .tc-op--quiet { font-size: 12px; }
 .tc-op--quiet .tc-op-line { color: var(--fg-muted); }
 .tc-tile--dim { opacity: 0.6; }
-.tc-row--plain { grid-template-columns: minmax(0, 1fr) auto; }
+/* Count the actual leading element, even if a caller also sets plain. */
+.tc-row--plain:not(:has(> .tc-tile, > .tc-row-lead)) { grid-template-columns: minmax(0, 1fr) auto; }
 .tc-row--key { min-height: 44px; padding-block: var(--space-2); }
 .tc-row-actions-inline { display: inline-flex; align-items: center; gap: var(--space-2); }
 .tc-btn--pressed { background: var(--hover); }

@@ -272,6 +272,22 @@ const audit = () => {
     }
   }
 
+  // -- 9. row text follows its icon, or the padding of an iconless row -------
+  // An accidental two-column grid can leave the icon at the left and the
+  // description far across the card without overflowing anything.
+  for (const row of document.querySelectorAll(".tc-row")) {
+    const main = row.querySelector(":scope > .tc-row-main");
+    if (!main || !visible(row)) continue;
+    const lead = row.querySelector(":scope > .tc-tile, :scope > .tc-row-lead");
+    const style = getComputedStyle(row);
+    const left = lead && visible(lead)
+      ? box(lead).right + parseFloat(style.columnGap)
+      : box(row).left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+    if (Math.abs(box(main).left - left) > 1) {
+      add("detached-row-text", "text does not follow the leading icon or row padding", main);
+    }
+  }
+
   return findings;
 };
 

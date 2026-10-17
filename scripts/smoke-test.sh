@@ -595,6 +595,15 @@ auto_update_settings_work() {
 }
 check "automatic update settings keep categories independent and warn before T3 Code opt-in" auto_update_settings_work
 
+row_layouts_work() {
+  [ "$HAS_BROWSER" -eq 1 ] || return 0
+  docker cp scripts/row-ui-audit.js "$NAME:/tmp/row-ui-audit.js" >/dev/null 2>&1 || return 1
+  docker exec -e CHROME_PATH=/usr/bin/chromium \
+    -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    "$NAME" node /tmp/row-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
+}
+check "console rows align icons, text and wrapping actions on desktop and phone" row_layouts_work
+
 context_instructions_work() {
   docker cp scripts/context-api-audit.mjs "$NAME:/tmp/context-api-audit.mjs" >/dev/null 2>&1 || return 1
   docker exec "$NAME" node /tmp/context-api-audit.mjs "http://127.0.0.1:3774/" "$SETUP_KEY"

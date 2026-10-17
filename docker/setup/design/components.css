@@ -155,7 +155,7 @@
   background: var(--bg); color: var(--fg); box-shadow: var(--shadow-xs);
   font: inherit; font-size: 14px; transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
 }
-[data-theme="dark"] .tc-input, [data-theme="dark"] .tc-select { background: oklch(1 0 0 / 0.0256); }
+[data-theme="dark"] .tc-input, [data-theme="dark"] .tc-select { background-color: oklch(1 0 0 / 0.0256); }
 .tc-input::placeholder { color: var(--fg-muted); opacity: 0.8; }
 .tc-input:focus, .tc-select:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 24%, transparent); }
 .tc-input[aria-invalid="true"] { border-color: color-mix(in srgb, var(--danger) 36%, transparent); }
@@ -169,6 +169,12 @@
 .tc-select { appearance: none; padding-right: 30px;
   background-image: linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%), linear-gradient(135deg, var(--fg-muted) 50%, transparent 50%);
   background-position: calc(100% - 15px) 50%, calc(100% - 11px) 50%; background-size: 4px 4px; background-repeat: no-repeat; }
+/* Native <select> popups are drawn by the OS. On Windows the list keeps the
+   OS theme unless the control opts into the page's scheme and its options
+   carry the theme's own colours; without this a dark page opens a white list. */
+.tc-input, .tc-select { color-scheme: light; }
+[data-theme="dark"] .tc-input, [data-theme="dark"] .tc-select { color-scheme: dark; }
+.tc-input option, .tc-select option, .tc-input optgroup, .tc-select optgroup { background: var(--surface-raised); color: var(--fg); }
 
 /* copy field */
 .tc-copyfield { display: flex; align-items: center; min-width: 0; gap: 2px; padding: 2px 2px 2px 0;

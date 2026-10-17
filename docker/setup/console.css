@@ -573,7 +573,7 @@ html.tc-locked { overflow: hidden; }
 .tc-skill-row { grid-template-columns: auto minmax(0, 1fr) auto; }
 .tc-skill-row .tc-row-actions { flex-wrap: wrap; max-width: 230px; justify-content: flex-end; }
 .tc-skill-policy { display: flex; align-items: center; gap: var(--space-2); flex-basis: 100%; }
-.tc-skill-policy .tc-input { min-width: 0; }
+.tc-skill-policy .tc-input, .tc-skill-policy .tc-select { min-width: 0; }
 .tc-skill-empty-action { grid-column: 2; justify-self: start; }
 @media (max-width: 479.98px) {
   .tc-skill-row { grid-template-columns: auto minmax(0, 1fr); }

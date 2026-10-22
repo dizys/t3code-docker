@@ -69,6 +69,7 @@ const geometry = () => {
       let policy = freshPolicy();
       let updates = { refreshing: false, manual: false, errors: {} }, checkRequests = 0, startFailure = false;
       let holdStatus = null;
+      let rustReply = 'fail', rustRequests = 0, rustStarted, finishRust;
       const runtime = { ...fixture.t3?.runtime, channel: 'stable', version: '0.1.0',
         releases: { stable: { version: '0.1.0' }, nightly: { version: '0.1.1-nightly.20261017.1' } }, checkedAt: 1, checking: false,
         checkError: "GitHub's release API rate limit was reached. Try checking again later; the running version was kept.", operation: null, supported: true };
@@ -104,6 +105,15 @@ const geometry = () => {
           }
           return route.fulfill({ json: { ok: true, policy, state: {}, lastActivityAt: Date.now() } });
         }
+        if (method === 'POST' && url.pathname.endsWith('/toolchains/update')) {
+          assert.equal(route.request().postDataJSON().id, 'rust');
+          rustRequests++;
+          if (rustReply === 'fail') return route.fulfill({ status: 502, json: { ok: false, error: 'invalid version: stable' } });
+          await new Promise((resolve) => { finishRust = resolve; rustStarted(); });
+          const row = fixture.toolchains.find(t => t.id === 'rust');
+          Object.assign(row, { failed: false, failure: null, latestVersion: '1.99.1', newestVersion: null, operationState: 'ok' });
+          return route.fulfill({ json: { ok: true, changed: false, message: 'Rust 1.99.1 is already up to date.' } });
+        }
         return route.continue();
       });
       const url = new URL(base); url.hash = 'agents';
@@ -115,8 +125,10 @@ const geometry = () => {
         page = await (await host.locator('iframe').elementHandle()).contentFrame();
       }
       await page.goto(url.href);
-      await page.getByLabel('Setup key', { exact: true }).fill(key);
-      await page.getByRole('button', { name: 'Unlock', exact: true }).click();
+      if (await page.getByLabel('Setup key', { exact: true }).count()) {
+        await page.getByLabel('Setup key', { exact: true }).fill(key);
+        await page.getByRole('button', { name: 'Unlock', exact: true }).click();
+      }
       await page.locator('#page-agents .tc-page-head').waitFor();
       if (embedded) assert.equal(await page.evaluate(() => window.parent !== window && document.documentElement.dataset.embed === 't3'), true, 'embedded cases run inside a real iframe');
       await page.evaluate(() => { window.T3C.copyText = async (text) => { window.auditCopiedText = text; return true; }; });
@@ -362,8 +374,52 @@ const geometry = () => {
       await card.getByText('Up to date', { exact: true }).waitFor();
       await finishCheck();
 
+      // An older cache and failed click can describe the same Rust failure.
+      // Keep one error, never offer a channel as a version, and keep feedback
+      // visible while a delayed retry verifies an unchanged installation.
+      const rustFacts = fixture.toolchains.find(t => t.id === 'rust');
+      assert.ok(rustFacts, 'fixture includes Rust');
+      Object.assign(rustFacts, { installed: true, version: '1.99.1', inProgress: false,
+        latestVersion: 'stable', newestVersion: 'stable', failed: true,
+        failure: 'invalid version: stable', operation: 'update', operationState: 'failed' });
+      if (fixture.operations) delete fixture.operations['toolchain:rust'];
+      await refreshStatus();
+      const rust = page.locator('#page-updates [data-key="row-toolchain:rust"]');
+      await rust.getByRole('button', { name: 'Retry', exact: true }).waitFor();
+      await rust.getByRole('button', { name: 'Retry', exact: true }).click();
+      await rust.getByRole('button', { name: 'Retry', exact: true }).waitFor();
+      assert.equal(rustRequests, 1);
+      assert.equal(await rust.locator('.tc-status').count(), 1, 'the failed request and status share one error line');
+      assert.equal(await rust.getByRole('alert').count(), 1, 'the remaining error is still announced to assistive technology');
+      assert.equal(await rust.locator('.tc-version-to, .tc-version-arrow').count(), 0, 'a cached channel is never an update arrow');
+      assert.match(await rust.textContent(), /1\.99\.1/);
+      await check('Rust failed retry');
+      await host.screenshot({ path: path.join(output, `${tag}-rust-failed.png`) });
+
+      rustReply = 'hold';
+      const startedRust = new Promise(resolve => { rustStarted = resolve; });
+      await rust.getByRole('button', { name: 'Retry', exact: true }).click();
+      await startedRust;
+      try {
+        await rust.getByText('Updating', { exact: true }).waitFor();
+        assert.equal(await rust.getByRole('button', { name: 'Retry', exact: true }).count(), 0, 'a pending retry cannot be submitted again');
+        await refreshStatus();
+        await rust.getByText('Updating', { exact: true }).waitFor();
+        assert.equal(rustRequests, 2, 'polls do not submit another operation');
+        await check('Rust pending retry');
+      } finally { finishRust(); }
+      await page.getByText('Rust 1.99.1 is already up to date.', { exact: true }).waitFor();
+      await rust.waitFor({ state: 'hidden' });
+      url.hash = 'toolchains'; await page.goto(url.href);
+      const installedRust = page.locator('#page-toolchains [data-key="row-toolchain:rust"]');
+      await installedRust.getByText(/With clippy and rustfmt.*up to date/).waitFor();
+      assert.equal(await installedRust.getByRole('button', { name: 'Retry', exact: true }).count(), 0);
+      assert.equal(await installedRust.locator('.tc-status').count(), 1);
+      await check('Rust recovered');
+      await host.screenshot({ path: path.join(output, `${tag}-rust-recovered.png`) });
+
       assert.deepEqual(errors, []); await context.close();
-      console.log(`PASS ${tag}: startup failures, independent switches, T3 Code warning, schedules, one check, failures and recovery`);
+      console.log(`PASS ${tag}: startup failures, switches, release checks, Rust failure deduplication and delayed retry recovery`);
     }
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

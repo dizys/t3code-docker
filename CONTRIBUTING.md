@@ -84,6 +84,13 @@ Issues and pull requests are welcome. Before opening one:
   It covers light/dark, phone, tablet, desktop and an actual embedded frame;
   screenshots go to `/tmp/t3-access-ui-audit` (`T3_ACCESS_UI_OUTPUT` overrides
   it). All Access API writes are intercepted and never reach real devices.
+  `node scripts/auto-update-ui-audit.js http://127.0.0.1:23785/__setup/ dev`
+  checks Updates in both themes on phones, desktop and an embedded frame. It
+  includes failed Rust retries, duplicate-error prevention, stale channel
+  metadata, progress during delayed requests and unchanged-version recovery.
+  Update and preference writes are intercepted; it can use the fixture console.
+  Screenshots go to `/tmp/t3-auto-update-ui-audit` (`T3_AUTO_UPDATE_UI_OUTPUT`
+  overrides it).
 
 For OpenCode credential changes, run
 `node scripts/opencode-auth-smoke.mjs /absolute/path/to/opencode` against both

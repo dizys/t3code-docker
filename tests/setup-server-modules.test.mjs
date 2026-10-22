@@ -160,6 +160,31 @@ test("a release mise is still holding back is kept beside the one it offers", as
   assert.deepEqual(JSON.parse(world.written).versions["harness:codex"], { version: "0.160.0", at: 1_000_000 }, "nothing held back, nothing stored");
 });
 
+test("saved Rust channels are discarded without losing a numbered cached release", async () => {
+  const answers = { "toolchain:rust": { version: "1.99.1", newest: "stable" } };
+  const saved = JSON.stringify({ versions: { "toolchain:rust": { version: "1.99.1", at: 1, newest: "stable", newestAt: "2026-10-15T00:00:00Z" } } });
+  const world = latestWorld({ answers, saved });
+  await world.cache.load();
+  assert.equal(world.cache.get("toolchain:rust").latestVersion, "1.99.1");
+  assert.equal(world.cache.get("toolchain:rust").newestVersion, null);
+  await world.cache.refresh({ force: true });
+  assert.deepEqual(JSON.parse(world.written).versions["toolchain:rust"], { version: "1.99.1", at: 1_000_000 });
+  answers["toolchain:rust"] = { version: "stable" };
+  await world.cache.refreshOne("toolchain:rust");
+  assert.equal(world.cache.get("toolchain:rust").latestVersion, "1.99.1", "a bad reply keeps the last usable release");
+  assert.match(world.cache.errors()["toolchain:rust"], /release version/i);
+});
+
+test("an old Rust channel target is refreshed immediately even inside the cache TTL", async () => {
+  const saved = JSON.stringify({ versions: { "toolchain:rust": { version: "stable", at: 1_000_000 } } });
+  const world = latestWorld({ saved, answers: { "toolchain:rust": "1.99.1" } });
+  await world.cache.load();
+  assert.equal(world.cache.get("toolchain:rust").latestVersion, null);
+  assert.equal(await world.cache.refresh(), true);
+  assert.deepEqual(world.lookups, ["toolchain:rust"]);
+  assert.equal(world.cache.get("toolchain:rust").latestVersion, "1.99.1");
+});
+
 test("a fresh pass is not repeated, unless someone asks", async () => {
   const world = latestWorld({ answers: { "harness:claude": "1" } });
   await world.cache.refresh();

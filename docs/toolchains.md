@@ -6,6 +6,12 @@ home, and work in every directory. The **Toolchains** page updates or removes
 each one, installs any you left out of `T3_PREINSTALL`, and adds other tools
 (see below). Node and Python are part of the image.
 
+Managed Rust follows the stable channel, resolved to an exact numbered release
+before checking or installing an update. Rolling names such as `stable` and
+`beta` are not separate upgrade versions. Updates retain clippy and rustfmt,
+respect the release-age policy, and keep a newer installed release selected.
+Checking for updates does not change the installed toolchain.
+
 ## Any other tool
 
 **Add a tool** on the Toolchains page searches mise's built-in registry of

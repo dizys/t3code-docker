@@ -1363,6 +1363,135 @@ test("toolchains install at an exact latest, globally, and uninstall cleanly", a
   assert.equal((await manager.toolchains.resolve("rust")).installed, true, "others untouched");
 });
 
+const rustChannels = (world) => {
+  const spec = releaseSpec(getManagedTool("rust"));
+  world.latest.rust = "stable";
+  // Older listings did not carry a rolling flag. Neither these channels nor
+  // dated nightlies may become the managed stable toolchain's release.
+  world.versions[spec] = ["1.98.1", "1.99.1", "1.100.0-beta.1", "nightly-2026-10-02", "beta", "stable"];
+  return spec;
+};
+
+test("Rust discovery, install and update resolve stable to the same numbered release", async () => {
+  const world = createWorld(new MemoryFs());
+  const spec = rustChannels(world);
+  const manager = managerFor(world);
+  assert.equal(await manager.toolchains.latest("rust"), "1.99.1");
+  assert.deepEqual(await manager.toolchains.latestRelease("rust", { fresh: true }), { version: "1.99.1", newest: null, newestAt: null });
+  assert.deepEqual(world.useSpecs, [], "discovery never installs or changes the selection");
+  const installed = await manager.toolchains.install("rust");
+  assert.equal(installed.ok, true, installed.error);
+  assert.equal(installed.toolchain.version, "1.99.1");
+  assert.deepEqual(world.useSpecs, ["rust[components=clippy,rustfmt,profile=minimal]@1.99.1"]);
+  world.versions[spec].push("2.0.0");
+  const updated = await manager.toolchains.update("rust");
+  assert.equal(updated.ok, true, updated.error);
+  assert.equal(updated.toolchain.version, "2.0.0", "resolving stable is not pinned to Rust's current major");
+  assert.equal(world.useSpecs.at(-1), "rust[components=clippy,rustfmt,profile=minimal]@2.0.0");
+});
+
+test("Rust alias resolution preserves release age and keeps a newer installed selection", async () => {
+  const world = createWorld(new MemoryFs());
+  const spec = rustChannels(world);
+  world.waiting[spec] = ["1.100.0"];
+  const manager = managerFor(world);
+  const summary = await manager.toolchains.latestRelease("rust", { fresh: true });
+  assert.equal(summary.version, "1.99.1");
+  assert.equal(summary.newest, "1.100.0");
+  world.calls.length = 0;
+  const installed = await manager.toolchains.install("rust");
+  assert.equal(installed.ok, true, installed.error);
+  assert.equal(installed.toolchain.version, "1.99.1");
+  assert.equal(world.calls.some(call => call.includes("--minimum-release-age")), false, "installation does not bypass the release-age policy");
+  world.versions[spec] = ["1.98.1", "stable"];
+  const updated = await manager.toolchains.update("rust");
+  assert.equal(updated.ok, true, updated.error);
+  assert.equal(updated.changed, false);
+  assert.equal(updated.toolchain.version, "1.99.1");
+  assert.equal(world.useSpecs.length, 1, "an older eligible release never moves the selection backwards");
+});
+
+test("Rust unresolved channels fail without changing the install and an unchanged retry clears failure", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  assert.equal((await manager.toolchains.install("rust")).ok, true);
+  const spec = rustChannels(world);
+  world.versions[spec] = ["stable", "beta", "nightly-2026-10-02"];
+  const uses = [...world.useSpecs];
+  const failed = await manager.toolchains.update("rust");
+  assert.equal(failed.ok, false);
+  assert.match(failed.error, /resolve.*Rust|Rust.*resolve/);
+  assert.equal(failed.toolchain.version, "1.98.1");
+  assert.deepEqual(world.useSpecs, uses);
+  world.versions[spec] = ["1.98.1", "stable"];
+  const retried = await manager.toolchains.update("rust");
+  assert.equal(retried.ok, true, retried.error);
+  assert.equal(retried.changed, false);
+  assert.equal(retried.toolchain.failed, false, "successful verification clears the old failed operation");
+  assert.deepEqual(world.useSpecs, uses, "a valid installed version needs no reinstall");
+});
+
+test("Rust alias fallback preserves cancellation and does not select a version", async () => {
+  const world = createWorld(new MemoryFs());
+  rustChannels(world);
+  const controller = new AbortController();
+  const run = world.run;
+  world.run = async (argv, options) => {
+    if (argv[3] === "ls-remote") {
+      assert.equal(options.signal, controller.signal);
+      controller.abort();
+      return { code: null, stdout: "", stderr: "", error: "cancelled", cancelled: true };
+    }
+    return run(argv, options);
+  };
+  const result = await managerFor(world).toolchains.install("rust", { signal: controller.signal });
+  assert.equal(result.code, "cancelled");
+  assert.deepEqual(world.useSpecs, []);
+  assert.equal(world.selected.rust, undefined);
+});
+
+test("Rust alias lookup failures keep the installed selection and never guess a version", async () => {
+  for (const reply of [
+    { code: 1, stdout: "", stderr: "Rust metadata source is offline" },
+    { code: 0, stdout: "not JSON", stderr: "" },
+    { code: 0, stdout: '[{"version":"2.0.0","rolling":true},{"version":"stable"}]', stderr: "" },
+  ]) {
+    const world = createWorld(new MemoryFs());
+    const manager = managerFor(world);
+    assert.equal((await manager.toolchains.install("rust")).ok, true);
+    rustChannels(world);
+    const run = world.run;
+    world.run = (argv, options) => argv[3] === "ls-remote" ? Promise.resolve(reply) : run(argv, options);
+    const uses = [...world.useSpecs];
+    const selected = world.selected.rust;
+    const result = await managerFor(world).toolchains.update("rust");
+    assert.equal(result.ok, false);
+    assert.equal(result.toolchain.version, "1.98.1");
+    assert.deepEqual(world.useSpecs, uses);
+    assert.equal(world.selected.rust, selected);
+  }
+});
+
+test("Rust updates resolve an alias with fresh eligible metadata and read-only mise calls", async () => {
+  const world = createWorld(new MemoryFs());
+  const manager = managerFor(world);
+  await manager.toolchains.install("rust");
+  rustChannels(world);
+  const lookups = [], run = world.run;
+  world.run = async (argv, options) => {
+    if (["latest", "ls-remote"].includes(argv[3])) lookups.push({ argv, options });
+    return run(argv, options);
+  };
+  assert.equal((await managerFor(world).toolchains.update("rust")).ok, true);
+  assert.deepEqual(lookups.map(call => call.argv[3]), ["latest", "ls-remote"]);
+  for (const { argv, options } of lookups) {
+    assert.equal(options.env.MISE_FETCH_REMOTE_VERSIONS_CACHE, "0s");
+    assert.equal(options.env.MISE_AUTO_INSTALL, "false");
+    assert.equal(options.env.MISE_NOT_FOUND_SYSTEM_FALLBACK, "false");
+    assert.equal(argv.includes("--minimum-release-age"), false);
+  }
+});
+
 test("a failed toolchain install is reported and leaves nothing selected", async () => {
   const fs = new MemoryFs();
   const world = createWorld(fs);

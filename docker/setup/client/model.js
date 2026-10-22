@@ -533,7 +533,10 @@ const T3Model = (() => {
     const cmd = (verb) => target + '.' + verb;
     const act = activityOf(status, target, t.id, ui);
     const version = t.version || null;
-    const latest = t.latestVersion || null;
+    // A stale server/cache may still name a Rust channel. It is not a release
+    // number and must not become an update arrow or a newer-version offer.
+    const latest = target === 'toolchain' && t.id === 'rust' && !parseVersion(t.latestVersion).numeric
+      ? null : t.latestVersion || null;
     const updateAvailable = Boolean(t.installed && isNewer(latest, version));
     const held = t.installed ? heldRelease(t, version, status, now) : null;
     const runningKind = act.serverQueued ? null : (act.ownOp && act.ownOp.kind) || (act.pending && act.pending.kind)
@@ -612,7 +615,6 @@ const T3Model = (() => {
       row.notice = distinctNotice(notice, row.status);
       return row;
     }
-    row.notice = distinctNotice(notice, row.status);
     if (t.failed && t.failure && t.operation && t.operation !== 'install') {
       row.state = 'failed';
       row.attention = true;
@@ -627,6 +629,7 @@ const T3Model = (() => {
       row.status.text = meta.detail ? [meta.detail, plain].filter(Boolean).join(' · ')
         : plain === 'up to date' ? 'Up to date' : ['Installed', plain].filter(Boolean).join(' · ');
     }
+    row.notice = distinctNotice(notice, row.status);
     row.held = held;
     if (updateAvailable) row.menu.push({ cmd: cmd('update'), label: 'Update to ' + latest, icon: 'circle-arrow-up' });
     else if (!latest) row.menu.push({ cmd: cmd('update'), label: 'Update to the latest', icon: 'circle-arrow-up' });

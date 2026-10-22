@@ -20,14 +20,15 @@ const DEFAULT_TTL_MS = 60 * 60 * 1000;
  *   write     (text) => Promise<void>
  */
 /** A lookup's answer as stored: `{ version, at }`, plus `newest`/`newestAt` when mise holds one back. */
-const entryOf = (answer, at) => {
+const validVersion = (key, version) => key !== "toolchain:rust" || /^\d+\.\d+\.\d+$/.test(version);
+const entryOf = (key, answer, at) => {
   const version = String((typeof answer === "object" && answer !== null ? answer.version : answer) ?? "").trim();
-  if (!version) return null;
+  if (!version || !validVersion(key, version)) return null;
   const newest = typeof answer === "object" && answer !== null && typeof answer.newest === "string" ? answer.newest.trim() : "";
   return {
     version,
     at,
-    ...(newest ? { newest, newestAt: typeof answer.newestAt === "string" ? answer.newestAt : null } : {}),
+    ...(newest && validVersion(key, newest) ? { newest, newestAt: typeof answer.newestAt === "string" ? answer.newestAt : null } : {}),
   };
 };
 
@@ -47,7 +48,13 @@ export function createLatestCache({ keys, lookup, read, write, ttlMs = DEFAULT_T
       try {
         const saved = JSON.parse(await read());
         if (saved && typeof saved === "object" && saved.versions && typeof saved.versions === "object") {
-          versions = saved.versions;
+          // Discard old Rust channel targets on load, before the first status
+          // poll or automatic update pass. Keep a usable numbered answer even
+          // if its former held-release metadata contained a rolling alias.
+          for (const [key, hit] of Object.entries(saved.versions)) {
+            const entry = hit && typeof hit === "object" ? entryOf(key, hit, hit.at) : null;
+            if (entry) versions[key] = entry;
+          }
           failures = saved.failures && typeof saved.failures === "object" ? saved.failures : {};
           checkedAt = Number.isFinite(saved.checkedAt) ? saved.checkedAt : null;
         }
@@ -62,7 +69,7 @@ export function createLatestCache({ keys, lookup, read, write, ttlMs = DEFAULT_T
     const request = {};
     lookups.set(key, request);
     try {
-      const entry = entryOf(await lookup(key, { fresh }), now());
+      const entry = entryOf(key, await lookup(key, { fresh }), now());
       if (lookups.get(key) !== request) return;
       if (!entry) throw new Error("No release version returned");
       versions[key] = entry;

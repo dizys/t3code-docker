@@ -163,12 +163,14 @@ export async function registry(ctx) {
  * `{ version, created_at, release_url }`. `anyAge` includes the releases still
  * inside the minimum release age.
  */
-export async function lsRemote(ctx, tool, { json = false, anyAge = false, fresh = false } = {}) {
+export async function lsRemote(ctx, tool, { json = false, anyAge = false, fresh = false, signal } = {}) {
   const result = await ctx.run(miseArgs(ctx, ["ls-remote", ...(json ? ["--json"] : []), ...(anyAge ? ANY_AGE : []), tool]), {
     env: { ...readEnv(ctx.env), ...(fresh ? { MISE_FETCH_REMOTE_VERSIONS_CACHE: "0s" } : {}) },
     cwd: ctx.home,
     timeoutMs: ctx.timeouts.latest ?? ctx.timeouts.mise,
+    ...(signal ? { signal } : {}),
   });
+  if (result.cancelled) throw cancelledError();
   if (result.error || result.code !== 0) throw new Error(firstError(result) || `mise ls-remote ${tool} failed`);
   return result.stdout;
 }

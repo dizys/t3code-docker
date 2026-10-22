@@ -585,7 +585,7 @@
       ${tile(row)}
       <div class="tc-row-main">
         <div class="tc-row-title"><span class="tc-row-name"${row.description ? html` title="${row.description}"` : ''}>${row.name}</span>${versionLabel(row)}${badge(row.badge)}</div>
-        ${error ? html`<span class="tc-status">${dot('danger')}<span class="tc-status-text">${error.text}${detail('status')}</span></span>` : statusLine(row.status)}
+        ${error ? html`<span class="tc-status" role="alert">${dot('danger')}<span class="tc-status-text">${error.text}${detail('status')}</span></span>` : statusLine(row.status, row.status.dot === 'danger' ? raw(' role="alert"') : '')}
         ${noticeError ? html`<span class="tc-status" role="alert">${dot('danger')}<span class="tc-status-text">${noticeError.text}${detail('notice')}</span></span>` : noticeLine(row.notice)}
         ${row.state === 'running' ? opLine(row) : ''}
       </div>

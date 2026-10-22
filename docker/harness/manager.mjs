@@ -36,6 +36,14 @@ import { compareVersions, meetsMinimum } from "./version.mjs";
 // `latest` itself is accepted at the API and resolved before it gets here.
 const VERSION_SYNTAX = /^\d+\.[0-9A-Za-z._+-]{1,62}$/;
 
+// The managed Rust toolchain follows stable, pinned to a numbered release.
+// Its backend also lists beta, rolling channels and dated nightlies, including
+// older cached listings that did not mark rolling entries explicitly.
+const isRustSpec = (tool) => /^rust(?:\[[^\]]+\])?$/.test(tool);
+const isRustRelease = (version) => /^\d+\.\d+\.\d+$/.test(version);
+const releasesFor = (tool, listing) => parseReleases(listing)
+  .filter((release) => !isRustSpec(tool) || isRustRelease(release.version));
+
 // Steps report through this when nobody is listening and nothing can cancel.
 const NO_OP = Object.freeze({ signal: null, phase() {}, report() {} });
 
@@ -273,6 +281,20 @@ export function createHarnessManager(options = {}) {
     }
   }
 
+  /** Resolve the stable Rust selector without ever recording a moving pin.
+   * The fallback asks mise for eligible releases with the same freshness,
+   * release-age and cancellation options; it never bypasses its age policy. */
+  async function resolveLatest(tool, options = {}) {
+    const version = await mise.latest(ctx, tool, options);
+    if (!isRustSpec(tool) || isRustRelease(version)) return version;
+    if (version === "stable") {
+      const releases = releasesFor(tool, await mise.lsRemote(ctx, tool, { ...options, json: true }));
+      const newest = releases.reduce((best, release) => !best || compareVersions(release.version, best.version) > 0 ? release : best, null);
+      if (newest) return newest.version;
+    }
+    throw operationError("unresolved-version", "Could not resolve Rust's stable channel to a release number. Check for updates and retry.");
+  }
+
   /**
    * Run one lifecycle operation under the global lock, recording how it went
    * in `section` of the state file. `onStarted` fires once the lock is held,
@@ -394,7 +416,7 @@ export function createHarnessManager(options = {}) {
     if (!requested || requested === "latest") op.phase("resolving");
     const target = requested && requested !== "latest"
       ? requested
-      : await mise.latest(ctx, latestSpec(entry), { signal: op.signal, anyAge, fresh });
+      : await resolveLatest(latestSpec(entry), { signal: op.signal, anyAge, fresh });
     assertVersion(target);
     if (meetsMinimum(target, entry.minimumVersion) === false) {
       throw operationError("version-below-minimum", `${entry.name} ${target} is below the required ${entry.minimumVersion}`);
@@ -622,7 +644,7 @@ export function createHarnessManager(options = {}) {
    */
   async function selectToolchain(entry, previous, op = NO_OP, resolvedTarget = null) {
     op.phase("resolving");
-    const target = resolvedTarget ?? await mise.latest(ctx, releaseSpec(entry), { signal: op.signal });
+    const target = resolvedTarget ?? await resolveLatest(releaseSpec(entry), { signal: op.signal });
     assertVersion(target);
     await useVerified(entry, target, async () => {
       const [bin, ...args] = entry.probe;
@@ -668,7 +690,7 @@ export function createHarnessManager(options = {}) {
   function updateToolchain(id, options = {}) {
     return runToolchain(id, "update", async (entry, previous, op) => {
       op.phase("resolving");
-      const target = await mise.latest(ctx, releaseSpec(entry), { signal: op.signal, fresh: true });
+      const target = await resolveLatest(releaseSpec(entry), { signal: op.signal, fresh: true });
       assertVersion(target);
       const selected = await globalVersion(entry.miseTool);
       if (keepNewer(entry, selected, target, op)) return {};
@@ -837,10 +859,10 @@ export function createHarnessManager(options = {}) {
     const spec = version ? `${id}@${version}` : id;
     let target;
     try {
-      target = await mise.latest(ctx, spec, { signal: op.signal, fresh: true });
+      target = await resolveLatest(spec, { signal: op.signal, fresh: true });
     } catch (error) {
       if (!version || error?.code === "cancelled") throw error;
-      const named = await mise.latest(ctx, spec, { signal: op.signal, anyAge: true, fresh: true }).catch((retry) => {
+      const named = await resolveLatest(spec, { signal: op.signal, anyAge: true, fresh: true }).catch((retry) => {
         if (retry?.code === "cancelled") throw retry;
         return null;
       });
@@ -951,7 +973,7 @@ export function createHarnessManager(options = {}) {
   async function latestPackage(raw) {
     const parsed = parseToolSpec(raw);
     if (!parsed.ok) throw new Error(parsed.error);
-    return mise.latest(ctx, parsed.id);
+    return resolveLatest(parsed.id);
   }
 
   async function latestPackageRelease(raw, options = {}) {
@@ -1031,13 +1053,13 @@ export function createHarnessManager(options = {}) {
     let entry = getHarness(id);
     if (!entry) throw new Error(`unknown harness: ${id}`);
     entry = await installationForRequest(entry, null);
-    return mise.latest(ctx, latestSpec(entry), { anyAge: true, fresh });
+    return resolveLatest(latestSpec(entry), { anyAge: true, fresh });
   }
 
   async function latestToolchain(id) {
     const entry = getManagedTool(id);
     if (!entry) throw new Error(`unknown toolchain: ${id}`);
-    return mise.latest(ctx, releaseSpec(entry));
+    return resolveLatest(releaseSpec(entry));
   }
 
   // mise offers a release as the newest only once it has been out for its
@@ -1053,11 +1075,11 @@ export function createHarnessManager(options = {}) {
   async function releaseList(tool, { minimumVersion = null, releaseMajor = null } = {}) {
     const [listing, offered] = await Promise.all([
       mise.lsRemote(ctx, tool, { json: true, anyAge: true, fresh: true }),
-      mise.latest(ctx, releaseMajor ? `${tool}@${releaseMajor}` : tool, { fresh: true }).catch(() => null),
+      resolveLatest(releaseMajor ? `${tool}@${releaseMajor}` : tool, { fresh: true }).catch(() => null),
     ]);
     return {
       latest: offered,
-      releases: parseReleases(listing).filter((release) => !releaseMajor || release.version.startsWith(`${releaseMajor}.`)).map((release) => ({
+      releases: releasesFor(tool, listing).filter((release) => !releaseMajor || release.version.startsWith(`${releaseMajor}.`)).map((release) => ({
         ...release,
         waiting: Boolean(offered) && !release.prerelease && compareVersions(release.version, offered) > 0,
         ...(minimumVersion ? { supported: meetsMinimum(release.version, minimumVersion) !== false } : {}),
@@ -1067,8 +1089,8 @@ export function createHarnessManager(options = {}) {
 
   /** `{ version, newest, newestAt }`: what mise offers, and the newest release it is holding back. */
   async function releaseSummary(tool, { fresh = false } = {}) {
-    const version = await mise.latest(ctx, tool, { fresh });
-    const releases = await mise.lsRemote(ctx, tool, { json: true, anyAge: true, fresh }).then(parseReleases, () => []);
+    const version = await resolveLatest(tool, { fresh });
+    const releases = await mise.lsRemote(ctx, tool, { json: true, anyAge: true, fresh }).then((listing) => releasesFor(tool, listing), () => []);
     const held = releases.find((release) => !release.prerelease && compareVersions(release.version, version) > 0) ?? null;
     return { version, newest: held?.version ?? null, newestAt: held?.releasedAt ?? null };
   }

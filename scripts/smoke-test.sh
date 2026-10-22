@@ -887,6 +887,20 @@ check "T3's login-shell PATH does not include the agent dispatcher" \
 check "toolchains run from any directory, as the t3 user" \
   "docker exec -u t3 $NAME bash -lc 'cd /tmp && go version && cargo --version && cargo clippy --version && rustfmt --version && bun --version && deno --version && uv --version'"
 
+rust_release_discovery() {
+  docker exec -i -u t3 "$NAME" node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { createHarnessManager } from '/opt/t3-harness/index.mjs';
+const manager = createHarnessManager();
+const before = await manager.toolchains.resolve('rust');
+const release = await manager.toolchains.latestRelease('rust', { fresh: true });
+assert.match(release.version, /^\d+\.\d+\.\d+$/);
+if (release.newest) assert.match(release.newest, /^\d+\.\d+\.\d+$/);
+assert.equal((await manager.toolchains.resolve('rust')).version, before.version, 'discovery changed the Rust selection');
+NODE
+}
+check "Rust discovery offers numbered releases without changing the installed toolchain" rust_release_discovery
+
 storage_native_commands() {
   docker cp "$SCRIPT_DIR/storage-native-smoke.mjs" "$NAME:/tmp/t3-storage-native-smoke.mjs" >/dev/null
   docker exec -u t3 -e T3_STORAGE_HARNESS_ROOT=/opt/t3-harness "$NAME" \

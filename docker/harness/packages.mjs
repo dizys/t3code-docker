@@ -161,7 +161,8 @@ export const isPreview = (release) => Boolean(release?.prerelease) || PREVIEW.te
 /**
  * `mise ls-remote --json` -> releases newest first, each with when it was
  * published where the backend says (`releasedAt`, ISO) and whether it is a
- * preview. Anything that is not a version mise could install is dropped.
+ * preview. Rolling selectors are not releases: their name can point at a
+ * different artifact tomorrow. Anything mise could not install is dropped.
  */
 export function parseReleases(text) {
   let list;
@@ -174,7 +175,7 @@ export function parseReleases(text) {
   const out = [];
   for (const item of list) {
     const version = typeof item?.version === "string" ? item.version.trim() : "";
-    if (!isVersionSpec(version)) continue;
+    if (!isVersionSpec(version) || item.rolling === true) continue;
     const at = typeof item.created_at === "string" && !Number.isNaN(Date.parse(item.created_at)) ? new Date(item.created_at).toISOString() : null;
     out.push({ version, releasedAt: at, prerelease: isPreview(item) });
   }

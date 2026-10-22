@@ -861,6 +861,34 @@ test("a channel name where a release would be is no release to wait for", () => 
   assert.equal(rust.status.text, "With clippy and rustfmt · up to date");
 });
 
+test("a failed tool update has one error and keeps an unrelated notice", () => {
+  const s = statusWith({ toolchains: [toolchain("rust", {
+    version: "1.99.1", latestVersion: "1.99.1", failed: true,
+    operation: "update", failure: "invalid version: stable",
+  })] });
+  const state = ui();
+  state.notices.set("toolchain:rust", { tone: "danger", text: "invalid version: stable" });
+  let row = M.toolchainRows(s, state, NOW)[0];
+  assert.equal(row.status.text, "Update failed: invalid version: stable");
+  assert.equal(row.notice, undefined, "the status already contains the failed click's reason");
+  assert.equal(row.version, "1.99.1");
+  assert.equal(row.action.cmd, "toolchain.update");
+  state.notices.set("toolchain:rust", { tone: "danger", text: "The update service could not be reached" });
+  row = M.toolchainRows(s, state, NOW)[0];
+  assert.equal(row.notice.text, "The update service could not be reached", "different recovery information stays available");
+});
+
+test("old Rust channel metadata never becomes a numbered update target", () => {
+  const s = statusWith({ toolchains: [toolchain("rust", {
+    version: "1.99.1", latestVersion: "stable", newestVersion: "beta",
+  })] });
+  const row = M.toolchainRows(s, ui(), NOW)[0];
+  assert.equal(row.latest, null);
+  assert.equal(row.updateAvailable, false);
+  assert.equal(row.held, null);
+  assert.equal(M.updatesView(s, ui(), NOW).available.some(r => r.id === "rust"), false);
+});
+
 test("settings an older image left behind flag Server", () => {
   assert.deepEqual(plain(M.navBadges(statusWith({ legacyEnv: ["GOROOT", "PATH"] }), null, ui()).server), { tone: "warn", count: 1 });
   assert.deepEqual(plain(M.navBadges(statusWith({ legacyEnv: ["GOROOT"] }), null, ui()).more), { tone: "warn", count: 1 });

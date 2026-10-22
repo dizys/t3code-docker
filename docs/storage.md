@@ -33,6 +33,16 @@ must be cleaned from a terminal. Operation results survive service restarts.
   trimming stops. **Older tool versions → Review** provides a manual preview;
   the server checks it again before removing anything.
 
+In the manual review, **Also remove previous versions** includes every unused
+noncurrent managed version, including the immediate previous selection. It is
+off each time you open the review and never changes automatic retention. This
+removes local rollback copies: switching back requires reinstalling them.
+Current versions, project/tool requirements, configured provider selections,
+running processes, unmanaged installs and unverified locations remain protected.
+Changing this option requests a new preview; its confirmation is bound to both
+the selected mode and the versions shown, and references are rechecked before
+each removal.
+
 Preferences live in `~/.t3/setup/storage-policy.json` (under `T3CODE_HOME` when
 set) and persist with T3 state. Invalid preferences pause automatic cleanup.
 The CLI uses the same service and policies:

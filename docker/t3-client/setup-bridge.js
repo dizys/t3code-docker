@@ -241,7 +241,8 @@
     '.t3-setup-cmd-text{display:flex;flex-direction:column;min-width:0;flex:1;line-height:1.3;}',
     '.t3-setup-cmd-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
     '.t3-setup-cmd-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--muted-foreground,#71717a);}',
-    '.t3-setup-cmd-icon{width:16px;height:16px;flex:none;color:var(--muted-foreground,#71717a);}',
+    '.t3-setup-cmd{display:flex;align-items:center;gap:8px;min-width:0;}',
+    '.t3-setup-cmd>.t3-setup-cmd-icon{display:block;width:16px;height:16px;min-width:16px;max-width:16px;min-height:16px;max-height:16px;flex:none;color:var(--muted-foreground,#71717a);}',
     '.t3-setup-cmd--plain{display:flex;align-items:center;gap:8px;min-height:32px;padding:6px 8px;border-radius:calc(var(--radius,.625rem) - 4px);cursor:pointer;font-size:14px;}',
     '.t3-setup-cmd-label{padding:6px 8px;font-size:12px;font-weight:500;color:var(--muted-foreground,#71717a);}',
     '.t3-setup-cmd-host{padding:8px;}',
@@ -603,7 +604,7 @@
   // in view: a search T3 has nothing for, or only one-line rows, still draws
   // Setup's like T3's two-line rows (a title over "Settings · Project"). Before
   // any have been seen, Setup's own fallback styles stand in.
-  const looks = { group: null, label: null, row: null, icon: null, twoLine: null };
+  const looks = { group: null, label: null, row: null, twoLine: null };
   const learnLooks = () => {
     const group = palette.dialog.querySelector('[data-slot="command-group"]:not([data-t3-setup-palette])');
     const label = group && group.querySelector('[data-slot="command-group-label"]');
@@ -613,8 +614,8 @@
       // T3 marks its active row with forced background classes, which are
       // T3's to set: they are not copied.
       looks.row = row.className.split(/\s+/).filter((c) => !/!$/.test(c)).join(' ');
-      const icon = row.querySelector('svg');
-      if (icon) looks.icon = (icon.getAttribute('class') || '').replace(/\blucide-[\w-]+/g, ' ').trim();
+      // Native results can contain a full-size illustration or an icon sized
+      // by a parent selector. Never borrow arbitrary descendant SVG classes.
       const text = row.querySelector(':scope > span');
       const title = text && text.children[0];
       const meta = text && text.children[1];
@@ -650,11 +651,11 @@
       row.className = looks.row ? looks.row + ' t3-setup-cmd' : 't3-setup-cmd t3-setup-cmd--plain';
       const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       for (const [name, value] of [['viewBox', '0 0 24 24'], ['fill', 'none'], ['stroke', 'currentColor'], ['stroke-width', '2'],
-        ['stroke-linecap', 'round'], ['stroke-linejoin', 'round'], ['aria-hidden', 'true']]) icon.setAttribute(name, value);
-      icon.setAttribute('class', looks.icon || 't3-setup-cmd-icon');
+        ['stroke-linecap', 'round'], ['stroke-linejoin', 'round'], ['aria-hidden', 'true'], ['width', '16'], ['height', '16']]) icon.setAttribute(name, value);
+      icon.setAttribute('class', 't3-setup-cmd-icon');
       icon.innerHTML = PALETTE_ICONS[item.id] || SERVER_COG_ICON;
       const text = document.createElement('span');
-      text.className = twoLine ? twoLine.text : 't3-setup-cmd-text';
+      text.className = 't3-setup-cmd-text' + (twoLine ? ' ' + twoLine.text : '');
       const title = document.createElement('span');
       title.className = twoLine ? twoLine.title : 't3-setup-cmd-title';
       const name = document.createElement('span');

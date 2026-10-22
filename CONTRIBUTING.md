@@ -62,6 +62,12 @@ Issues and pull requests are welcome. Before opening one:
   cache or change preferences. Screenshots go to `/tmp/t3-storage-ui-audit`;
   set `T3_STORAGE_UI_OUTPUT` to change that location. The development console
   isolates its home, mise state, and caches under `/tmp/t3-dev/home`.
+  `node scripts/access-ui-audit.js http://127.0.0.1:23780/__setup/ dev`
+  checks device renaming, revocation and pairing with delayed/failed fixture
+  responses, repeated submissions, stale polls and incomplete list refreshes.
+  It covers light/dark, phone, tablet, desktop and an actual embedded frame;
+  screenshots go to `/tmp/t3-access-ui-audit` (`T3_ACCESS_UI_OUTPUT` overrides
+  it). All Access API writes are intercepted and never reach real devices.
 
 For OpenCode credential changes, run
 `node scripts/opencode-auth-smoke.mjs /absolute/path/to/opencode` against both

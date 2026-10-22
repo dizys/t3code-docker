@@ -34,6 +34,10 @@
   const { html, raw, icon, cx, patch } = Kit;
   const $ = (id) => document.getElementById(id);
   const now = () => Date.now();
+  const access = T3AccessState.create();
+  let accessNotice = null;
+  const closeAccessNotice = () => { accessNotice?.close(); accessNotice = null; };
+  const accessToast = (message, options) => { closeAccessNotice(); accessNotice = Kit.toast(message, options); };
 
   // ------------------------------------------------------------- embedded --
   // Opened from T3 Code's settings, in a dialog over T3 Code
@@ -194,9 +198,10 @@
   const loadStatus = () => {
     if (statusLoading) return statusLoading;
     statusLoading = (async () => {
+      const accessRevision = access.revision;
       const res = await api('/status');
       if (res.ok) {
-        state.status = res.data;
+        state.status = access.reconcile(res.data, state.status, accessRevision);
         state.statusError = null;
         settleOperations(res.data);
         settleRuntime(res.data);
@@ -216,7 +221,7 @@
       render();
       clearTimeout(statusTimer);
       const readingDevices = Object.values(state.status?.authLists || {}).some((entry) => entry.refreshing);
-      if (!document.hidden && !locked) statusTimer = setTimeout(loadStatus, busyNow(state.status) || readingDevices ? FAST_MS : POLL_MS);
+      if (!document.hidden && !locked) statusTimer = setTimeout(loadStatus, busyNow(state.status) || readingDevices || access.busy || pair.minting ? FAST_MS : POLL_MS);
     })().finally(() => { statusLoading = null; });
     return statusLoading;
   };
@@ -812,11 +817,16 @@
   };
 
   /** A paired device: what it is, when it was last here, and (on Access) its menu. */
+  const accessFeedback = (kind, id) => {
+    const pending = access.pending(kind, id), error = access.error(kind, id);
+    return pending ? html`<span class="tc-status tc-access-pending" role="status"><span class="tc-spinner" aria-hidden="true"></span>${pending.verb}</span>`
+      : error ? html`<span class="tc-status tc-danger" role="alert">${icon('circle-alert', 'tc-icon--sm')}<span class="tc-status-text">${error}</span></span>` : '';
+  };
   const deviceRow = (d, { manage, fresh } = {}) => html`
-    <div class="tc-row tc-row--compact tc-device-row" data-key="dev-${d.id}">
+    <div class="tc-row tc-row--compact tc-device-row tc-access-row" data-key="dev-${d.id}" aria-busy="${String(Boolean(access.pending('session', d.id)))}">
       <span class="tc-tile tc-tile--icon" aria-hidden="true">${icon(d.icon)}</span>
-      <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name" title="${d.name}">${d.name}</span>${d.connected ? html`<span class="tc-dot tc-dot--ok tc-dot--live" role="img" aria-label="Connected now"></span>` : ''}${fresh ? html`<span class="tc-badge tc-badge--ok">New</span>` : ''}</div><span class="tc-status" title="${d.seenTitle}">${[d.status, d.ends].filter(Boolean).join(' · ')}</span></div>
-      ${manage ? html`<div class="tc-row-actions"><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" aria-label="More for ${d.name}" aria-haspopup="menu" aria-expanded="${String(Kit.menuOpenFor('menu-dev-' + d.id))}" data-cmd="device.menu" data-id="${d.id}" data-key="menu-dev-${d.id}">${icon('ellipsis')}</button></div>` : ''}
+      <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name" title="${d.name}">${d.name}</span>${d.connected ? html`<span class="tc-dot tc-dot--ok tc-dot--live" role="img" aria-label="Connected now"></span>` : ''}${fresh ? html`<span class="tc-badge tc-badge--ok">New</span>` : ''}</div>${accessFeedback('session', d.id) || html`<span class="tc-status" title="${d.seenTitle}">${[d.status, d.ends].filter(Boolean).join(' · ')}</span>`}</div>
+      ${manage ? html`<div class="tc-row-actions"><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" aria-label="More for ${d.name}" aria-haspopup="menu" aria-expanded="${String(Kit.menuOpenFor('menu-dev-' + d.id))}" data-cmd="device.menu" data-id="${d.id}" data-key="menu-dev-${d.id}"${access.pending('session', d.id) ? raw(' disabled') : ''}>${icon('ellipsis')}</button></div>` : ''}
     </div>`;
 
   /** The page a "Needs you" item lives on, and that page's link when they all share one. */
@@ -881,7 +891,7 @@
       m.outcome = 'paired';
       m.pairedName = M.deviceName(fresh);
       pair.freshSession = fresh.sessionId;
-      Kit.toast('Paired with ' + m.pairedName, { detail: 'It is already signed in.' });
+      accessToast('Paired with ' + m.pairedName, { detail: 'It is already signed in.' });
       return;
     }
     const listed = (s.pairings || []).some((l) => l.id === m.id);
@@ -897,6 +907,7 @@
   const mint = async () => {
     const s = state.status;
     if (pair.minting) return;
+    closeAccessNotice();
     if (s && !s.publicUrl) {
       pair.error = 'Set the public URL first: a pairing link points at it, and without it a device has nowhere to go.';
       render();
@@ -905,6 +916,7 @@
     const label = pair.showForm ? pair.label.trim() : (pair.minted && pair.minted.label) || '';
     pair.minting = true;
     pair.error = null;
+    Kit.announce('Creating pairing link.');
     render();
     const res = await api('/pair', { body: { ttl: pair.ttl, label } });
     pair.minting = false;
@@ -953,13 +965,13 @@
   const pairForm = (s) => {
     const noUrl = s && !s.publicUrl;
     return html`
-      <div class="tc-group tc-group--brand" data-key="pair-form"><div class="tc-card-body tc-pair-form">
+      <div class="tc-group tc-group--brand" data-key="pair-form" aria-busy="${String(pair.minting)}"><div class="tc-card-body tc-pair-form">
         <div class="tc-pair-form-intro"><span class="tc-row-name">A single-use link for one device</span><span class="tc-small tc-muted">Scan it with the T3 Code app, open it in a browser, or paste the pair code into the desktop app.</span></div>
         <div class="tc-pair-form-fields">
-          <div class="tc-field"><label class="tc-label" for="pair-label">Label <span class="tc-label-opt">optional</span></label><input id="pair-label" class="tc-input" value="${pair.label}" placeholder="e.g. iPhone" maxlength="64" autocomplete="off" spellcheck="false"></div>
-          <div class="tc-field"><span class="tc-label" id="ttl-label">Expires in</span><div class="tc-seg" role="group" aria-labelledby="ttl-label">${TTLS.map(([value, label]) => html`<button type="button" aria-pressed="${String(pair.ttl === value)}" data-cmd="pair.ttl" data-value="${value}">${label}</button>`)}</div></div>
+          <div class="tc-field"><label class="tc-label" for="pair-label">Label <span class="tc-label-opt">optional</span></label><input id="pair-label" class="tc-input" value="${pair.label}" placeholder="e.g. iPhone" maxlength="64" autocomplete="off" spellcheck="false"${pair.minting ? raw(' disabled') : ''}></div>
+          <div class="tc-field"><span class="tc-label" id="ttl-label">Expires in</span><div class="tc-seg" role="group" aria-labelledby="ttl-label">${TTLS.map(([value, label]) => html`<button type="button" aria-pressed="${String(pair.ttl === value)}" data-cmd="pair.ttl" data-value="${value}"${pair.minting ? raw(' disabled') : ''}>${label}</button>`)}</div></div>
         </div>
-        <button class="${cx('tc-btn', !noUrl && 'tc-btn--primary')}" type="button" data-cmd="pair.start" data-key="pair-create" aria-keyshortcuts="P" title="Create pairing link · P"${pair.minting || noUrl ? raw(' disabled') : ''}>${pair.minting ? html`<span class="tc-spinner" aria-hidden="true"></span>` : icon('link')}Create pairing link</button>
+        <button class="${cx('tc-btn', !noUrl && 'tc-btn--primary')}" type="button" data-cmd="pair.start" data-key="pair-create" aria-keyshortcuts="P" title="Create pairing link · P"${pair.minting || noUrl ? raw(' disabled') : ''}>${pair.minting ? html`<span class="tc-spinner" aria-hidden="true"></span>Creating link…` : html`${icon('link')}Create pairing link`}</button>
         ${noUrl ? html`<p class="tc-hint tc-pair-form-note">${icon('info', 'tc-icon--sm')}A pairing link points at the public URL, so set it above first.</p>` : ''}
         ${pair.error && !noUrl ? html`<p class="tc-hint tc-hint--err tc-pair-form-note" role="alert">${pair.error}</p>` : ''}
       </div></div>`;
@@ -1000,7 +1012,7 @@
             ${m.qr ? html`<div class="tc-pair-qr"><div class="tc-qr" role="img" aria-label="QR code for the pairing link" data-keep>${qrSvg(m.qr)}</div><div class="tc-qr-caption">Scan with the T3 Code app</div></div>` : ''}
           </div>
         </div>
-        <div class="tc-card-foot" aria-live="polite"><span class="tc-spinner tc-info" aria-hidden="true"></span><span>Listening for the device…<span class="tc-desk-only"> this page updates on its own.</span></span><span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-cmd="link.revoke" data-id="${m.id}">Revoke link</button></div>
+        <div class="tc-card-foot" aria-live="polite"><span class="tc-spinner tc-info" aria-hidden="true"></span><span>${access.pending('pairing', m.id) ? 'Revoking link…' : html`Listening for the device…<span class="tc-desk-only"> this page updates on its own.</span>`}</span><span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-cmd="link.revoke" data-id="${m.id}"${access.pending('pairing', m.id) ? raw(' disabled') : ''}>${access.pending('pairing', m.id) ? 'Revoking…' : 'Revoke link'}</button></div>
       </div>`;
   };
 
@@ -1042,7 +1054,7 @@
       ${pageNotices('access')}
       ${s.publicUrl ? '' : reach}
       ${section('pair-title', 'Pair a device', ceremony ? pairCeremony(m, s, n) : pairForm(s),
-        { actions: ceremony ? html`${sub ? muted(sub) : ''}<button class="tc-btn tc-btn--sm" type="button" data-cmd="pair.new" aria-keyshortcuts="P" title="New link · P">${icon('plus')}New link</button>` : null })}
+        { actions: ceremony ? html`${sub ? muted(sub) : ''}<button class="tc-btn tc-btn--sm" type="button" data-cmd="pair.new" aria-keyshortcuts="P" title="New link · P"${pair.minting ? raw(' disabled') : ''}>${pair.minting ? html`<span class="tc-spinner" aria-hidden="true"></span>Creating link…` : html`${icon('plus')}New link`}</button>` : null })}
       ${section('paired-title', 'Paired devices', devices.length
         ? html`<div class="tc-group"><div class="tc-list">${devices.map((d) => deviceRow(d, { manage: true, fresh: d.id === pair.freshSession }))}</div></div>`
         : s.authLists?.session.available === false ? html`<div class="tc-group"><div class="tc-empty tc-empty--compact" role="status">
@@ -1054,10 +1066,10 @@
             <span class="tc-empty-desc">Create a link above, then scan it with the phone you want to drive this server from.</span>
           </div></div>`)}
       ${links.length ? section('links-title', 'Unused links', html`<div class="tc-group"><div class="tc-list">${links.map((l) => html`
-        <div class="tc-row tc-row--compact" data-key="link-${l.id}">
+        <div class="tc-row tc-row--compact tc-access-row" data-key="link-${l.id}" aria-busy="${String(Boolean(access.pending('pairing', l.id)))}">
           <span class="tc-tile tc-tile--icon" aria-hidden="true">${icon('link')}</span>
-          <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name">${l.name}</span>${l.waiting ? html`<span class="tc-badge tc-badge--info">Waiting</span>` : ''}</div><span class="tc-status" title="${l.expiresTitle}">${l.status}</span></div>
-          <div class="tc-row-actions"><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" aria-label="More for link ${l.name}" aria-haspopup="menu" aria-expanded="${String(Kit.menuOpenFor('menu-link-' + l.id))}" data-cmd="link.menu" data-id="${l.id}" data-key="menu-link-${l.id}">${icon('ellipsis')}</button></div>
+          <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name">${l.name}</span>${l.waiting ? html`<span class="tc-badge tc-badge--info">Waiting</span>` : ''}</div>${accessFeedback('pairing', l.id) || html`<span class="tc-status" title="${l.expiresTitle}">${l.status}</span>`}</div>
+          <div class="tc-row-actions"><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" aria-label="More for link ${l.name}" aria-haspopup="menu" aria-expanded="${String(Kit.menuOpenFor('menu-link-' + l.id))}" data-cmd="link.menu" data-id="${l.id}" data-key="menu-link-${l.id}"${access.pending('pairing', l.id) ? raw(' disabled') : ''}>${icon('ellipsis')}</button></div>
         </div>`)}</div></div>`) : ''}
       ${s.publicUrl ? reach : ''}`;
   };
@@ -3372,9 +3384,10 @@
     <div class="tc-dialog-foot tc-device-rename-foot"><button class="tc-btn tc-btn--ghost" type="button" data-device-close${deviceRename.saving ? raw(' disabled') : ''}>Cancel</button><button class="tc-btn tc-btn--primary" type="submit" data-key="device-save"${deviceRename.saving || !deviceRenameChanged() ? raw(' disabled') : ''}>${deviceRename.saving ? html`<span class="tc-spinner" aria-hidden="true"></span>Saving` : 'Save changes'}</button></div>`;
 
   const openDeviceRename = (id, trigger) => {
-    if (deviceRename.layer) return;
+    if (deviceRename.layer || access.pending('session', id)) return;
+    closeAccessNotice();
     const device = M.deviceRows((state.status || {}).sessions, now()).find((row) => row.id === id);
-    if (!device) { Kit.toast('This device is no longer paired.', { tone: 'info' }); return; }
+    if (!device) { accessToast('This device is no longer paired.', { tone: 'info' }); return; }
     Object.assign(deviceRename, { device, label: device.label, initial: device.label, saving: false, error: null, invalid: false });
     const layer = Kit.open({
       kind: 'center',
@@ -3407,20 +3420,25 @@
     panel.addEventListener('submit', async (event) => {
       event.preventDefault();
       if (deviceRename.saving || !deviceRenameChanged()) return;
+      const operation = access.begin('session', id, 'Saving name…');
+      if (!operation) return;
       const label = panel.querySelector('#device-label').value.trim();
       deviceRename.saving = true;
       deviceRename.error = null;
       deviceRename.invalid = false;
       renderForm();
+      render();
+      Kit.announce('Saving device name.');
       const res = await api('/devices/rename', { body: { id, label } });
+      access.finish(operation, res.ok ? { session: res.data.session } : { error: res.error });
       if (res.ok) {
-        if (state.status) state.status.sessions = (state.status.sessions || []).map((session) => session.sessionId === id ? res.data.session : session);
-        render();
+        if (state.status) state.status = access.reconcile(state.status, state.status);
         loadStatus();
-        Kit.toast(res.data.label ? 'Device renamed' : 'Original device name restored');
+        accessToast(res.data.label ? 'Device renamed' : 'Original device name restored');
       }
+      render();
       if (deviceRename.layer !== layer) {
-        if (!res.ok) Kit.toast(res.error, { tone: 'danger' });
+        if (!res.ok) accessToast(res.error, { tone: 'danger' });
         return;
       }
       deviceRename.saving = false;
@@ -3430,6 +3448,9 @@
   };
 
   const confirmRevoke = async (kind, id) => {
+    closeAccessNotice();
+    const operation = access.begin(kind, id, 'Awaiting confirmation…');
+    if (!operation) return;
     const s = state.status || {};
     let label = id;
     if (kind === 'session') {
@@ -3442,10 +3463,27 @@
     const ok = await Kit.confirm(kind === 'session'
       ? { title: 'Revoke ' + label + '?', body: label + ' loses access immediately and has to be paired again with a new link.', confirm: 'Revoke' }
       : { title: 'Revoke this link?', body: '“' + label + '” has not been used yet. Revoking it means the link stops working.', confirm: 'Revoke link' });
-    if (!ok) return;
+    if (!ok) { access.finish(operation); render(); return; }
+    operation.verb = kind === 'session' ? 'Revoking access…' : 'Revoking link…';
+    render();
+    Kit.announce(operation.verb);
     const res = await api('/revoke', { body: { kind, id } });
-    if (!res.ok) { Kit.toast('Could not revoke', { tone: 'danger', detail: res.error }); return; }
-    Kit.toast(kind === 'session' ? 'Revoked ' + label : 'Link revoked');
+    access.finish(operation, res.ok ? { removed: true } : { error: res.error });
+    if (res.ok) {
+      if (state.status) state.status = access.reconcile(state.status, state.status);
+      if (kind === 'pairing' && pair.minted?.id === id) pair.minted.outcome = 'revoked';
+    }
+    render();
+    if (!res.ok) { accessToast('Could not revoke', { tone: 'danger', detail: res.error }); return; }
+    // Disabling then removing the trigger can leave keyboard focus on body.
+    // Move it to another item (or the section heading), unless the user has
+    // already moved on to another control while the request was in flight.
+    if (document.activeElement === document.body) {
+      const heading = $(kind === 'session' ? 'paired-title' : 'links-title') || $('pair-title');
+      const next = heading?.closest('section')?.querySelector('button:not([disabled])') || heading;
+      if (next) { if (next === heading) next.tabIndex = -1; next.focus({ preventScroll: true }); }
+    }
+    accessToast(kind === 'session' ? 'Revoked ' + label : 'Link revoked');
     await loadStatus();
   };
 
@@ -3650,6 +3688,7 @@
       mint();
     },
     'pair.new': () => {
+      if (pair.minting) return;
       if (state.route !== 'access') go('access');
       pair.showForm = true;
       pair.error = null;
@@ -3657,8 +3696,10 @@
       const input = $('pair-label');
       if (input) input.focus();
     },
-    'pair.ttl': (a) => { pair.ttl = a.value; render(); },
+    'pair.ttl': (a) => { if (!pair.minting) { pair.ttl = a.value; render(); } },
     'device.menu': (a, el) => {
+      if (access.pending('session', a.id)) return;
+      closeAccessNotice();
       const d = M.deviceRows((state.status || {}).sessions, now()).find((row) => row.id === a.id);
       if (!d) return;
       Kit.menu(el, {
@@ -3672,6 +3713,8 @@
       });
     },
     'link.menu': (a, el) => {
+      if (access.pending('pairing', a.id)) return;
+      closeAccessNotice();
       const l = M.linkRows((state.status || {}).pairings, null, now()).find((row) => row.id === a.id);
       if (!l) return;
       Kit.menu(el, {

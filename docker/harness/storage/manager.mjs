@@ -257,15 +257,15 @@ export function createStorageManager(options = {}) {
     return clean(ids, { automatic: true });
   }
 
-  async function previewVersions() {
+  async function previewVersions({ includePrevious = false } = {}) {
     if (!options.retention) return errorResult("unavailable", "Tool retention is not available in this installation.");
-    const plan = await options.retention.preview();
+    const plan = await options.retention.preview({ includePrevious });
     const paths = plan.items.filter((item) => item.eligible).map((item) => item.path);
     const measured = paths.length ? await measure(paths) : { sizes: {}, partial: false };
     return { ok: true, ...plan, partial: measured.partial, estimatedBytes: paths.reduce((sum, target) => sum + (measured.sizes[target] ?? 0), 0) };
   }
 
-  async function trimVersions({ onStarted, onProgress, token } = {}) {
+  async function trimVersions({ onStarted, onProgress, token, includePrevious = false } = {}) {
     await ready;
     if (!options.retention) return errorResult("unavailable", "Tool retention is not available in this installation.");
     let operation;
@@ -276,9 +276,9 @@ export function createStorageManager(options = {}) {
     };
     try {
       const result = await options.retention.prune({
-        token,
+        token, includePrevious,
         beforeRemove: async () => {
-          operation = { id: randomUUID(), ids: ["versions"], state: "running", phase: "versions", pid: ctx.pid,
+          operation = { id: randomUUID(), ids: ["versions"], includePrevious, state: "running", phase: "versions", pid: ctx.pid,
             startTime: ctx.startTimeOf(ctx.pid), startedAt: now(), finishedAt: null, error: null };
           // The retention manager holds the same global lock before this fires.
           await report({});

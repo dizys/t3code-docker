@@ -126,3 +126,67 @@ test("manual pruning rejects stale previews and remains available when automatic
   assert.equal((await manager.retention.prune({ token: fresh.token })).ok, true);
   assert.deepEqual(f.removed, ["1.21.0", "1.22.0", "1.23.0"]);
 });
+
+test("manual cleanup can include the only previous version without changing automatic retention", async (t) => {
+  const f = await fixture(t);
+  const saved = await readState(f.ctx);
+  saved.toolchains.go.managedVersions = ["1.24.0", "1.25.0"];
+  await writeState(f.ctx, saved);
+  const manager = createHarnessManager({ env: f.env, run: f.ctx.run, retentionProcesses: f.ctx.retentionProcesses });
+  const safe = await manager.retention.preview();
+  assert.equal(safe.removableCount, 0);
+  const plan = await manager.retention.preview({ includePrevious: true });
+  assert.equal(plan.includePrevious, true);
+  assert.equal(plan.removableCount, 1);
+  assert.equal((await manager.retention.prune({ token: safe.token, includePrevious: true })).code, "stale-preview");
+  assert.equal((await manager.retention.prune({ includePrevious: true })).code, "stale-preview");
+  assert.equal(f.removed.length, 0);
+  assert.equal((await manager.retention.prune({ token: plan.token, includePrevious: true })).ok, true);
+  assert.deepEqual(f.removed, ["1.24.0"]);
+  const after = (await readState(f.ctx)).toolchains.go;
+  assert.equal(after.version, "1.25.0");
+  assert.equal(after.previousVersion, null);
+  assert.deepEqual(after.managedVersions, ["1.25.0"]);
+  assert.equal((await manager.retention.preview()).includePrevious, false);
+});
+
+test("including previous versions still protects pins, provider selections, live tools and unverified installs", async (t) => {
+  const f = await fixture(t);
+  const previous = f.installs.find((item) => item.version === "1.24.0");
+  for (const protect of [
+    async () => { f.setPrunable(f.installs.filter((item) => item !== previous)); },
+    async () => { f.setPrunable(f.installs); await writeStorageJson(f.settings, { providerInstances: { custom: { binaryPath: previous.install_path + "/bin/go" } } }); },
+    async () => { await fs.rm(f.settings); f.setProcesses({ complete: true, processes: [{ args: [previous.install_path + "/bin/go"] }] }); },
+    async () => { f.setProcesses({ complete: false, processes: [] }); },
+  ]) {
+    await protect();
+    const plan = await planRetention(f.ctx, { includePrevious: true });
+    assert.equal(plan.items.find((item) => item.version === previous.version).eligible, false);
+    assert.equal(plan.items.find((item) => item.version === "1.25.0").reason, "Current version");
+  }
+  f.setProcesses({ complete: true, processes: [] });
+  await fs.rm(previous.install_path, { recursive: true });
+  await fs.symlink(f.installs[5].install_path, previous.install_path);
+  const linked = await planRetention(f.ctx, { includePrevious: true });
+  assert.equal(linked.items.find((item) => item.version === previous.version).reason, 'Install location could not be verified');
+});
+
+test("a previous version newly used after review is rechecked before removal", async (t) => {
+  const f = await fixture(t), plan = await planRetention(f.ctx, { includePrevious: true });
+  f.setProcesses({ complete: true, processes: [{ args: [f.installs[4].install_path + "/bin/go"] }] });
+  await applyRetention(f.ctx, plan);
+  assert.equal(f.removed.includes("1.24.0"), false);
+  assert.equal((await readState(f.ctx)).toolchains.go.previousVersion, "1.24.0");
+});
+
+test("cleanup mode consent cannot be reused even when the removable set is identical", async (t) => {
+  const f = await fixture(t);
+  f.setPrunable(f.installs.filter((item) => item.version !== "1.24.0"));
+  const safe = await planRetention(f.ctx), all = await planRetention(f.ctx, { includePrevious: true });
+  assert.equal(safe.removableCount, all.removableCount);
+  assert.notEqual(safe.token, all.token);
+  const manager = createHarnessManager({ env: f.env, run: f.ctx.run, retentionProcesses: f.ctx.retentionProcesses });
+  assert.equal((await manager.retention.prune({ token: safe.token, includePrevious: true })).code, "stale-preview");
+  assert.equal((await manager.retention.prune({ token: all.token, includePrevious: "true" })).code, "invalid-options");
+  assert.deepEqual(f.removed, []);
+});

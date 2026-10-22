@@ -3,7 +3,7 @@
 const T3StorageUI = (() => {
   'use strict';
   const M = T3Model;
-  const { html, raw, icon, cx, patch } = Kit;
+  const { html, raw, icon, cx } = Kit;
   const disabled = (value) => value ? raw(' disabled') : '';
   const GB = 1_000_000_000;
 
@@ -135,34 +135,50 @@ const T3StorageUI = (() => {
     const reviewVersions = async () => {
       if (busy()) return;
       lastToast?.close();
-      let plan = null, failure = null;
+      let plan = null, failure = null, includePrevious = false, request = 0;
       const contents = () => html`
         <div class="tc-dialog-body">
-          <h2 class="tc-dialog-title" id="storage-versions-title">Review older tool versions</h2>
-          <p class="tc-dialog-desc">Keep the current and previous versions. Project requirements, provider selections, and running tools are protected.</p>
+          <h2 class="tc-dialog-title" id="storage-review-title">Review older tool versions</h2>
+          <p class="tc-dialog-desc">Current versions, project requirements, provider selections, and running tools are protected.</p>
+          <label class="tc-storage-previous"${includePrevious ? raw(' data-danger') : ''}>
+            <input class="tc-checkbox" type="checkbox" data-storage-previous${includePrevious ? raw(' checked') : ''} aria-labelledby="storage-previous-label" aria-describedby="storage-previous-help">
+            <span><span class="tc-row-name" id="storage-previous-label">Also remove previous versions</span><span class="tc-hint" id="storage-previous-help">Removes local rollback copies. You’ll need to reinstall them to switch back. This applies only to this cleanup.</span></span>
+          </label>
           ${!plan && !failure ? html`<div class="tc-storage-review-loading" role="status"><span class="tc-spinner" aria-hidden="true"></span>Checking installed versions…</div>` : ''}
-          ${failure ? html`<p class="tc-hint tc-hint--err" role="alert">${failure}</p>` : ''}
+          ${failure ? html`<div class="tc-storage-review-error"><p class="tc-hint tc-hint--err" role="alert">${failure}</p><button class="tc-btn tc-btn--sm" type="button" data-storage-retry>${icon('refresh-cw')}Try again</button></div>` : ''}
           ${plan ? html`
-            <div class="tc-storage-review-summary"><strong>${plan.removableCount ? M.plural(plan.removableCount, 'older version') + ' can be removed' : 'No older versions to remove'}</strong><span class="tc-small tc-muted">${plan.removableCount ? 'Approximately ' + M.formatBytes(plan.estimatedBytes) + ' reclaimable' : 'Current, previous, and required versions are kept.'}</span></div>
+            <div class="tc-storage-review-summary" role="status"><strong>${plan.removableCount ? M.plural(plan.removableCount, 'version') + ' can be removed' : 'No older versions to remove'}</strong><span class="tc-small tc-muted">${plan.removableCount ? 'Approximately ' + M.formatBytes(plan.estimatedBytes) + ' reclaimable' : includePrevious ? 'All remaining versions are current or required.' : 'Current, previous, and required versions are kept.'}</span></div>
             ${plan.warning ? html`<p class="tc-hint tc-hint--err" role="alert">${plan.warning}</p>` : ''}
             ${plan.items.length ? html`<div class="tc-storage-version-list" role="list" aria-label="Installed versions">${[...plan.items].sort((a, b) => Number(b.eligible) - Number(a.eligible)).map((item) => html`
               <div class="tc-storage-version" role="listitem"><div><span class="tc-row-name">${item.name}</span><span class="tc-mono tc-small">${item.version}</span></div><span class="${cx('tc-small', item.eligible ? 'tc-storage-removable' : 'tc-muted')}">${item.eligible ? 'Remove' : item.reason}</span></div>`)}</div>` : ''}` : ''}
         </div>
-        <div class="tc-dialog-foot"><button class="tc-btn tc-btn--ghost" type="button" data-storage-cancel>Cancel</button><button class="tc-btn tc-btn--primary" type="button" data-storage-trim${disabled(!plan || plan.warning || !plan.removableCount)}>Trim ${plan && plan.removableCount ? M.plural(plan.removableCount, 'version') : 'older versions'}</button></div>`;
-      const layer = Kit.open({ kind: 'center', panel: { class: 'tc-dialog tc-storage-review', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'storage-versions-title' }, focus: '[data-storage-cancel]', render: contents });
+        <div class="tc-dialog-foot"><button class="tc-btn tc-btn--ghost" type="button" data-storage-cancel>Cancel</button><button class="${cx('tc-btn', includePrevious ? 'tc-btn--danger-solid' : 'tc-btn--primary')}" type="button" data-storage-trim${disabled(!plan || plan.warning || !plan.removableCount)}>${includePrevious ? 'Remove' : 'Trim'} ${plan && plan.removableCount ? M.plural(plan.removableCount, 'version') : 'older versions'}</button></div>`;
+      const layer = Kit.open({ kind: 'center', panel: { class: 'tc-dialog tc-storage-review', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'storage-review-title' }, focus: '[data-storage-cancel]', render: contents });
+      const review = async () => {
+        const seq = ++request, mode = includePrevious;
+        plan = null; failure = null; layer.render();
+        const result = await api('/storage/versions' + (mode ? '?includePrevious=true' : ''));
+        if (layer.closed || seq !== request) return;
+        if (!result.ok || !result.data || result.data.ok === false || !Array.isArray(result.data.items)
+          || Boolean(result.data.includePrevious) !== mode) {
+          failure = result.error || result.data?.error || 'Older versions could not be checked. Try again.';
+        } else plan = result.data;
+        layer.render();
+      };
+      layer.panel.addEventListener('change', (event) => {
+        if (!event.target.matches('[data-storage-previous]')) return;
+        includePrevious = event.target.checked;
+        void review();
+      });
       layer.panel.addEventListener('keydown', (event) => { if (event.key === 'Enter' && event.target.closest('[data-storage-trim]')) event.preventDefault(); });
       layer.panel.addEventListener('click', async (event) => {
         if (event.target.closest('[data-storage-cancel]')) layer.close('cancel');
+        if (event.target.closest('[data-storage-retry]')) void review();
         if (event.target.closest('[data-storage-trim]') && plan && !plan.warning && plan.removableCount) {
-          layer.close('confirmed'); await run('/storage/versions/prune', { token: plan.token });
+          layer.close('confirmed'); await run('/storage/versions/prune', { token: plan.token, includePrevious });
         }
       });
-      const result = await api('/storage/versions');
-      if (layer.closed) return;
-      if (!result.ok || !result.data || result.data.ok === false || !Array.isArray(result.data.items)) {
-        failure = result.error || result.data && result.data.error || 'Older versions could not be checked. Try again.';
-      } else plan = result.data;
-      patch(layer.panel, contents());
+      await review();
     };
 
     // A section like every page's: its label, its card, and its own action.
@@ -183,7 +199,7 @@ const T3StorageUI = (() => {
           <div class="tc-storage-disk-head"><span class="tc-storage-number">${disk ? disk.available : '—'}</span><span class="tc-storage-of">${disk ? 'free of ' + disk.total : current.loading ? 'Measuring…' : 'Not measured yet'}</span>${disk && (disk.tone === 'warn' || disk.tone === 'danger') ? html`<span class="tc-badge tc-badge--${disk.tone}">${disk.usedPercent}% used</span>` : ''}</div>
           ${disk ? html`<div class="tc-progress tc-storage-meter" role="meter" aria-label="Disk used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${disk.usedPercent}" aria-valuetext="${disk.usedPercent}% used" style="--value:${disk.usedPercent}%;--storage-tone:var(--${disk.tone === 'danger' ? 'danger' : disk.tone === 'warn' ? 'warn' : 'info'})"><span></span></div>` : ''}
         </div>
-        ${current.progress || requesting ? html`<div class="tc-storage-operation" role="status"><span class="tc-spinner" aria-hidden="true"></span><span>${current.progress || 'Starting cleanup…'}</span><div class="tc-progress" data-indeterminate><span></span></div></div>` : ''}
+        ${current.progress || requesting || pending ? html`<div class="tc-storage-operation" role="status"><span class="tc-spinner" aria-hidden="true"></span><span>${current.progress || 'Starting cleanup…'}</span><div class="tc-progress" data-indeterminate><span></span></div></div>` : ''}
         ${statusError ? html`<div class="tc-storage-message" role="alert">${icon('triangle-alert')}<span>${statusError}</span></div>` : ''}
         <div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>The disk is shared with anything else on it; the sizes below are this container’s.</span></div></div>`, refresh)}
         ${part('storage-cache-title', 'Caches', html`<div class="tc-group">
@@ -196,7 +212,7 @@ const T3StorageUI = (() => {
         </div>`)}
         ${part('storage-versions-title', 'Older tool versions', html`<div class="tc-group"><div class="tc-list"><div class="tc-row tc-row--compact" data-key="storage-versions">
           <span class="tc-tile tc-tile--icon" aria-hidden="true">${icon('history')}</span>
-          <div class="tc-row-main"><span class="tc-row-name">${policy.retainManagedVersions ? 'Trimmed after each update' : 'Kept until you trim them'}</span><span class="tc-status"><span class="tc-status-text">${trimmedVersions && lastRun ? lastRun + '. ' : ''}Current, previous and required versions always stay.</span></span></div>
+          <div class="tc-row-main"><span class="tc-row-name">${policy.retainManagedVersions ? 'Trimmed after each update' : 'Kept until you trim them'}</span><span class="tc-status"><span class="tc-status-text">${trimmedVersions && lastRun ? lastRun + '. ' : ''}Current and required versions stay. Previous versions are kept unless you include them in a manual cleanup.</span></span></div>
           <div class="tc-row-actions"><button class="tc-btn tc-btn--sm" type="button" data-cmd="storage.versions" data-key="storage-review"${disabled(running)}>Review</button></div>
         </div></div></div>`)}
         ${part('storage-folders-title', 'Folders', html`<div class="tc-group">

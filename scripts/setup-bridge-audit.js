@@ -269,7 +269,9 @@ const run = async (base) => {
         rowShaped: ours.every((row) => {
           const icon = row.querySelector("svg").getBoundingClientRect();
           const text = row.querySelector("svg + span").getBoundingClientRect();
-          return icon.right <= text.left && icon.top < text.bottom && icon.bottom > text.top;
+          return Math.abs(icon.width - 16) < 1 && Math.abs(icon.height - 16) < 1
+            && icon.right <= text.left && icon.top < text.bottom && icon.bottom > text.top
+            && row.getBoundingClientRect().height <= 80;
         }),
         active: document.activeElement && document.activeElement.getAttribute("aria-activedescendant"),
         owns: dialog.hasAttribute("data-t3-setup-owns"),
@@ -349,6 +351,27 @@ const run = async (base) => {
     }
     found = await search("settings", { setupRows: false });
     expect(found && found.ours.length === 0, "\"settings\" is T3's alone", JSON.stringify(found));
+    // Different native result types expose different SVG classes, sometimes
+    // for a nested full-size illustration. The bridge must own its geometry
+    // after learning each of them, including across palette reopenings.
+    await search('setup');
+    for (const iconClass of ['text-yellow-500', 'w-full h-full', '']) {
+      await page.evaluate((iconClass) => {
+        const list = document.querySelector('[data-command-palette="true"] [data-slot="command-list"]');
+        const group = document.createElement('div');
+        group.dataset.slot = 'command-group'; group.dataset.auditPalette = '';
+        const row = document.createElement('div');
+        row.dataset.slot = 'command-item'; row.className = 'p-2';
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('class', iconClass); svg.setAttribute('viewBox', '0 0 24 24');
+        row.append(svg, document.createTextNode('Native result fixture')); group.append(row); list.append(group);
+        document.querySelector('[data-t3-setup-palette]')?.remove();
+      }, iconClass);
+      await page.locator('[data-t3-setup-item]').first().waitFor();
+      found = await rows();
+      expect(found.rowShaped, 'Setup icons stay 16px beside the text after learning ' + (iconClass || 'an unsized icon'), JSON.stringify(found));
+      await page.locator('[data-audit-palette]').evaluate((el) => el.remove());
+    }
     await closePalette();
 
     console.log("The console's own guard");

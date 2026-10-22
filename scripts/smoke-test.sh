@@ -436,6 +436,17 @@ assert s['storage']['policy']['retainManagedVersions'] is True, 'managed version
 }
 check "status carries what the console reads" status_has_console_fields
 
+# The destructive mode needs a reviewed, mode-specific token. These requests
+# stop at validation, so the smoke check never removes an installed version.
+storage_review_requires_consent() {
+  local code
+  code="$(docker exec "$NAME" sh -c 'curl -sS --max-time 25 -b /tmp/jar -o /dev/null -w "%{http_code}" -H "content-type: application/json" -d '\''{"includePrevious":true}'\'' http://127.0.0.1:3774/storage/versions/prune')" || return 1
+  [ "$code" = 400 ] || return 1
+  code="$(docker exec "$NAME" sh -c 'curl -sS --max-time 25 -b /tmp/jar -o /dev/null -w "%{http_code}" "http://127.0.0.1:3774/storage/versions?includePrevious=all"')" || return 1
+  [ "$code" = 400 ]
+}
+check "previous-version cleanup requires explicit reviewed consent" storage_review_requires_consent
+
 # Exercise the shipped picker lookup without a registry or an installation.
 release_pickers_refresh() {
   docker exec -i "$NAME" node --input-type=module <<'JS'

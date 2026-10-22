@@ -62,6 +62,29 @@ test("storage API authenticates, validates, acknowledges durable jobs, and prese
   assert.equal((await request("/storage/clean", { ids: ["go"] }, { "sec-fetch-site": "cross-site" })).status, 403);
   for (const [route, body] of [["/storage/clean", { ids: ["go"], path: workspace }], ["/storage/clean", { ids: ["../../source"] }], ["/storage/clean", []], ["/storage/policy", { automatic: "true" }], ["/storage/policy", { ignored: true }], ["/storage/versions/prune", {}]]) assert.equal((await request(route, body)).status, 400);
   assert.equal((await request("/storage/versions/prune", { token: "a".repeat(64) })).status, 409);
+  for (const includePrevious of ["true", 1, null, {}]) {
+    assert.equal((await request("/storage/versions/prune", { token: "a".repeat(64), includePrevious })).status, 400);
+  }
+  for (const query of ['includePrevious=1', 'includePrevious=true&includePrevious=false', 'path=/workspace']) {
+    assert.equal((await request('/storage/versions?' + query)).status, 400);
+  }
+  const safe = await (await request('/storage/versions')).json();
+  const all = await (await request('/storage/versions?includePrevious=true')).json();
+  assert.equal(safe.includePrevious, false); assert.equal(all.includePrevious, true);
+  assert.notEqual(safe.token, all.token);
+  assert.equal((await request('/storage/versions/prune', { token: safe.token, includePrevious: true })).status, 409);
+  const pruning = await request('/storage/versions/prune', { token: all.token, includePrevious: true });
+  assert.equal(pruning.status, 202);
+  const reviewedJob = (await pruning.json()).operation;
+  assert.equal(reviewedJob.includePrevious, true);
+  for (let i=0;i<100;i++) {
+    const state = await (await request('/storage')).json();
+    if (state.operation?.state === 'succeeded') break;
+    await pause(10);
+  }
+  const trimmed = await (await request('/storage')).json();
+  assert.equal(trimmed.operation.id, reviewedJob.id); assert.equal(trimmed.operation.state,'succeeded');
+  assert.equal(trimmed.policy.retainManagedVersions,true,'manual mode does not change automatic retention');
   assert.equal((await request("/proxy/__setup/storage")).status, 200);
   assert.equal((await request("/storage/refresh", {})).status, 202);
   const accepted = await request("/storage/clean", { ids: ["go"] });

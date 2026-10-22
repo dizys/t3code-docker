@@ -2260,7 +2260,7 @@ const autoTick = async () => {
 
 const storageHttpStatus = (result) => result.ok ? 200
   : ["busy", "stale-preview"].includes(result.code) ? 409
-    : ["invalid-cache", "invalid-policy"].includes(result.code) ? 400 : 503;
+    : ["invalid-cache", "invalid-policy", "invalid-options"].includes(result.code) ? 400 : 503;
 
 /** Acknowledges durable operation state before a scan/native cleanup finishes. */
 const startStorageWork = async (storage, kind, input) => {
@@ -2268,7 +2268,7 @@ const startStorageWork = async (storage, kind, input) => {
   const started = new Promise((resolve) => { acknowledge = resolve; });
   const options = { onStarted: (operation) => acknowledge({ http: 202, body: { ok: true, operation } }) };
   const done = Promise.resolve().then(() => kind === "versions"
-    ? storage.trimVersions({ ...options, token: input.token }) : storage.clean(input.ids, options))
+    ? storage.trimVersions({ ...options, token: input.token, includePrevious: input.includePrevious }) : storage.clean(input.ids, options))
     .then((result) => {
       if (result.ok) recordEvent(kind === "versions" ? "storage.trimmed" : "storage.cleaned",
         kind === "versions" ? "Trimmed older tool versions" : "Cleared build and download caches");
@@ -2485,7 +2485,14 @@ const server = createServer(async (req, res) => {
     if (route.startsWith("/storage")) {
       const storage = await loadStorage();
       if (req.method === "GET" && route === "/storage") return sendJson(res, 200, await storage.status());
-      if (req.method === "GET" && route === "/storage/versions") return sendJson(res, 200, await storage.previewVersions());
+      if (req.method === "GET" && route === "/storage/versions") {
+        const params = new URL(req.url, "http://localhost").searchParams;
+        if ([...params.keys()].some((key) => key !== "includePrevious") || params.getAll("includePrevious").length > 1
+          || (params.has("includePrevious") && !["true", "false"].includes(params.get("includePrevious")))) {
+          return sendJson(res, 400, { ok: false, error: "Choose a valid version cleanup mode." });
+        }
+        return sendJson(res, 200, await storage.previewVersions({ includePrevious: params.get("includePrevious") === "true" }));
+      }
       if (req.method === "POST" && route === "/storage/refresh") {
         void storage.refresh();
         return sendJson(res, 202, { ok: true, storage: storage.snapshot() });
@@ -2499,8 +2506,11 @@ const server = createServer(async (req, res) => {
           const result = await storage.setPolicy(input);
           return sendJson(res, storageHttpStatus(result), result);
         }
-        const allowed = route === "/storage/clean" ? ["ids"] : ["token"];
+        const allowed = route === "/storage/clean" ? ["ids"] : ["token", "includePrevious"];
         if (Object.keys(input).some((key) => !allowed.includes(key))) return sendJson(res, 400, { ok: false, error: "Unknown storage request field." });
+        if (route === "/storage/versions/prune" && input.includePrevious !== undefined && typeof input.includePrevious !== "boolean") {
+          return sendJson(res, 400, { ok: false, error: "Choose a valid version cleanup mode." });
+        }
         if (route === "/storage/versions/prune" && !/^[a-f0-9]{64}$/.test(String(input.token || ""))) {
           return sendJson(res, 400, { ok: false, error: "Review older versions before trimming them." });
         }

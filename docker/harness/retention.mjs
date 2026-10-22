@@ -1,6 +1,7 @@
 // Conservative pruning of installs owned by this manager. Never run a blanket
 // mise prune: tracked project requirements, T3 provider paths, live processes,
-// current selection, and the previous selection all veto removal.
+// current selection all veto removal. The previous selection is kept unless
+// a manual review explicitly includes it; automatic retention never does.
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { getHarness, getManagedTool, harnessInstallationForVersion } from "./catalogue.mjs";
@@ -59,14 +60,15 @@ async function ordinaryInstall(ctx, target) {
   } catch { return false; }
 }
 
-export async function planRetention(ctx, { saved, only } = {}) {
+export async function planRetention(ctx, { saved, only, includePrevious = false } = {}) {
+  if (typeof includePrevious !== "boolean") throw new TypeError("includePrevious must be a boolean");
   saved ||= await state.readState(ctx);
   const preferences = await readPolicy(policyPath(ctx.env, ctx.home), ctx.fs);
   const records = only ? [only] : recordsOf(saved);
   const needsReferences = records.some(({ record }) => {
     const versions = versionsOf(record);
     const previous = record.previousVersion || versions.filter((version) => version !== record.version).at(-1);
-    return versions.some((version) => version !== record.version && version !== previous);
+    return versions.some((version) => version !== record.version && (includePrevious || version !== previous));
   });
   let refs = null, warning = preferences.error;
   if (needsReferences && !warning) {
@@ -83,7 +85,7 @@ export async function planRetention(ctx, { saved, only } = {}) {
       const tool = installation.miseTool;
       const candidate = refs?.prunable?.[tool]?.find((item) => item.version === version && item.installed);
       const target = candidate?.install_path || null;
-      let reason = version === record.version ? "Current version" : version === previous ? "Previous version" : null;
+      let reason = version === record.version ? "Current version" : !includePrevious && version === previous ? "Previous version" : null;
       if (!reason && warning) reason = "Could not verify references";
       if (!reason && !candidate) reason = "Required by a project or tool selection";
       if (!reason && refs.providers.some((binary) => inside(target, binary))) reason = "Selected by a provider";
@@ -95,8 +97,11 @@ export async function planRetention(ctx, { saved, only } = {}) {
       items.push({ id, section, name: entry.name || id, tool, version, path: target, eligible: !reason, reason });
     }
   }
-  const token = createHash("sha256").update(JSON.stringify(items.filter((item) => item.eligible).map(({ section, id, version, tool }) => [section, id, version, tool]))).digest("hex");
-  return { enabled: preferences.policy.retainManagedVersions, items, warning, token,
+  // Bind consent to the cleanup mode as well as the exact removable set.
+  const token = createHash("sha256").update(JSON.stringify({ includePrevious,
+    items: items.filter((item) => item.eligible).map(({ section, id, version, tool }) => [section, id, version, tool]),
+  })).digest("hex");
+  return { enabled: preferences.policy.retainManagedVersions, includePrevious, items, warning, token,
     removableCount: items.filter((item) => item.eligible).length, retainedCount: items.filter((item) => !item.eligible).length };
 }
 
@@ -107,7 +112,7 @@ export async function applyRetention(ctx, plan, { signal, onProgress } = {}) {
   for (const item of plan.items.filter((candidate) => candidate.eligible)) {
     if (signal?.aborted) break;
     // References and symlink checks are repeated immediately before removal.
-    const current = await planRetention(ctx);
+    const current = await planRetention(ctx, { includePrevious: plan.includePrevious ?? false });
     if (!current.items.some((candidate) => candidate.section === item.section && candidate.id === item.id && candidate.version === item.version && candidate.eligible)) continue;
     try {
       onProgress?.({ phase: "retaining", tool: item.name, version: item.version });
@@ -116,6 +121,7 @@ export async function applyRetention(ctx, plan, { signal, onProgress } = {}) {
       const record = saved[item.section]?.[item.id];
       if (record) await state.updateEntry(ctx, item.section, item.id, {
         managedVersions: versionsOf(record).filter((version) => version !== item.version),
+        ...(record.previousVersion === item.version ? { previousVersion: null } : {}),
       });
       removed.push(item);
     } catch { failed.push(item); }

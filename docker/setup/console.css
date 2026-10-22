@@ -198,6 +198,10 @@ html.tc-locked { overflow: hidden; }
 .tc-storage-path { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 16px; color: var(--fg-muted); }
 .tc-storage-data-note { padding: 12px 0; border-top: 1px solid var(--hairline); }
 .tc-storage-settings, .tc-storage-review { width: 480px; max-width: calc(100vw - 32px); }
+.tc-layer.tc-layer--center > .tc-storage-review { display: flex; flex-direction: column; overflow: hidden; }
+.tc-storage-review > .tc-dialog-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.tc-storage-review > .tc-dialog-foot { flex: none; }
+.tc-storage-review::before { flex: none; }
 .tc-storage-setting { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-4); align-items: center; margin-top: var(--space-5); }
 .tc-storage-setting > div { display: grid; gap: 5px; }
 .tc-storage-setting--border { padding-top: var(--space-4); border-top: 1px solid var(--hairline); }
@@ -211,7 +215,14 @@ html.tc-locked { overflow: hidden; }
 .tc-storage-review-loading { display: flex; align-items: center; gap: 8px; margin-top: var(--space-4); font-size: 13px; color: var(--fg-muted); }
 .tc-storage-review-summary { display: grid; gap: 3px; margin: var(--space-4) 0; }
 .tc-storage-review-summary > strong { font-weight: 500; }
-.tc-storage-version-list { max-height: 300px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.tc-storage-previous { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3); margin-top: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; }
+.tc-storage-previous > span { min-width: 0; display: grid; gap: var(--space-1); }
+.tc-storage-previous .tc-hint { margin: 0; }
+.tc-storage-previous[data-danger] { border-color: var(--danger); background: var(--danger-soft); }
+.tc-storage-previous[data-danger] .tc-row-name { color: var(--danger-text); }
+.tc-storage-previous[data-danger] .tc-checkbox { accent-color: var(--danger); }
+.tc-storage-review-error { display: grid; gap: var(--space-3); justify-items: start; margin-top: var(--space-4); }
+.tc-storage-version-list { border: 1px solid var(--border); border-radius: var(--radius-md); }
 .tc-storage-version { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: center; padding: 10px 12px; }
 .tc-storage-version + .tc-storage-version { border-top: 1px solid var(--hairline); }
 .tc-storage-version > div { min-width: 0; display: grid; gap: 2px; }
@@ -472,6 +483,9 @@ html.tc-locked { overflow: hidden; }
    a short bottom sheet using the same form and focus behaviour. */
 .tc-device-row .tc-row-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tc-device-rename-body { gap: var(--space-4); padding-bottom: var(--space-4); }
+.tc-access-row[aria-busy="true"] > .tc-tile { opacity: var(--opacity-disabled); }
+.tc-access-row[aria-busy="true"] .tc-row-name { color: var(--fg-muted); }
+.tc-access-pending { color: var(--fg); }
 .tc-device-rename-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 .tc-device-rename-head > div { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
 .tc-device-rename-head > .tc-btn { flex: none; margin: -4px 0 0; }

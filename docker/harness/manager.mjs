@@ -1431,13 +1431,15 @@ export function createHarnessManager(options = {}) {
 
   return {
     retention: {
-      preview: () => planRetention(ctx),
-      async prune({ onStarted, onProgress, beforeRemove, token, signal, dryRun = false } = {}) {
-        if (dryRun) return { ok: true, dryRun: true, ...(await planRetention(ctx)) };
+      preview: (options) => planRetention(ctx, options),
+      async prune({ onStarted, onProgress, beforeRemove, token, signal, dryRun = false, includePrevious = false } = {}) {
+        if (typeof includePrevious !== "boolean") return { ok: false, code: "invalid-options", error: "Choose a valid version cleanup mode." };
+        if (includePrevious && token === undefined && !dryRun) return { ok: false, code: "stale-preview", error: "Review previous versions before removing them." };
+        if (dryRun) return { ok: true, dryRun: true, ...(await planRetention(ctx, { includePrevious })) };
         const held = await lock.acquireLock(ctx, { id: "storage", operation: "retain" });
         if (!held.acquired) return { ok: false, code: "busy", error: "An installation or cleanup is running. Try again when it finishes." };
         try {
-          const plan = await planRetention(ctx);
+          const plan = await planRetention(ctx, { includePrevious });
           if (plan.warning) return { ok: false, code: "unavailable", error: plan.warning };
           if (token !== undefined && token !== plan.token) return { ok: false, code: "stale-preview", error: "Tool versions changed since this review. Review older versions again before trimming." };
           await beforeRemove?.();

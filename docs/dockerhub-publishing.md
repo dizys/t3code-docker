@@ -36,6 +36,40 @@ before publishing the GitHub release, matching our existing release process.
 A missing token produces an actionable failure in the separate workflow; it
 never prevents GHCR builds or promotion.
 
+## Repository Overview
+
+The same workflow synchronizes Docker Hub's short description and Overview
+from the current `main` README. Overview publishing runs independently of image
+copying on releases, README/media/sync-code changes, and daily at 06:23 UTC.
+The daily run repairs missing or edited content. Unchanged content is verified
+without authenticating or submitting another update.
+
+Relative guide links and image URLs point to the README's exact GitHub commit;
+GitHub note markers become portable blockquotes. Run commands, Compose examples
+and inline code stay unchanged. The sync rejects
+empty content and Docker Hub's size limits instead of truncating instructions.
+It uses the existing `DOCKERHUB_TOKEN` secret through Docker Hub's short-lived
+metadata token API. Credentials are never passed to public verification reads
+or included in artifacts. An authorization error identifies the secret and
+repository permissions to check.
+
+Successful publication requires an anonymous read-back matching the complete
+Overview and short description. Transient failures have bounded retries;
+missing, private or unexpected repositories fail before any write. A failed
+Overview job is visible in Actions and does not prevent the independent image
+copy job. Its artifact contains the rendered Markdown, source commit, content
+hash and public verification result.
+
+To backfill or repair the Overview without copying images or changing tags:
+
+```bash
+gh workflow run dockerhub.yml -R dizys/t3code-docker \
+  --ref main -f overview_only=true
+```
+
+Add `-f dry_run=true` to compare without publishing. Manual Overview runs only
+execute reviewed code from `main`; they do not run on feature branches.
+
 ## What gets copied
 
 For each release the publisher downloads only these attached evidence files:
@@ -97,6 +131,21 @@ With `gh` and `regctl` on PATH:
 node scripts/publish-dockerhub.mjs v0.18.0 --dry-run
 node --test tests/dockerhub-release.test.mjs
 ```
+
+Overview generation and public checks need only Node and Git, with no registry
+copy tool or credentials:
+
+```bash
+DOCKERHUB_OVERVIEW_OUTPUT=/tmp/dockerhub-overview.md \
+  node scripts/sync-dockerhub-overview.mjs --dry-run
+node scripts/sync-dockerhub-overview.mjs --check
+node --test tests/dockerhub-overview.test.mjs
+```
+
+`--check` fails if the public Overview is missing or differs from the current
+checkout's README and source commit. It never writes to Docker Hub. Inspect the
+rendered Markdown before enabling a new publisher; after publication, check
+the live Overview, including its banner, screenshots, quick start and guides.
 
 The publisher always uses code from `main` in CI, never executes code from the
 selected release tag, and passes tag values as process arguments rather than

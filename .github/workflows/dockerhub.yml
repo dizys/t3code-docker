@@ -1,16 +1,31 @@
 name: publish Docker Hub
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - README.md
+      - docs/media/**
+      - scripts/sync-dockerhub-overview.mjs
+      - scripts/lib/dockerhub-overview.mjs
+      - .github/workflows/dockerhub.yml
   release:
     types: [published]
+  # Repair a missing or edited Overview even when no release is being made.
+  schedule:
+    - cron: '23 6 * * *'
   workflow_dispatch:
     inputs:
       tag:
-        description: Published release to copy (for example v0.18.0)
-        required: true
+        description: Published release to copy (not needed for Overview only)
+        required: false
         type: string
+      overview_only:
+        description: Sync the Overview without copying images or changing tags
+        default: false
+        type: boolean
       dry_run:
-        description: Validate evidence and source indexes without publishing
+        description: Compare and validate without publishing
         default: false
         type: boolean
 
@@ -25,7 +40,7 @@ concurrency:
 
 jobs:
   publish:
-    if: github.repository == 'dizys/t3code-docker'
+    if: github.repository == 'dizys/t3code-docker' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !inputs.overview_only))
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -40,6 +55,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Validate the release selection
+        run: node --input-type=module -e "import { releaseVersion } from './scripts/lib/dockerhub-release.mjs'; releaseVersion(process.env.RELEASE_TAG || '');"
       - name: Check publishing credentials
         if: env.DRY_RUN != 'true'
         env:
@@ -75,4 +92,40 @@ jobs:
           name: dockerhub-verification-${{ github.run_id }}-${{ github.run_attempt }}
           path: dockerhub-verification.json
           if-no-files-found: error
+          retention-days: 90
+
+  # Independent of image copying: README changes and the daily repair must not
+  # require a new image release. Manual runs also use reviewed main code only.
+  overview:
+    if: github.repository == 'dizys/t3code-docker' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DOCKERHUB_OVERVIEW_OUTPUT: dockerhub-overview.md
+      DOCKERHUB_OVERVIEW_EVIDENCE: dockerhub-overview-verification.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Prepare and compare the Overview without credentials
+        run: node scripts/sync-dockerhub-overview.mjs --dry-run
+      - name: Sync and verify the public Overview
+        if: inputs.dry_run != true
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || 'dizys' }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: node scripts/sync-dockerhub-overview.mjs
+      - name: Save Overview and verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dockerhub-overview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dockerhub-overview.md
+            dockerhub-overview-verification.json
+          if-no-files-found: warn
           retention-days: 90

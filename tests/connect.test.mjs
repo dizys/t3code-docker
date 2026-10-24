@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { connectState, jsonFrom, parseLinkOutput } from "../docker/setup/connect.mjs";
+import { connectState, createConnectPreferences, jsonFrom, parseLinkOutput } from "../docker/setup/connect.mjs";
 
 const PROMPT = [
   "T3 Connect",
@@ -81,4 +81,57 @@ test("the JSON is found after any lines the CLI prints first", () => {
   assert.equal(jsonFrom("no json here"), null);
   assert.equal(jsonFrom("{ broken"), null);
   assert.equal(jsonFrom(undefined), null);
+});
+
+test("native preference updates preserve activity publishing when changing webhook holding", async () => {
+  const state = { linked: true, managedTunnelActive: true, publishAgentActivity: true, holdWebhooksWhileOffline: false };
+  const writes = [];
+  const prefs = createConnectPreferences({ request: async (path, input) => {
+    if (input) { assert.equal(path, "/api/connect/preferences"); writes.push(input); Object.assign(state, input); }
+    else assert.equal(path, "/api/connect/link-state");
+    return { ...state };
+  } });
+  assert.equal((await prefs.save({ holdWebhooksWhileOffline: true })).http, 200);
+  assert.deepEqual(writes[0], { publishAgentActivity: true, holdWebhooksWhileOffline: true });
+  assert.equal((await prefs.save({ publishAgentActivity: false })).body.preferences.holdWebhooksWhileOffline, true);
+  assert.deepEqual(writes[1], { publishAgentActivity: false }, "omitting webhook holding preserves it on T3");
+});
+
+test("notification-only links can publish; offline holding needs a tunnel and version support", async () => {
+  const state = { linked: true, managedTunnelActive: false, publishAgentActivity: false };
+  let writes = 0;
+  const prefs = createConnectPreferences({ request: async (_path, input) => { if (input) writes++; return state; } });
+  assert.equal((await prefs.read()).holdWebhooksWhileOffline, null);
+  assert.equal((await prefs.save({ holdWebhooksWhileOffline: true })).http, 409);
+  assert.equal(writes, 0);
+  assert.equal((await prefs.save({ publishAgentActivity: true })).http, 200);
+  state.linked = false;
+  assert.equal((await prefs.save({ publishAgentActivity: true })).http, 409);
+  assert.equal(writes, 1);
+});
+
+test("malformed preferences cannot reach T3 and a failed save remains retryable", async () => {
+  let calls = 0, fail = true;
+  const prefs = createConnectPreferences({ request: async (_path, input) => {
+    calls++;
+    if (input && fail) throw new Error("T3 Code is unavailable");
+    return { linked: true, publishAgentActivity: false };
+  } });
+  for (const input of [null, [], {}, { publishAgentActivity: "true" }, { other: true }, { publishAgentActivity: true, holdWebhooksWhileOffline: true }]) {
+    assert.equal((await prefs.save(input)).http, 400);
+  }
+  assert.equal(calls, 0);
+  assert.equal((await prefs.save({ publishAgentActivity: true })).http, 502);
+  fail = false;
+  assert.equal((await prefs.save({ publishAgentActivity: true })).http, 200);
+});
+
+test("overlapping connection writes cannot overwrite each other", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const prefs = createConnectPreferences({ request: async () => { await gate; return { linked: true, publishAgentActivity: true }; } });
+  const first = prefs.save({ publishAgentActivity: false });
+  assert.equal((await prefs.save({ publishAgentActivity: true })).http, 409);
+  release();
+  assert.equal((await first).http, 200);
 });

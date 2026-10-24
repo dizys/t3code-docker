@@ -63,6 +63,8 @@ export async function detectAuth(ctx, entry, { executable, runnable, version = n
       const text = result.combined;
       if (/not logged in/i.test(text)) return false;
       if (/logged in/i.test(text)) return true;
+      // Codex 0.164.0 calls a saved API key "configured"; validation waits for a request.
+      if (!result.error && result.code === 0 && /^API key configured - /im.test(text)) return true;
       return null;
     }
     case "opencode": {

@@ -10,8 +10,8 @@
 //   t3 connect status --json     what is saved
 //   t3 connect unlink            off again, keeping the sign-in
 //
-// This module reads what those print. The setup service runs them and keeps
-// the processes; nothing here has effects.
+// The setup service runs those processes. This module parses their output
+// and reads or saves live preferences through T3 Code's native server API.
 
 /**
  * What `t3 connect link --headless` has printed so far:
@@ -94,4 +94,44 @@ export function jsonFrom(stdout) {
   } catch {
     return null;
   }
+}
+
+/** Read and update native preferences without overwriting the other switch. */
+export function createConnectPreferences({ request }) {
+  let saving = false;
+  const read = async () => {
+    const state = await request("/api/connect/link-state");
+    if (typeof state?.publishAgentActivity !== "boolean" || typeof state?.linked !== "boolean") {
+      throw new Error("This T3 Code version does not expose connection settings. Update T3 Code and try again.");
+    }
+    return {
+      linked: state.linked,
+      managedTunnelActive: state.managedTunnelActive === true,
+      publishAgentActivity: state.publishAgentActivity,
+      holdWebhooksWhileOffline: typeof state.holdWebhooksWhileOffline === "boolean" ? state.holdWebhooksWhileOffline : null,
+    };
+  };
+  const save = async (input) => {
+    const fields = ["publishAgentActivity", "holdWebhooksWhileOffline"];
+    if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 1
+      || !fields.some((key) => Object.hasOwn(input, key) && typeof input[key] === "boolean")) {
+      return { http: 400, body: { ok: false, error: "Choose one connection setting and an on or off value." } };
+    }
+    if (saving) return { http: 409, body: { ok: false, error: "Wait for the connection setting to finish saving." } };
+    saving = true;
+    try {
+      const current = await read();
+      if (!current.linked) return { http: 409, body: { ok: false, error: "Set up T3 Connect before changing activity publishing." } };
+      if (Object.hasOwn(input, "holdWebhooksWhileOffline") && (!current.managedTunnelActive || current.holdWebhooksWhileOffline === null)) {
+        return { http: 409, body: { ok: false, error: "Webhook holding needs an active T3 Connect tunnel and a supported T3 Code version." } };
+      }
+      await request("/api/connect/preferences", { publishAgentActivity: current.publishAgentActivity, ...input });
+      return { http: 200, body: { ok: true, preferences: await read() } };
+    } catch (error) {
+      return { http: 502, body: { ok: false, error: String(error?.message || "Could not save connection settings.").slice(0, 300) } };
+    } finally {
+      saving = false;
+    }
+  };
+  return { read, save };
 }

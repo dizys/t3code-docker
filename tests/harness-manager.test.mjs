@@ -446,6 +446,26 @@ test("Muse treats saved credentials as unverified and ignores inherited API keys
   assert.equal(await detectAuth(ctx, entry, facts), null, "an unreadable file is unknown");
 });
 
+test("Codex recognizes legacy login and 0.164.0 configured-key status", async () => {
+  const entry = getHarness("codex");
+  const facts = { executable: "/mise/codex", runnable: true };
+  for (const [stderr, code, expected] of [
+    ["Logged in using an API key - sk-test...key\n", 0, true],
+    ["API key configured - sk-test...key\nAuthentication is checked when you send a request.\n", 0, true],
+    ["Logged in using ChatGPT\n", 0, true],
+    ["Not logged in\n", 1, false],
+    ["Error checking login status: unavailable\n", 1, null],
+    ["API key configured - sk-test...key\n", 1, null],
+    ["Unexpected status\n", 0, null],
+  ]) {
+    const ctx = { home: HOME, env: {}, timeouts: { probe: 5000 }, run: async (argv) => {
+      assert.deepEqual(argv, [facts.executable, "login", "status"]);
+      return { code, stdout: "", stderr, error: null };
+    } };
+    assert.equal(await detectAuth(ctx, entry, facts), expected, stderr);
+  }
+});
+
 test("OpenCode reads 1.x from auth.json and 2.x from auth list", async () => {
   const fs = new MemoryFs();
   const entry = getHarness("opencode");

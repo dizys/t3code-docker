@@ -1037,6 +1037,7 @@
         <div class="tc-row-actions tc-row-actions--wrap">${action}${!url && here && !here.local ? html`<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" aria-label="More for the public URL" aria-haspopup="menu" aria-expanded="${String(Kit.menuOpenFor('menu-url'))}" data-cmd="url.menu" data-key="menu-url">${icon('ellipsis')}</button>` : ''}</div>
       </div>
       ${connectRow(s)}
+      ${connectPreferenceRows(s)}
     </div></div>`;
   };
 
@@ -1085,6 +1086,47 @@
       <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name">T3 Connect</span>${badge(view.badge)}</div><span class="tc-status tc-status--prose">${view.text}</span></div>
       <div class="tc-row-actions tc-row-actions--wrap">${view.action ? html`<button class="tc-btn tc-btn--sm" type="button" data-cmd="${view.action.cmd}">${view.action.icon ? icon(view.action.icon) : ''}${view.action.label}</button>` : ''}${menu.length ? html`<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" aria-label="More for T3 Connect" aria-haspopup="menu" aria-expanded="${String(Kit.menuOpenFor('menu-connect'))}" data-cmd="connect.menu" data-key="menu-connect">${icon('ellipsis')}</button>` : ''}</div>
     </div>`;
+  };
+
+  let connectSaving = false;
+  let connectPreferenceError = null;
+  const connectPreferenceRows = (s) => {
+    const prefs = s.connect?.preferences;
+    const reason = !s.connect ? 'Connection settings are unavailable. Try again after T3 Code is ready.'
+      : !s.connect.linked ? 'Set up T3 Connect above to link this server to your T3 account.'
+        : !prefs ? 'Could not read connection settings. Check that T3 Code is running and up to date.' : null;
+    return html`${[
+      ['publishAgentActivity', 'Publish agent activity', 'smartphone', 'Send agent activity to mobile notifications and Live Activities. Sign in to the same T3 account in the mobile app and allow notifications.'],
+      ['holdWebhooksWhileOffline', 'Hold webhooks while offline', 'clock', 'T3 Connect stores webhook requests for up to 24 hours while this server is offline, then delivers them. Turning this off still delivers requests already held.'],
+    ].map(([key, label, glyph, help]) => {
+      const unavailable = reason || (key === 'holdWebhooksWhileOffline'
+        ? prefs.holdWebhooksWhileOffline === null ? 'Update T3 Code to manage offline webhook holding.'
+          : !prefs.managedTunnelActive ? 'Requires an active T3 Connect tunnel.' : null : null);
+      return html`<div class="tc-row tc-row--compact" data-key="connect-${key}">
+        <span class="tc-tile tc-tile--icon" aria-hidden="true">${icon(glyph)}</span>
+        <div class="tc-row-main"><span class="tc-row-name" id="connect-${key}-name">${label}</span><span class="tc-status tc-status--prose" id="connect-${key}-desc">${unavailable || help}</span></div>
+        <div class="tc-row-actions"><label class="tc-switch-hit" for="connect-toggle-${key}"><button class="tc-switch" id="connect-toggle-${key}" type="button" role="switch" aria-checked="${String(prefs?.[key] === true)}" aria-labelledby="connect-${key}-name" aria-describedby="connect-${key}-desc" data-cmd="connect.preference" data-id="${key}" data-key="connect-toggle-${key}"${unavailable || connectSaving ? raw(' disabled') : ''}${connectSaving ? raw(' aria-busy="true"') : ''}></button></label></div>
+      </div>`;
+    })}${connectPreferenceError ? html`<div class="tc-row tc-row--compact" role="alert"><span class="tc-status tc-danger">${connectPreferenceError}</span></div>` : ''}`;
+  };
+
+  const saveConnectPreference = async (key) => {
+    const prefs = state.status?.connect?.preferences;
+    if (connectSaving || !prefs || !['publishAgentActivity', 'holdWebhooksWhileOffline'].includes(key)) return;
+    const enabled = !prefs[key];
+    connectSaving = true;
+    connectPreferenceError = null;
+    render();
+    const res = await api('/connect/preferences', { body: { [key]: enabled } });
+    await loadStatus();
+    connectSaving = false;
+    if (!res.ok) connectPreferenceError = res.error || 'Could not save the setting. Try again.';
+    else {
+      if (state.status?.connect) state.status.connect.preferences = res.data.preferences;
+      Kit.announce((key === 'publishAgentActivity' ? 'Agent activity publishing' : 'Offline webhook holding') + (enabled ? ' on' : ' off'));
+    }
+    render();
+    document.querySelector('[data-key="connect-toggle-' + key + '"]')?.focus({ preventScroll: true });
   };
 
   // --------------------------------------------------------------- agents --
@@ -3649,6 +3691,7 @@
     'url.edit': (a, el) => openUrlSheet(el),
 
     'connect.setup': (a, el) => openConnect(el),
+    'connect.preference': (a) => saveConnectPreference(a.id),
     'connect.restart': (a, el) => openConnect(el, { restart: true }),
     'connect.off': async () => {
       const ok = await Kit.confirm({

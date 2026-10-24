@@ -1076,7 +1076,9 @@ const T3Model = (() => {
       return {
         state: 'on',
         badge: { tone: 'ok', text: 'On' },
-        text: 'Devices signed in to your T3 account reach this server through ' + (c.relayHost || 'T3’s relay') + '.',
+        text: c.preferences?.linked && !c.preferences.managedTunnelActive
+          ? 'Linked to your T3 account for agent activity. Devices reach this server through your own address.'
+          : 'Devices signed in to your T3 account reach this server through ' + (c.relayHost || 'T3’s relay') + '.',
         action: null,
         // Turning it off cuts devices off: a menu item and a confirmation away.
         menu: [{ cmd: 'connect.off', label: 'Turn off T3 Connect…', icon: 'log-out', danger: true }],

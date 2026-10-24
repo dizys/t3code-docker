@@ -15,6 +15,38 @@ import { createT3Api, failureOf } from "../docker/setup/t3-api.mjs";
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const settle = async (n = 6) => { for (let i = 0; i < n; i += 1) await tick(); };
 
+test("native HTTP requests authenticate, refresh a refused session, and share the cached credential", async () => {
+  let issued = 0;
+  const requests = [];
+  const api = createT3Api({ url: "ws://127.0.0.1:3773/ws?orchestrationProtocol=1",
+    issueSession: async () => ({ token: `token-${++issued}`, sessionId: `session-${issued}`, expiresAt: new Date(Date.now() + 4 * 60 * 60_000).toISOString() }),
+    fetchImpl: async (url, options) => {
+      requests.push({ url, ...options });
+      return options.headers.authorization === "Bearer token-1" ? new Response(null, { status: 401 }) : Response.json({ linked: true });
+    },
+  });
+  assert.deepEqual(await api.http("/api/connect/link-state"), { linked: true });
+  await api.http("/api/connect/preferences", { publishAgentActivity: true });
+  assert.equal(issued, 2);
+  assert.equal(requests[2].url, "http://127.0.0.1:3773/api/connect/preferences");
+  assert.equal(requests[2].method, "POST");
+  assert.deepEqual(JSON.parse(requests[2].body), { publishAgentActivity: true });
+  assert.equal(requests[2].redirect, "error");
+  api.reset();
+  await api.http("/api/connect/link-state");
+  assert.equal(issued, 3);
+});
+
+test("native HTTP errors stay errors without exposing upstream response bodies", async () => {
+  let calls = 0;
+  const api = createT3Api({ url: "ws://127.0.0.1/ws",
+    issueSession: async () => ({ token: "private-token" }),
+    fetchImpl: async () => { calls++; return new Response("private upstream details", { status: 403 }); },
+  });
+  await assert.rejects(api.http("/api/connect/preferences", { publishAgentActivity: true }), /HTTP 403/);
+  assert.equal(calls, 1, "permission errors must not replay a mutation");
+});
+
 /** A T3 with one Antigravity provider, an installer and a Google sign-in. */
 function fakeT3({ tokens = new Set(["good"]), protocolVersion = 1, settingsFormat = "legacy" } = {}) {
   const t3 = {

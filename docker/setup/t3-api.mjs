@@ -312,6 +312,28 @@ export function createT3Api({
     settleAll(new T3ApiError("The console closed its connection to T3 Code"));
   };
 
+  /** Native HTTP endpoints, using the same console session as RPC. */
+  const http = async (path, body) => {
+    const target = new URL(url);
+    target.protocol = target.protocol === "wss:" ? "https:" : "http:";
+    target.pathname = path;
+    target.search = "";
+    target.hash = "";
+    for (const fresh of [false, true]) {
+      const { token } = await ensureSession(fresh);
+      const response = await fetchImpl(target.toString(), {
+        method: body === undefined ? "GET" : "POST",
+        headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(callTimeoutMs),
+        redirect: "error",
+      });
+      if (response.status === 401 && !fresh) continue;
+      if (!response.ok) throw new T3ApiError(`T3 Code could not ${body === undefined ? "read" : "save"} connection settings (HTTP ${response.status}).`);
+      return response.json();
+    }
+  };
+
   const reset = () => { sessionGeneration += 1; protocolVersion = null; protocolDiscovery = null; close(); session = null; };
-  return { call, subscribe, first, close, reset, sessionId: () => session?.sessionId ?? null };
+  return { call, http, subscribe, first, close, reset, sessionId: () => session?.sessionId ?? null };
 }

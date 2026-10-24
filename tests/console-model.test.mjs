@@ -523,6 +523,7 @@ test("T3 Connect reads as one state with at most one next step", () => {
   assert.equal(on.action, null, "on, nothing is owed: turning it off is in its menu");
   assert.deepEqual(on.menu.map((m) => m.cmd), ["connect.off"]);
   assert.equal(on.menu[0].danger, true);
+  assert.match(view(saved({ state: "on", preferences: { linked: true, managedTunnelActive: false } })).text, /through your own address/);
 
   assert.equal(view(saved({ state: "signin", desired: true })).action.cmd, "connect.setup");
   assert.deepEqual(view(null), { state: "unknown", badge: null, text: "Couldn’t read its state just now.", action: null });

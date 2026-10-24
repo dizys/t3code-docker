@@ -37,12 +37,14 @@ const geometry = () => {
       await page.addInitScript(mode => localStorage.setItem('t3-console-theme', mode), theme);
       page.on('pageerror', error => { errors.push(error.message); console.error('Browser error:',error.message); });
       const status = statusFor('ready');
+      status.connect = { state: 'on', linked: true, relayHost: 'relay.t3.codes', preferences: { linked: true, managedTunnelActive: true, publishAgentActivity: false, holdWebhooksWhileOffline: false } };
       status.sessions = [{ sessionId: 'phone', setupLabel: 'Work phone', client: { platform: 'ios', label: 'Original phone' }, createdAt: new Date().toISOString() },
         { sessionId: 'other', setupLabel: 'Other device', client: { platform: 'macos' }, createdAt: new Date().toISOString() }];
       status.pairings = [{ id: 'spare', label: 'Spare link', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now()+3600000).toISOString() }];
       status.authLists = { session: { available: true, stale: false, refreshing: false }, pairing: { available: true, stale: false, refreshing: false } };
       let heldStatus = null, renameGate = null, revokeGate = null, pairGate = null;
       let renameFail = false, revokeFail = false, pairFail = false, unavailable = false;
+      let preferenceGate = null, preferenceFail = false;
       await page.route('**/*', async route => {
         const url = new URL(route.request().url()), method = route.request().method();
         const at = suffix => url.pathname.endsWith(suffix);
@@ -56,6 +58,13 @@ const geometry = () => {
         if (at('/ports')) return route.fulfill({ json: portsFor('ready') });
         if (at('/providers')) return route.fulfill({ json: fixture('providers.json') });
         if (at('/.well-known/t3/environment')) return route.fulfill({ json: {} });
+        if (at('/connect/preferences')) {
+          const input = route.request().postDataJSON(); requests.push({ action: 'preference', ...input });
+          await preferenceGate?.promise;
+          if (preferenceFail) return route.fulfill({ status: 502, json: { ok: false, error: 'Could not save connection settings. Try again.' } });
+          Object.assign(status.connect.preferences, input);
+          return route.fulfill({ json: { ok: true, preferences: status.connect.preferences } });
+        }
         if (at('/devices/rename')) {
           const input = route.request().postDataJSON(); requests.push({ action:'rename', ...input }); await renameGate?.promise;
           if (renameFail) return route.fulfill({ status:503, json:{ ok:false,error:'Device names are temporarily unavailable. Try again.' } });
@@ -99,6 +108,35 @@ const geometry = () => {
       const screenshot=async name=>{await check(name);await page.screenshot({path:path.join(output,`${tag}-${name}.png`)});};
       const rename=async()=>{await t.locator('[data-cmd="device.menu"][data-id="phone"]').click();await t.getByRole('menuitem',{name:'Rename…',exact:true}).click();await t.locator('#device-label').waitFor();};
       const revoke=async(kind,id)=>{await t.locator(`[data-cmd="${kind==='session'?'device':'link'}.menu"][data-id="${id}"]`).click();await t.getByRole('menuitem',{name:kind==='session'?'Revoke…':'Revoke link…',exact:true}).click();await t.getByRole('alertdialog').getByRole('button',{name:kind==='session'?'Revoke':'Revoke link',exact:true}).click();};
+
+      const publish = t.getByRole('switch', { name: 'Publish agent activity', exact: true });
+      const hold = t.getByRole('switch', { name: 'Hold webhooks while offline', exact: true });
+      preferenceGate = gate();
+      await publish.click();
+      assert.equal(await publish.isDisabled(), true);
+      assert.equal(await hold.isDisabled(), true);
+      await publish.evaluate(button => button.click());
+      assert.equal(requests.filter(row => row.action === 'preference').length, 1);
+      await screenshot('connection-saving');
+      preferenceGate.resolve(); preferenceGate = null;
+      await t.locator('#connect-toggle-publishAgentActivity[aria-checked=true]:enabled').waitFor();
+      assert.equal(await hold.getAttribute('aria-checked'), 'false');
+      preferenceFail = true; await hold.click();
+      await t.getByRole('alert').filter({ hasText: 'Could not save connection settings. Try again.' }).waitFor();
+      assert.equal(await hold.getAttribute('aria-checked'), 'false');
+      await screenshot('connection-failed');
+      preferenceFail = false; await hold.click();
+      await t.locator('#connect-toggle-holdWebhooksWhileOffline[aria-checked=true]:enabled').waitFor();
+      assert.equal(await publish.getAttribute('aria-checked'), 'true');
+      await screenshot('connection-enabled');
+      status.connect.preferences.managedTunnelActive = false;
+      await page.clock.fastForward(16000);
+      await t.locator('#connect-toggle-holdWebhooksWhileOffline:disabled').waitFor();
+      assert.equal(await publish.isDisabled(), false);
+      status.connect.preferences = null;
+      await page.clock.fastForward(16000);
+      await t.locator('#connect-toggle-publishAgentActivity:disabled').waitFor();
+      await screenshot('connection-unavailable');
 
       await rename(); await t.locator('#device-label').fill('Travel phone <safe> & "work"');
       // Capture a poll before saving, then deliver it after the write.

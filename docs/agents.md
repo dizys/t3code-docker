@@ -161,6 +161,13 @@ both count, as they do for T3 Code:
 | Muse Code | saved credentials in `~/.config/muse/auth.json`; sign-in is checked on the first message |
 | Antigravity | T3 Code's provider status |
 
+Codex 0.164.0 changed API-key status from "Logged in using an API key" to
+"API key configured". Setup recognizes both formats so a saved key updates
+the Agents row and completes an active sign-in. This compatibility fix was
+needed after the newer CLI broke both sign-in smoke checks in PR #56.
+A configured key confirms local storage; Codex checks whether the key works
+when you send a request.
+
 Muse has no login-status command, and its model list works while signed out.
 The setup page reports saved credentials without claiming that they are
 verified. It ignores an inherited `META_API_KEY`, as T3 Code does; save the

@@ -107,6 +107,21 @@ then offers to restart it, and shows when the link is made. The container keeps
 running throughout. **Turn off T3 Connect**, in its **⋯** menu, undoes it and
 keeps your sign-in, so turning it on again asks for no new code.
 
+Under the same Access section, **Publish agent activity** enables T3's mobile
+notifications and Live Activities for agents running on this server. Sign in
+to the same T3 account in the mobile app and allow notifications there. These
+are agent activity notifications; they do not report container health or setup
+updates. The setting uses T3's native API and takes effect without a restart.
+Activity publishing also works with an existing notification-only T3 link;
+it does not require routing your connections through a T3 Connect tunnel.
+
+**Hold webhooks while offline** requires an active T3 Connect tunnel. When
+enabled, T3 Connect stores incoming webhook requests outside this server for
+up to 24 hours and delivers them when it returns. Turning it off does not
+discard requests already held. The controls stay disabled until the server is
+linked and its native settings can be read; update T3 Code if your version
+does not support them.
+
 From a shell, the same sign-in is:
 
 ```bash

@@ -5,8 +5,6 @@ of skill files and agent prompts. Save a connection, then give the agent its
 connection ID. The page supports adding, editing, testing and deleting connections
 on desktop and phone, including inside T3 Code's Settings → Setup dialog.
 
-![Server credentials in the setup console, using example addresses.](media/server-credentials/desktop.png)
-
 Choose **Add connection**, enter a name and a stable ID such as `homeserver`,
 then choose a type:
 

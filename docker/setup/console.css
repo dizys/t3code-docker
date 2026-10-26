@@ -3094,6 +3094,9 @@ body[data-console-route="files"]:has(.tc-layer) .tc-toaster { visibility: hidden
 .tc-credential-main strong { font-size: 14px; overflow-wrap: anywhere; }
 .tc-credential-address, .tc-credential-command { overflow-wrap: anywhere; }
 .tc-credential-command { font-size: 12px; color: var(--fg-muted); }
+.tc-credential-usage { display: flex; align-items: center; gap: 8px; }
+.tc-credential-usage .tc-copyfield-value { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.tc-credential-usage .tc-btn { flex: none; }
 .tc-credential-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .tc-credential-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; }
 .tc-credential-note svg { flex: 0 0 auto; margin-top: 2px; }
@@ -3108,7 +3111,7 @@ body[data-console-route="files"]:has(.tc-layer) .tc-toaster { visibility: hidden
   .tc-credential-actions { margin-left: 44px; }
   .tc-credential-toolbar > .tc-small { flex-basis: 100%; }
 }
-.tc-root[data-density="touch"] :is(.tc-credential-actions, .tc-credential-toolbar, .tc-credential-editor .tc-dialog-foot) .tc-btn { min-height: var(--touch); min-width: var(--touch); }
+.tc-root[data-density="touch"] :is(.tc-credential-actions, .tc-credential-toolbar, .tc-credential-usage, .tc-credential-editor .tc-dialog-foot) .tc-btn { min-height: var(--touch); min-width: var(--touch); }
 @media (max-width: 1023.98px) {
   .tc-layer--center > .tc-credential-editor { width: 100%; max-width: none; }
 }

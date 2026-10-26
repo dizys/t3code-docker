@@ -26,6 +26,10 @@ a changed key. Verify first-use host identity on a trusted network.
 
 ## Use from an agent or terminal
 
+Use the copy button beside a connection's command to paste it into a skill.
+It copies only the helper command and connection ID. Replace the example remote
+command or API path with the operation your skill needs.
+
 These commands are installed in both image variants:
 
 ```sh

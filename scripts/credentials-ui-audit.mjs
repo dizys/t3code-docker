@@ -25,6 +25,11 @@ try {
     const errors = [], responses = []; page.on('pageerror', error => errors.push(error.message));
     page.on('response', response => { if (/\/credentials(?:\/|$)/.test(new URL(response.url()).pathname)) responses.push(response.text().catch(() => '')); });
     await page.addInitScript(value => localStorage.setItem('t3-console-theme', value), theme);
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+        writeText: async text => { window.__copiedSkillCommand = text; },
+      } });
+    });
     await page.route('**/*', route => {
       const url = new URL(route.request().url());
       if (url.pathname.endsWith('/status')) return route.fulfill({ json: statusFor('ready') });
@@ -55,6 +60,12 @@ try {
     await capture('saved');
     assert.equal((await target.content()).includes(secret), false);
     assert.equal((await target.content()).includes(token), false);
+    for (const [label, expected] of [['HomeServer', 't3-ssh homeserver -- uptime'], ['Home Assistant API', 't3-api homeassistant GET ""']]) {
+      await target.getByRole('button', { name: 'Copy skill command for ' + label, exact: true }).click();
+      const copied = await target.evaluate(() => window.__copiedSkillCommand);
+      assert.equal(copied, expected);
+      assert.equal(copied.includes(secret), false); assert.equal(copied.includes(token), false);
+    }
     await target.getByRole('button', { name: 'Edit HomeServer', exact: true }).click();
     assert.equal(await target.locator('#credential-secret').inputValue(), '');
     assert.equal(await target.getByLabel('Connection ID', { exact: true }).isDisabled(), true);

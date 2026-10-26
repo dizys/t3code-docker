@@ -72,7 +72,7 @@ export function createPathPolicy({ home = os.homedir(), workspace = '/workspace'
     ['Cursor', path.join(home, '.cursor'), 'cli-config.json'],
     ['Muse Code', path.join(configHome, 'muse'), 'auth.json'],
   ].map(([name, root, file]) => ({ name, root, file: path.join(root, file) }));
-  const keyRoots = guarded.keys.paths.map(value => path.join(home, value.slice(2)));
+  const keyRoots = [...guarded.keys.paths.map(value => path.join(home, value.slice(2))), path.join(t3Root, 'server-credentials')];
   const location = async value => {
     try { return await io.realpath(value); }
     catch { try { return await canonicalEntry(value, io); } catch { return path.resolve(value); } }

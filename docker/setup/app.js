@@ -152,6 +152,7 @@
   const skillsUI = T3SkillsUI.create({ api, getStatus: () => state.status, render: () => render(),
     readMarkdown: (file) => readMarkdownFile(file, 64 * 1024), downloadMarkdown: (...args) => downloadMarkdown(...args) });
   const mcpUI = T3McpUI.create({ api, getStatus: () => state.status, render: () => render() });
+  const credentialsUI = T3CredentialsUI.create({ api, render: () => render() });
   const filesUI = T3FilesUI.create({ api, base: BASE, getStatus: () => state.status, getRoute: () => state.route, render: () => render(), go: route => go(route) });
 
   /** Whether this browser came in on its T3 Code session rather than the key, so Lock would end nothing. */
@@ -230,6 +231,7 @@
         checkHere();
         if (state.route === 'instructions' && state.contextTab === 'skills') skillsUI.activate();
         if (state.route === 'mcp') mcpUI.activate();
+        if (state.route === 'credentials') credentialsUI.activate();
         if (state.route === 'files') filesUI.activate();
         if (state.route === 'instructions' && state.contextTab === 'instructions') void loadInstructionsPreview();
       } else if (!locked) {
@@ -1806,6 +1808,7 @@
     files: () => html`${filesUI.phoneHead()}${pageHead('files')}${filesUI.content()}`,
     overview: overviewPage, access: accessPage, agents: agentsPage, instructions: instructionsPage,
     mcp: () => html`${mcpUI.phoneHead()}${pageHead('mcp', { sub: 'Servers your agents can start or connect to. Define one once, then add it to the agents you choose.' })}${mcpUI.content()}`,
+    credentials: () => html`${pageHead('credentials')}${credentialsUI.content()}`,
     toolchains: toolchainsPage, sourcecontrol: sourceControlPage, ports: portsPage,
     updates: updatesPage, storage: storagePage, server: serverPage, more: morePage,
   };
@@ -1904,6 +1907,7 @@
     if (route === 'instructions' && state.contextTab === 'skills' && state.status) skillsUI.activate(true);
     if (route === 'instructions' && state.contextTab === 'instructions' && state.status) void loadInstructionsPreview(true);
     if (route === 'mcp' && state.status) mcpUI.activate(true);
+    if (route === 'credentials' && state.status) credentialsUI.activate(true);
     if (route === 'files' && state.status) filesUI.activate();
   };
   const navigateFromHash = async focus => {

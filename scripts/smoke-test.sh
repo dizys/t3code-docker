@@ -161,6 +161,13 @@ check "no harness executable is baked, only the root-owned dispatcher" only_the_
 check "mise ships" "docker exec $NAME mise --version"
 check "harness installer ships" "docker exec $NAME t3-harness --help"
 check "storage CLI ships" "docker exec $NAME t3-storage --help"
+check "SSH credential helper ships" "docker exec $NAME t3-ssh --help"
+check "API credential helper ships" "docker exec $NAME t3-api --help"
+credentials_roundtrip() {
+  docker cp "$SCRIPT_DIR/credentials-smoke.mjs" "$NAME:/tmp/t3-credentials-smoke.mjs" >/dev/null
+  docker exec -u t3 "$NAME" node /tmp/t3-credentials-smoke.mjs
+}
+check "saved credentials stay private through the setup API and installed helpers" credentials_roundtrip
 storage_cli_has_disk() {
   local output
   output="$(docker exec "$NAME" t3-storage status --json)" || return 1

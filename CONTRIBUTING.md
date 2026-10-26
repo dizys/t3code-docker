@@ -133,6 +133,16 @@ and Chromium; set `CHROME_PATH` if needed. Screenshots go to
 `/tmp/t3-opencode-auth-ui` (`T3_AUTH_UI_OUTPUT` overrides it). These audits
 never read or change your real OpenCode credentials.
 
+For Server credentials changes, run `node --test tests/credentials*.test.mjs`
+and `node scripts/credentials-ui-audit.mjs`. The UI audit uses a real setup
+server in a disposable home, synthetic credentials and intercepted connection
+tests. It covers add/edit/delete, masked values, failed reads, concurrent edits
+and repeated saves in light/dark, phone, tablet, desktop and an actual embedded
+frame. Screenshots go to `/tmp/t3-credentials-ui` (`T3_CREDENTIALS_UI_OUTPUT`
+overrides it). It never connects to a real SSH or Home Assistant server.
+The image smoke suite also checks both installed helpers and a local API
+round trip with a disposable saved token on each variant and architecture.
+
 Releases are made from tags. Pushing `vX.Y.Z` builds each image for each
 architecture, tests each one against the exact digest that was pushed, runs the
 agent lifecycle test and measures the image size on amd64, and then combines

@@ -273,6 +273,7 @@ RUN "$T3_INFRA_NODE" /usr/local/share/t3-client/patch.mjs
 # shell and anyone typing it. Nothing in the image resolves it by name: the
 # entrypoint, the setup service and the helpers all use T3_INFRA_LAUNCHER.
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/lib/t3code/run-t3.sh /usr/local/bin/t3-* \
+    /opt/t3-setup/credentials/askpass.sh \
     && ln -sfn t3-admin /usr/local/bin/t3
 
 # The agent names, for `docker exec <container> claude` and friends: links to

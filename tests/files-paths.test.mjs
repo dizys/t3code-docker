@@ -67,3 +67,13 @@ test('managed ancestors are explained without locking unrelated sibling content'
   const caches = createPathPolicy({ home: f.home, workspace: f.workspace, env: {}, storage: { snapshot: () => ({ categories: [{ kind: 'cache', path: path.join(f.root, 'custom-cache') }] }) } });
   assert.equal((await caches.classify(path.join(f.root, 'custom-cache/entry'))).managed.tag, 'Caches');
 });
+
+test('saved server credentials carry key and secret warnings in Files, including a custom state volume', async t => {
+  const f = await fixture(t);
+  const policy = createPathPolicy({ home: f.home, workspace: f.workspace, env: { T3CODE_HOME: path.join(f.root, 'custom-t3') } });
+  const folder = path.join(f.root, 'custom-t3/server-credentials');
+  await fs.mkdir(folder, { recursive: true });
+  assert.equal((await policy.classify(folder)).keys, true);
+  const file = await policy.classify(path.join(folder, 'credentials.json'));
+  assert.equal(file.keys, true); assert.equal(file.secret, true);
+});

@@ -38,6 +38,8 @@ import { createSkillsService } from "./skills.mjs";
 import { createMcpService } from "./mcp.mjs";
 import { clientAddress } from "./client-address.mjs";
 import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
+import { createCredentialStore, credentialFailure, CredentialError } from "./credentials.mjs";
+import { testCredential } from "./credentials/run.mjs";
 import { connectState, jsonFrom, parseLinkOutput } from "./connect.mjs";
 import {
   checkReaches, clearSaved, parsePublicUrl, platformUrl, readSaved, resolvePublicUrl, writeSaved,
@@ -67,6 +69,9 @@ const SINGLE_PORT = Number(process.env.T3_SINGLE_PORT) || null;
 const SINGLE_PREFIX = BASE_PATH ? (BASE_PATH.startsWith("/") ? BASE_PATH : `/${BASE_PATH}`) : "/__setup";
 // Where T3 Code keeps its state; the volume a user mounts is the home around it.
 const STATE_DIR = process.env.T3CODE_HOME || `${process.env.HOME || "/home/t3"}/.t3`;
+const credentials = createCredentialStore();
+const credentialShutdown = new AbortController();
+let credentialTests = 0;
 const VOLUME = process.env.HOME || STATE_DIR.replace(/\/\.t3\/?$/, "") || STATE_DIR;
 const WORKSPACE = process.env.T3_WORKSPACE || "/workspace";
 // The setup key and where it came from (setup-key.mjs): "env" for
@@ -2163,7 +2168,7 @@ const cancelLifecycle = (target, rawId) => {
   return { http: 404, body: { ok: false, code: "not-running", error: "Nothing is running or waiting for that row." } };
 };
 
-const ROUTES = [...FILES_ROUTES, "/login", "/logout", "/hello", "/status", "/pair", "/revoke", "/devices/rename", "/ports",
+const ROUTES = [...FILES_ROUTES, "/credentials", "/credentials/create", "/credentials/save", "/credentials/remove", "/credentials/test", "/login", "/logout", "/hello", "/status", "/pair", "/revoke", "/devices/rename", "/ports",
   "/storage/versions/prune", "/storage/versions", "/storage/refresh", "/storage/clean/preview", "/storage/clean", "/storage/policy", "/storage",
   "/public-url/clear", "/public-url", "/setup-key/reveal", "/setup-key/replace", "/connect/unlink", "/t3/restart",
   "/t3/updates/check", "/t3/update", "/ports/expose", "/ports/unexpose",
@@ -2488,6 +2493,30 @@ const server = createServer(async (req, res) => {
     // `viewer` says how this browser got in, so the page offers Lock only
     // where locking would end something.
     if (route === "/status") return sendJson(res, 200, { ...(await status()), viewer: { via: viewer.via } });
+
+    if (route === '/credentials' || route.startsWith('/credentials/')) {
+      if (req.method !== (route === '/credentials' ? 'GET' : 'POST')) return sendJson(res, 405, { ok: false, error: 'Use the supported method for this credential action.' });
+      try {
+        if (route === '/credentials') return sendJson(res, 200, { ok: true, ...await credentials.list() });
+        let input;
+        try { input = JSON.parse(await readBody(req)); }
+        catch (error) { return sendJson(res, error.message === 'body too large' ? 413 : 400, { ok: false, error: 'Send connection details as a JSON object of at most 64 KiB.' }); }
+        if (!input || typeof input !== 'object' || Array.isArray(input)) throw new CredentialError('Send connection details as a JSON object.');
+        if (route === '/credentials/create' || route === '/credentials/save') return sendJson(res, 200, { ok: true, ...await credentials.save({ ...input, create: route === '/credentials/create' }) });
+        if (route === '/credentials/remove') return sendJson(res, 200, { ok: true, ...await credentials.remove(input) });
+        if (route === '/credentials/test') {
+          if (credentialTests >= 3) throw new CredentialError('Other connections are being tested. Try again in a moment.', 409);
+          credentialTests++;
+          try {
+            const snapshot = await credentials.list();
+            if (snapshot.revision !== input.revision) throw new CredentialError('Connections changed. Reload the list before testing again.', 409);
+            await testCredential(await credentials.forUse(input.id), { signal: AbortSignal.any([AbortSignal.timeout(15000), credentialShutdown.signal]) });
+            return sendJson(res, 200, { ok: true, message: 'Connection succeeded.' });
+          } finally { credentialTests--; }
+        }
+        return sendJson(res, 404, { ok: false, error: 'Credential action not found.' });
+      } catch (error) { const failure = credentialFailure(error); return sendJson(res, failure.status, failure.body); }
+    }
 
     if (route.startsWith("/files/")) {
       if (req.method !== (FILES_POST_ROUTES.includes(route) ? "POST" : "GET")) return sendJson(res, 405, { ok: false, code: "invalid", error: "Use the supported method for this Files action." });
@@ -3057,6 +3086,7 @@ const server = createServer(async (req, res) => {
 // tracking them - a sign-in nobody can finish, a URL nobody can stop - so
 // they go when the service does, however it goes.
 const stopChildren = () => {
+  credentialShutdown.abort();
   filesInstance?.stop();
   for (const session of sessions.values()) {
     if (!TERMINAL_STATES.has(session.state)) {

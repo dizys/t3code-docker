@@ -1,0 +1,10 @@
+#!/bin/bash
+set -euo pipefail
+inherited_path="$PATH"
+[ "$EUID" -ne 0 ] || PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+if [ "$EUID" -eq 0 ] && command -v gosu >/dev/null 2>&1 && id t3 >/dev/null 2>&1; then
+  exec env PATH="$inherited_path" "$(command -v gosu)" t3 "$0" "$@"
+fi
+# shellcheck source=/dev/null
+[ ! -r /etc/profile.d/t3-user-env.sh ] || . /etc/profile.d/t3-user-env.sh
+exec "${T3_INFRA_NODE:-/usr/local/bin/node}" "${T3_CREDENTIAL_CLI:-/opt/t3-setup/credentials/cli.mjs}" ssh "$@"

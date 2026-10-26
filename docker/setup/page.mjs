@@ -43,6 +43,7 @@ export const CONSOLE_SCRIPTS = [
   "client/mcp-inspector.js",
   "client/mcp-editor.js",
   "client/mcp.js",
+  "client/credentials.js",
   "client/files-model.js",
   "client/files-editor.js",
   "client/files-dialogs.js",

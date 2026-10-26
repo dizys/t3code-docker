@@ -127,6 +127,7 @@ const routeConsole = async (page, { status, ports, skillOptions, downloadHTTP = 
     if (at("/status")) return route.fulfill({ json: status() });
     if (at("/ports")) return route.fulfill({ json: ports() });
     if (at("/providers")) return route.fulfill({ json: fixture("providers.json") });
+    if (at("/credentials")) return route.fulfill({ json: fixture("credentials.json") });
     return route.continue();
   });
 };

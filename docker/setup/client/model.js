@@ -114,9 +114,16 @@ const T3Model = (() => {
     const op = runtime.operation;
     const phases = { checking: 'Checking release', downloading: 'Downloading', verifying: 'Verifying download', stopping: 'Restarting T3 Code', snapshot: 'Saving a recovery snapshot', starting: 'Starting new version', restoring: 'Restoring previous version' };
     const busy = Boolean(op && phases[op.phase]);
-    const release = runtime.releases?.[runtime.channel]?.version;
+    const target = runtime.releases?.[runtime.channel];
+    const compatible = !runtime.expectedPatchRevision || target?.patchRevision === runtime.expectedPatchRevision;
+    const release = compatible ? target?.version : null;
+    const integrationMissing = Boolean(runtime.expectedPatchRevision && runtime.patchRevision !== runtime.expectedPatchRevision);
+    const integrationUpdate = Boolean(release === runtime.version && target?.patchRevision && target.patchRevision !== runtime.patchRevision);
+    const available = Boolean(release && (isNewer(release, runtime.version) || integrationUpdate));
+    const targetVersion = busy ? op.version : available ? release : null;
     return { ...runtime, busy, phaseText: busy ? phases[op.phase] : null,
-      available: Boolean(release && isNewer(release, runtime.version)),
+      available, versionTo: targetVersion === runtime.version ? null : targetVersion,
+      integrationMissing, integrationUpdate,
       latest: release || null,
       verified: Boolean(release && runtime.checkedAt && !runtime.checkError),
       error: op && ['failed', 'rolled-back', 'interrupted'].includes(op.phase) ? op.error : null };
@@ -1688,7 +1695,7 @@ const T3Model = (() => {
     const updates = updatesView(s, ui, now);
     const runtime = updates.runtime;
     if (runtime && runtime.available && !runtime.busy) {
-      add('Updates', 'Update T3 Code to ' + runtime.latest + '…', 'circle-arrow-up', { cmd: 't3.update' }, { meta: { text: runtime.version, mono: true }, keywords: 'upgrade t3 code runtime release' });
+      add('Updates', runtime.integrationUpdate ? 'Install T3 integration update…' : 'Update T3 Code to ' + runtime.latest + '…', 'circle-arrow-up', { cmd: 't3.update' }, { meta: { text: runtime.version, mono: true }, keywords: 'upgrade t3 code runtime release integration workspace' });
     }
     const agentUpdates = agentRows(s, ui, now).filter((a) => a.updateAvailable).length;
     if (agentUpdates) add('Updates', 'Update all agents', 'circle-arrow-up', { cmd: 'harness.updateAll' }, { meta: { text: plural(agentUpdates, 'update') }, attention: true });

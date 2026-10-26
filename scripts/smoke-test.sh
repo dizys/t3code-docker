@@ -580,10 +580,22 @@ check "T3 Code upgrades require sign-in, same-site access and a public channel" 
 # Catch a frozen release source or a changed upstream archive layout on each
 # native architecture. This only stages a nightly in /tmp; the live server,
 # selected release and its database are never changed.
-t3_github_archive_stages() {
+t3_native_archive_stages() {
+  local result=0
+  if [ -n "${T3_NATIVE_SMOKE_ARCHIVE:-}" ]; then
+    docker cp "$T3_NATIVE_SMOKE_ARCHIVE" "$NAME:/tmp/t3-native-smoke.tar.gz"
+    docker exec -i --user t3 -e T3_RUNTIME_SMOKE_ARCHIVE=/tmp/t3-native-smoke.tar.gz \
+      -e "T3_RUNTIME_SMOKE_VERSION=$T3_NATIVE_SMOKE_VERSION" "$NAME" node --input-type=module \
+      < "$SCRIPT_DIR/t3-runtime-smoke.mjs" >>"$UI_AUDIT_LOG" 2>&1 || result=$?
+    docker exec "$NAME" rm -f /tmp/t3-native-smoke.tar.gz
+    return "$result"
+  fi
   docker exec -i --user t3 "$NAME" node --input-type=module < "$SCRIPT_DIR/t3-runtime-smoke.mjs" >>"$UI_AUDIT_LOG" 2>&1
 }
-check "a real GitHub nightly stages with Setup and supervisor compatibility" t3_github_archive_stages
+check "a maintained Nightly stages with Setup and supervisor compatibility" t3_native_archive_stages
+
+check "native New project creates repositories in the workspace" \
+  docker exec -i --user t3 "$NAME" node --input-type=module < "$SCRIPT_DIR/t3-projects-smoke.mjs"
 
 # This container carries an older image's settings (see LEGACY_ENV). They are
 # reported, the image still names itself correctly, and nothing it started runs

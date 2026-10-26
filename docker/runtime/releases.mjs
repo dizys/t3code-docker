@@ -5,6 +5,8 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CHANNELS, channelOf, exactVersion, readJson, writeJson } from "./state.mjs";
+import { PATCH_REVISION, distributionBlob } from "./distribution-spec.mjs";
+import { registryRequest } from "./registry.mjs";
 
 const execute = promisify(execFile);
 const API = "https://api.github.com/repos/pingdotgg/t3code/releases";
@@ -14,7 +16,7 @@ const UNPACKED_LIMIT = 1024 * 1024 * 1024;
 const HEADROOM = 64 * 1024 * 1024;
 const SPACE_CHECK_BYTES = 8 * 1024 * 1024;
 const PAGE_SIZE = 20;
-const downloadHosts = new Set(["github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"]);
+const downloadHosts = new Set(["github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com", "ghcr.io", "pkg-containers.githubusercontent.com"]);
 export const executableVersion = (output) => /^(?:t3\s+)?v?(\d+\.\d+\.\d+(?:-nightly\.\d{8}\.\d+)?)$/i.exec(String(output).trim())?.[1] ?? null;
 
 export function archiveStem(version, arch = process.arch) {
@@ -23,12 +25,14 @@ export function archiveStem(version, arch = process.arch) {
   return `t3-${version}-linux-${arch}`;
 }
 
-// GitHub redirects release assets to signed storage URLs. Follow only its
+// GitHub and GHCR redirect release assets to signed storage URLs. Follow only
 // download hosts, without forwarding any authorization or accepting HTTP.
 async function get(url, { fetcher, api = false, token, timeout = 15_000 }) {
   for (let redirects = 0; redirects <= 4; redirects += 1) {
     const headers = api ? { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", ...(token ? { authorization: `Bearer ${token}` } : {}) } : {};
-    const response = await fetcher(url, { redirect: "manual", signal: AbortSignal.timeout(timeout), headers });
+    const response = new URL(url).origin === "https://ghcr.io"
+      ? await registryRequest(url, { fetcher, timeout })
+      : await fetcher(url, { redirect: "manual", signal: AbortSignal.timeout(timeout), headers });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       await response.body?.cancel();
       const next = new URL(response.headers.get("location") ?? "", url);
@@ -45,6 +49,7 @@ async function get(url, { fetcher, api = false, token, timeout = 15_000 }) {
   }
   throw new Error("The release download redirected too many times.");
 }
+export { get as fetchRelease };
 
 async function boundedText(response, limit) {
   const chunks = [];
@@ -56,6 +61,7 @@ async function boundedText(response, limit) {
   }
   return Buffer.concat(chunks).toString("utf8");
 }
+export { boundedText as releaseText };
 
 export function archiveChecksum(text, name) {
   const matches = text.split(/\r?\n/).map((line) => /^([a-fA-F0-9]{64}) [ *](\S+)$/.exec(line)).filter((line) => line?.[2] === name);
@@ -120,8 +126,11 @@ async function writableSpace(directory, required) {
 }
 
 export async function unpackRelease(stage, release, { fetcher = fetch, run = execute } = {}) {
+  const expectedUrl = release.patchRevision === undefined ? `${DOWNLOAD}/v${release.version}/${release.root}.tar.gz` : distributionBlob(String(release.integrity).replace("sha256-", "sha256:"));
   if (!["x64", "arm64"].some((arch) => archiveStem(release.version, arch) === release.root)
-    || release.url !== `${DOWNLOAD}/v${release.version}/${release.root}.tar.gz`
+    || (release.patchRevision !== undefined && release.patchRevision !== PATCH_REVISION)
+    || (release.size !== undefined && (!Number.isSafeInteger(release.size) || release.size <= 0 || release.size > LIMIT))
+    || release.url !== expectedUrl
     || !/^sha256-[a-f0-9]{64}$/.test(release.integrity)) throw new Error("Invalid release download or checksum information.");
   const archive = path.join(stage, "download.tgz");
   const destination = path.join(stage, "contents");
@@ -136,16 +145,18 @@ export async function unpackRelease(stage, release, { fetcher = fetch, run = exe
     const header = response.headers.get("content-length");
     const length = /^\d+$/.test(header ?? "") && Number.isSafeInteger(Number(header)) ? Number(header) : null;
     if (length !== null && length > LIMIT) throw new Error("The release download exceeded the supported size.");
-    let writable = await writableSpace(stage, length ?? LIMIT);
+    if (release.size !== undefined && length !== null && release.size !== length) throw new Error("T3 Code's download did not match its verified archive size.");
+    const expectedLength = release.size ?? length;
+    let writable = await writableSpace(stage, expectedLength ?? LIMIT);
     let checkedAt = 0;
     file = await fs.open(archive, "wx", 0o600);
     for await (const chunk of response.body) {
       if (bytes + chunk.length > LIMIT) throw new Error("The release download exceeded the supported size.");
-      if (length !== null && bytes + chunk.length > length) throw new Error("T3 Code's download did not match its declared size.");
+      if (expectedLength !== null && bytes + chunk.length > expectedLength) throw new Error("T3 Code's download did not match its declared size.");
       // Other processes keep using this volume while T3 runs. Recheck in
       // bounded batches, and before a chunk could consume the reserved space.
       if (bytes + chunk.length - checkedAt >= SPACE_CHECK_BYTES || chunk.length > writable) {
-        writable = await writableSpace(stage, length === null ? chunk.length : length - bytes);
+        writable = await writableSpace(stage, expectedLength === null ? chunk.length : expectedLength - bytes);
         checkedAt = bytes;
       }
       writable -= chunk.length;
@@ -153,7 +164,7 @@ export async function unpackRelease(stage, release, { fetcher = fetch, run = exe
       await file.writeFile(chunk);
       bytes += chunk.length;
     }
-    if (length !== null && bytes !== length) throw new Error("T3 Code's download did not match its declared size.");
+    if (expectedLength !== null && bytes !== expectedLength) throw new Error("T3 Code's download did not match its declared size.");
     await file.sync();
   } catch (error) {
     if (error.code === "ENOSPC" || error.code === "EDQUOT") throw spaceError();
@@ -172,6 +183,7 @@ export async function unpackRelease(stage, release, { fetcher = fetch, run = exe
   await run("/usr/bin/tar", ["-xzf", archive, "--no-same-owner", "--no-same-permissions", "--strip-components=1", "-C", destination], options);
   const pkg = await readJson(path.join(destination, "package.json"));
   if (pkg && (pkg.name !== "t3-runtime" || pkg.version !== release.version)) throw new Error("The downloaded archive does not match the requested release.");
+  if (release.patchRevision && (pkg?.containerPatch?.revision !== release.patchRevision || !/^[a-f0-9]{40}$/.test(pkg.containerPatch.source) || !/^sha256-[a-f0-9]{64}$/.test(pkg.containerPatch.upstreamIntegrity))) throw new Error("The downloaded runtime is missing its verified container patch metadata.");
   // CLI archives omit the staging package.json. Keep a container-owned audit
   // manifest so bundled version resolution also works with older supervisors.
   if (!pkg) await writeJson(path.join(destination, "package.json"), { name: "t3-runtime", version: release.version, distribution: release.url, integrity: release.integrity });

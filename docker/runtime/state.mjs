@@ -9,6 +9,11 @@ export const exactVersion = (value) => typeof value === "string" && /^\d+\.\d+\.
 export const channelOf = (version) => version?.includes("-nightly.") ? "nightly" : "stable";
 export const databaseName = (value) => typeof value === "string" && /^state(?:v[1-9]\d*)?\.sqlite$/.test(value);
 export const validScopes = (value) => Array.isArray(value) && value.length <= 64 && value.every((scope) => typeof scope === "string" && /^[a-z][a-z-]*:[a-z][a-z-]*$/.test(scope));
+export const validPatchRevision = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+export const releaseDirectory = (paths, { version, patchRevision }) => {
+  if (!exactVersion(version) || (patchRevision !== undefined && !validPatchRevision(patchRevision))) throw new Error("Invalid runtime release or integration patch.");
+  return patchRevision ? path.join(paths.versions, version, "patches", patchRevision) : path.join(paths.versions, version);
+};
 export const runtimePaths = (env = process.env) => {
   const home = env.T3CODE_HOME || `${env.HOME || "/home/t3"}/.t3`;
   const root = path.join(home, "container-runtime");
@@ -38,7 +43,7 @@ export async function writeJson(file, value) {
 
 export async function readSelection(paths) {
   const value = await readJson(paths.selection, { schema: 1, channel: "stable", version: null });
-  if (value.schema !== 1 || !CHANNELS.includes(value.channel) || (value.version !== null && !exactVersion(value.version))) {
+  if (value.schema !== 1 || !CHANNELS.includes(value.channel) || (value.version !== null && !exactVersion(value.version)) || (value.patchRevision !== undefined && !validPatchRevision(value.patchRevision))) {
     throw new Error("T3 Code's saved selection is invalid; refusing to guess which version to run.");
   }
   return value;
@@ -48,15 +53,16 @@ export async function selectedRuntime(paths, selection = null) {
   selection ??= await readSelection(paths);
   if (!selection.version) {
     const manifest = await readJson(path.join(path.dirname(paths.binary), "package.json"));
-    return { binary: paths.binary, version: manifest?.version, bundled: true };
+    return { binary: paths.binary, version: manifest?.version, patchRevision: manifest?.containerPatch?.revision ?? null, bundled: true };
   }
-  const dir = path.join(paths.versions, selection.version);
+  const dir = releaseDirectory(paths, selection);
   const installed = await readJson(path.join(dir, ".installed.json"));
   if (installed?.version !== selection.version) throw new Error(`T3 Code ${selection.version} is missing or incomplete.`);
+  if (selection.patchRevision && installed.patchRevision !== selection.patchRevision) throw new Error("The selected T3 Code integration patch is missing or incomplete.");
   await fs.access(path.join(dir, "t3"), 1);
   if (installed.database !== undefined && !databaseName(installed.database)) throw new Error("The selected runtime has an invalid data path.");
   if (installed.scopes !== undefined && !validScopes(installed.scopes)) throw new Error("The selected runtime has invalid authentication capabilities.");
-  return { binary: path.join(dir, "t3"), version: selection.version, database: installed.database ?? null, scopes: installed.scopes ?? null, bundled: false };
+  return { binary: path.join(dir, "t3"), version: selection.version, patchRevision: installed.patchRevision ?? null, database: installed.database ?? null, scopes: installed.scopes ?? null, bundled: false };
 }
 
 export const operationBusy = (op) => Boolean(op && !["succeeded", "failed", "rolled-back", "interrupted"].includes(op.phase));

@@ -5,6 +5,11 @@
 
 .env
 *.log
+/native-bundled/
+/native-nightly/
+/native-context/
+/native-output/
+/native-artifacts/
 
 # Default compose workspace mount; the repos inside are the user's, not ours.
 /workspace/*

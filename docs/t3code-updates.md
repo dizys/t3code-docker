@@ -1,9 +1,10 @@
 # Upgrading T3 Code
 
 Open **Setup → Updates**. **Check for updates** checks T3 Code and every agent
-and tool at once; for T3 Code it reads the official GitHub releases for the selected
-channel, and **Update and restart**
-installs its exact release immediately. It does not use mise's waiting period.
+and tool at once. T3 Code checks the selected channel in this image's maintained
+runtime distribution. **Update and restart** installs its exact verified build
+immediately, without mise's waiting period. The native source comes from an
+upstream release with this repository's Setup integration patches applied.
 
 **Stable** is the default. Choose **Nightly** to try new features earlier, or
 choose **Stable** again to return to its latest published release. The
@@ -23,8 +24,9 @@ this setup console.
 Idle tracks console and client activity, not agent turns: a turn that
 outlasts the idle time with every client closed can still be interrupted.
 T3 Code keeps running while the release downloads, verifies
-its SHA-256 digest against the release's `SHA256SUMS` and checks compatibility
-with the container supervisor. Image builds use the same verified CLI archives.
+its SHA-256 digest against the OCI artifact descriptor and checks the image's
+patch revision and container supervisor compatibility. Image builds use the same
+source patch set and matching upstream client assets and native libraries.
 Once ready, only T3 Code restarts. Active agent turns and its terminals stop;
 clients reconnect. The Setup service and container keep running. A failed or
 timed-out startup restores the previous version and SQLite snapshot, and an
@@ -38,24 +40,22 @@ after an image upgrade. Existing images need one image upgrade to gain this
 feature, and future releases which require a newer supervisor may still need
 a new image.
 
-Upstream stopped publishing the `@t3code/t3-linux-*` npm packages after
-`0.1.1-nightly.20261016.3190`. Images using that source need a new image with
-the GitHub archive updater before they can find newer nightlies. Existing
-downloaded runtimes, release selections and device credentials remain usable.
-Pulling this repository alone does not change an already running container.
+Older selected runtimes can receive a **container integration update** at the
+same native version. The confirmation names that change, and the update follows
+the same staging, startup checks and recovery process. Original binaries are kept
+separately from patched variants until cache cleanup can remove them safely.
 
-Checks use GitHub's public release API without requiring an account or token.
-If `GITHUB_TOKEN` is supplied (for example in CI), it authenticates only release
-API requests; it is never sent to archive or checksum download hosts.
-A GitHub outage, rate limit, missing archive or invalid checksum leaves the
-running version selected and reports the check or installation error. Failed
-checks retain the previous release information and its successful check time.
-Nightly discovery searches up to 100 recent releases, skipping preview and draft
-builds; it reports an error if no nightly can be found within that bound.
+Runtime builds are published as OCI artifacts in the existing public GHCR
+package. Downloads use anonymous read access and need no GitHub login or token.
+Only builds matching the image's patch set are offered. A registry outage,
+missing build, invalid checksum or incompatible startup keeps the running version
+selected and reports the error. Failed checks retain the last known compatible
+release information and its successful check time.
 
 Staging checks free space before downloading and extracting, reserving
-64 MiB of headroom for the running server. Downloads without a declared size
-need room for the 300 MiB download limit as well. Space is checked again during
+64 MiB of headroom for the running server. Downloads without a verified archive
+size or declared response length need room for the 300 MiB download limit as
+well. Space is checked again during
 the download so other activity on the volume can stop staging safely.
 
 After a successful update, obsolete cached releases are removed. The active

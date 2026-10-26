@@ -93,7 +93,8 @@ Issues and pull requests are welcome. Before opening one:
   `node scripts/auto-update-ui-audit.js http://127.0.0.1:23785/__setup/ dev`
   checks Updates in both themes on phones, desktop and an embedded frame. It
   includes failed Rust retries, duplicate-error prevention, stale channel
-  metadata, progress during delayed requests and unchanged-version recovery.
+  metadata, progress during delayed requests, same-version container integration
+  updates, failed submission recovery and unchanged-version recovery.
   Update and preference writes are intercepted; it can use the fixture console.
   Screenshots go to `/tmp/t3-auto-update-ui-audit` (`T3_AUTO_UPDATE_UI_OUTPUT`
   overrides it).
@@ -132,6 +133,14 @@ light/dark, mobile, desktop and embedded-query layouts. It requires Playwright
 and Chromium; set `CHROME_PATH` if needed. Screenshots go to
 `/tmp/t3-opencode-auth-ui` (`T3_AUTH_UI_OUTPUT` overrides it). These audits
 never read or change your real OpenCode credentials.
+
+T3 functionality specific to this container and Setup belongs in the local
+source patch set under `docker/runtime/patches`. Maintain the patched distribution
+here, including Stable/Nightly update support. See [Maintaining native T3
+patches](docs/native-runtime-patches.md) for the build and verification workflow.
+
+Use plain language in project writing. Do not use em dashes in responses,
+commit messages, pull requests, release titles or release notes.
 
 Releases are made from tags. Pushing `vX.Y.Z` builds each image for each
 architecture, tests each one against the exact digest that was pushed, runs the

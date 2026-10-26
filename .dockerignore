@@ -4,8 +4,14 @@
 .env
 .env.example
 compose.yaml
-scripts
+scripts/*
+!scripts/build-t3-runtime.mjs
 tests
 docs
 workspace
 README.md
+/native-bundled
+/native-nightly
+/native-context
+/native-output
+/native-artifacts

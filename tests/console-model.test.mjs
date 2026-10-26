@@ -1381,6 +1381,31 @@ test('auto-update view says each schedule, when each last checked, and the last 
 });
 
 
+test("same-version container integration updates have an action without a duplicate version arrow", () => {
+  const patch = 'a'.repeat(64);
+  const s = { t3: { runtime: { channel: 'stable', version: '0.1.2', patchRevision: null, expectedPatchRevision: patch,
+    releases: { stable: { version: '0.1.2', patchRevision: patch } }, checkedAt: NOW } } };
+  const view = M.runtimeView(s);
+  assert.equal(view.integrationUpdate, true);
+  assert.equal(view.integrationMissing, true);
+  assert.equal(view.available, true);
+  assert.equal(view.versionTo, null);
+  assert.equal(M.updatesView(s, {}, NOW).count, 1);
+  s.t3.runtime.patchRevision = patch;
+  assert.equal(M.runtimeView(s).available, false);
+  assert.equal(M.runtimeView(s).integrationMissing, false);
+  assert.equal(M.runtimeView(s).verified, true);
+});
+
+test("an old image's cached native release cannot be offered as a patched integration", () => {
+  const patch = 'a'.repeat(64);
+  const s = { t3: { runtime: { channel: 'stable', version: '0.1.2', expectedPatchRevision: patch,
+    releases: { stable: { version: '0.1.3' } }, checkedAt: NOW } } };
+  assert.equal(M.runtimeView(s).available, false);
+  assert.equal(M.runtimeView(s).verified, false);
+  assert.equal(M.runtimeView(s).integrationMissing, true);
+});
+
 test("runtime freshness requires a successful check for the selected channel", () => {
   const s = { t3: { runtime: { channel: 'stable', version: '0.0.45', releases: { stable: { version: '0.0.45' } }, checkedAt: NOW } } };
   assert.equal(M.runtimeView(s).verified, true);

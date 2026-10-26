@@ -16,7 +16,7 @@ const request = async (route, body) => {
   const text = await response.text(); assert.equal(text.includes(secret), false); assert.equal(response.status, 200, text); return JSON.parse(text);
 };
 const server = createServer((req, res) => {
-  assert.equal(req.headers.authorization, 'Bearer ' + secret);
+  assert.equal(req.headers['x-api-key'], secret);
   res.end(JSON.stringify({ status: 'ok', echo: secret }));
 });
 server.listen(0, '127.0.0.1'); await once(server, 'listening');
@@ -26,11 +26,11 @@ try {
   await access('/opt/t3-setup/credentials/askpass.sh', constants.X_OK);
   for (const cli of ['t3-ssh', 't3-api']) assert.match((await run('/usr/local/bin/' + cli, ['--help'])).stdout, /Manage connections/);
   let snapshot = await request('/credentials');
-  await request('/credentials/create', { revision: snapshot.revision, profile: { id, label: 'Disposable image check', type: 'api', baseUrl: 'http://127.0.0.1:' + server.address().port + '/api/', secret } });
+  await request('/credentials/create', { revision: snapshot.revision, profile: { id, label: 'Disposable image check', type: 'api', baseUrl: 'http://127.0.0.1:' + server.address().port + '/api/', authType: 'header', authName: 'X-API-Key', testPath: 'account', secret } });
   created = true; snapshot = await request('/credentials');
   assert.equal(snapshot.profiles.find(profile => profile.id === id).hasSecret, true);
   await request('/credentials/test', { id, revision: snapshot.revision });
-  const { stdout, stderr } = await run('/usr/local/bin/t3-api', [id, 'GET', 'states']);
+  const { stdout, stderr } = await run('/usr/local/bin/t3-api', [id, 'GET', 'projects']);
   assert.deepEqual(JSON.parse(stdout), { status: 'ok', echo: '[redacted]' }); assert.equal(stderr, '');
   console.log('PASS saved API credentials and installed SSH/API helpers');
 } finally {

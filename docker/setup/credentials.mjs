@@ -14,14 +14,22 @@ const object = value => value && typeof value === 'object' && !Array.isArray(val
 const text = (value, max) => typeof value === 'string' && value.isWellFormed() && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value);
 export const credentialDirectory = (env = process.env) => path.join(env.T3CODE_HOME || path.join(env.HOME || '/home/t3', '.t3'), 'server-credentials');
 
+export function apiTarget(profile, relative) {
+  if (profile.type !== 'api') throw new CredentialError('Choose an API connection.');
+  if (typeof relative !== 'string' || relative.length > 2048 || !relative.isWellFormed() || /[\x00-\x1f\x7f]/.test(relative) || relative.startsWith('/') || relative.includes('\\') || /^[a-z][a-z0-9+.-]*:/i.test(relative)) throw new CredentialError('Use a path relative to the saved API address, such as projects/123.');
+  const base = new URL(profile.baseUrl), target = new URL(relative || '.', base);
+  if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname) || target.username || target.password || target.hash) throw new CredentialError('The request must stay inside the saved API address.');
+  return target;
+}
+
 function normalize(input, previous) {
   if (!object(input)) fail('Enter connection details.');
   if (!text(input.id, 64) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.id)) fail('Use up to 64 lowercase letters, numbers and single hyphens for the connection ID.');
   if (!text(input.label, 120) || !input.label.trim()) fail('Enter a connection name of up to 120 characters.');
-  if (!['ssh', 'api'].includes(input.type)) fail('Choose SSH password or API token.');
+  if (!['ssh', 'api'].includes(input.type)) fail('Choose SSH password or API key / token.');
   if (previous && previous.type !== input.type) fail('Create a new connection to change its type.');
   const secret = input.secret === undefined || input.secret === '' ? previous?.secret : input.secret;
-  if (!text(secret, 8192)) fail('Enter a password or token of up to 8192 characters, without line breaks.');
+  if (!text(secret, 8192)) fail('Enter a password or API key of up to 8192 characters, without line breaks.');
   const profile = { id: input.id, label: input.label.trim(), type: input.type, secret };
   if (input.type === 'ssh') {
     if (!text(input.host, 253) || !/^[a-zA-Z0-9][a-zA-Z0-9.:-]*$/.test(input.host)) fail('Enter a hostname or IP address, without a username or port.');
@@ -34,6 +42,22 @@ function normalize(input, previous) {
     if (!text(input.baseUrl, 2048) || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) fail('Use an HTTP or HTTPS API address without credentials, a query or a fragment.');
     if (!url.pathname.endsWith('/')) url.pathname += '/';
     profile.baseUrl = url.href;
+    profile.authType = input.authType ?? previous?.authType ?? 'bearer';
+    if (!['bearer', 'header', 'query'].includes(profile.authType)) fail('Choose bearer token, custom header or query parameter authentication.');
+    if (profile.authType !== 'bearer') {
+      const name = input.authName ?? previous?.authName;
+      if (!text(name, 128)) fail('Enter an authentication header or parameter name of up to 128 characters.');
+      if (profile.authType === 'header') {
+        try { new Headers({ [name]: 'placeholder' }); } catch { fail('Enter a valid HTTP header name.'); }
+        if (['host', 'content-length', 'transfer-encoding', 'connection', 'upgrade', 'expect', 'trailer', 'te', 'accept', 'content-type'].includes(name.toLowerCase())) fail('Choose an authentication header, not a request transport or content header.');
+        const prefix = input.authPrefix ?? previous?.authPrefix ?? '';
+        if (typeof prefix !== 'string' || prefix.length > 128 || /[^\x20-\x7e]/.test(prefix)) fail('Use up to 128 printable ASCII characters for the optional header prefix.');
+        profile.authPrefix = prefix.trim();
+      }
+      profile.authName = name;
+    }
+    profile.testPath = input.testPath ?? previous?.testPath ?? '';
+    apiTarget(profile, profile.testPath);
   }
   return profile;
 }

@@ -1,12 +1,13 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
-import { CredentialError } from '../credentials.mjs';
+import { CredentialError, apiTarget } from '../credentials.mjs';
+export { apiTarget } from '../credentials.mjs';
 
 // Keep matches that straddle output chunks private too. Encoded JSON/API
 // echoes and URL-encoded diagnostics are scrubbed alongside the literal value.
 export function outputFilter(secret, write) {
-  const values = [...new Set([secret, JSON.stringify(secret).slice(1, -1), encodeURIComponent(secret), Buffer.from(secret).toString('base64')])].filter(Boolean).sort((a, b) => b.length - a.length);
+  const values = [...new Set([secret, JSON.stringify(secret).slice(1, -1), encodeURIComponent(secret), new URLSearchParams([['', secret]]).toString().slice(1), Buffer.from(secret).toString('base64')])].filter(Boolean).sort((a, b) => b.length - a.length);
   const pattern = new RegExp(values.map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
   const keep = Math.max(...values.map(value => value.length)) - 1;
   let pending = '';
@@ -52,23 +53,19 @@ export async function sshRequest(profile, command, { stdout = process.stdout, st
   return code;
 }
 
-export function apiTarget(profile, relative) {
-  if (profile.type !== 'api') throw new CredentialError('Choose an API token connection.');
-  if (typeof relative !== 'string' || relative.startsWith('/') || relative.includes('\\') || /^[a-z][a-z0-9+.-]*:/i.test(relative)) throw new CredentialError('Use a path relative to the saved API address, such as states/light.kitchen.');
-  const base = new URL(profile.baseUrl), target = new URL(relative || '.', base);
-  if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname) || target.username || target.password || target.hash) throw new CredentialError('The request must stay inside the saved API address.');
-  return target;
-}
-
 export async function apiRequest(profile, method, relative, { body, stdout = process.stdout, probe = false, signal = AbortSignal.timeout(30000) } = {}) {
   if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new CredentialError('Use GET, HEAD, POST, PUT, PATCH or DELETE.');
   const target = apiTarget(profile, relative);
   try {
+    const headers = new Headers({ accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) });
+    if (profile.authType === 'query') target.searchParams.set(profile.authName, profile.secret);
+    else if (profile.authType === 'header') headers.set(profile.authName, (profile.authPrefix ? profile.authPrefix + ' ' : '') + profile.secret);
+    else headers.set('authorization', 'Bearer ' + profile.secret);
     const response = await fetch(target, { method, redirect: 'error', signal,
-      headers: { authorization: 'Bearer ' + profile.secret, accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body });
+      headers, body });
     if (probe) {
       await response.body?.cancel();
-      if (!response.ok) throw new CredentialError('The API did not accept the request (HTTP ' + response.status + '). Check the address and token.', 502);
+      if (!response.ok) throw new CredentialError('The API did not accept the request (HTTP ' + response.status + '). Check the address and authentication settings.', 502);
     } else if (response.body) await pump(Readable.fromWeb(response.body), value => stdout.write(value), profile.secret);
     return response.ok ? 0 : 1;
   } catch (error) {
@@ -79,5 +76,5 @@ export async function apiRequest(profile, method, relative, { body, stdout = pro
 
 export const testCredential = (profile, { signal = AbortSignal.timeout(15000) } = {}) => {
   return profile.type === 'ssh' ? sshRequest(profile, ['true'], { probe: true, stdin: 'ignore', signal })
-    : apiRequest(profile, 'GET', '', { probe: true, signal });
+    : apiRequest(profile, 'GET', profile.testPath || '', { probe: true, signal });
 };

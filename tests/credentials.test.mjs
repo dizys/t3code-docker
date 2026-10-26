@@ -10,7 +10,7 @@ import { createCredentialStore, credentialFailure } from '../docker/setup/creden
 import { outputFilter, apiRequest, apiTarget, sshRequest, testCredential } from '../docker/setup/credentials/run.mjs';
 
 const secret = 'fixture-private-credential-123';
-const ssh = { id: 'homeserver', label: 'Home server', type: 'ssh', host: '192.0.2.1', username: 'oliver', port: 22, secret };
+const ssh = { id: 'build-server', label: 'Build server', type: 'ssh', host: '192.0.2.1', username: 'deploy', port: 22, secret };
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 't3-credentials-'));
   const directory = path.join(root, 'credentials');
@@ -22,21 +22,21 @@ const create = async (store, profile) => store.save({ profile, revision: (await 
 test('credentials persist privately and public reads never include saved values', async t => {
   const { directory, store } = await fixture(t);
   await create(store, ssh);
-  await create(store, { id: 'ha', label: 'Home Assistant API', type: 'api', baseUrl: 'http://192.0.2.2/api', secret: secret + '-token' });
+  await create(store, { id: 'project-api', label: 'Project API', type: 'api', baseUrl: 'http://192.0.2.2/api', secret: secret + '-token' });
   const snapshot = await createCredentialStore({ directory }).list();
   assert.equal(snapshot.profiles.length, 2);
   assert.equal(snapshot.profiles[1].baseUrl, 'http://192.0.2.2/api/');
   assert.equal(JSON.stringify(snapshot).includes(secret), false);
-  assert.equal((await store.forUse('homeserver')).secret, secret);
+  assert.equal((await store.forUse('build-server')).secret, secret);
   assert.equal((await fs.stat(directory)).mode & 0o777, 0o700);
   assert.equal((await fs.stat(path.join(directory, 'credentials.json'))).mode & 0o777, 0o600);
   const saved = await store.save({ profile: { ...ssh, secret: '', label: 'Renamed' }, revision: snapshot.revision });
-  assert.equal((await store.forUse('homeserver')).secret, secret);
+  assert.equal((await store.forUse('build-server')).secret, secret);
   assert.equal(JSON.stringify(saved).includes(secret), false);
   await store.save({ profile: { ...ssh, secret: 'replacement-password' }, revision: saved.revision });
-  assert.equal((await store.forUse('homeserver')).secret, 'replacement-password');
-  await store.remove({ id: 'homeserver', revision: (await store.list()).revision });
-  await assert.rejects(store.forUse('homeserver'), /not found/);
+  assert.equal((await store.forUse('build-server')).secret, 'replacement-password');
+  await store.remove({ id: 'build-server', revision: (await store.list()).revision });
+  await assert.rejects(store.forUse('build-server'), /not found/);
   assert.equal((await store.list()).profiles.length, 1);
 });
 
@@ -51,8 +51,8 @@ test('conflicting, duplicate and overlapping writes cannot overwrite another edi
   assert.deepEqual(outcomes.map(outcome => outcome.status), ['fulfilled', 'rejected']);
   assert.equal(outcomes[1].reason.status, 409);
   revision = (await store.list()).revision;
-  await assert.rejects(store.remove({ id: 'homeserver', revision: before.revision }), { status: 409 });
-  assert.equal((await store.forUse('homeserver')).label, 'First');
+  await assert.rejects(store.remove({ id: 'build-server', revision: before.revision }), { status: 409 });
+  assert.equal((await store.forUse('build-server')).label, 'First');
 });
 
 test('invalid input and damaged stores fail without echoing or replacing credentials', async t => {
@@ -80,8 +80,8 @@ test('invalid input and damaged stores fail without echoing or replacing credent
 });
 
 test('output filtering masks literal and encoded values across every chunk boundary', () => {
-  for (const value of [secret, 'password-with-"quotes"&slashes\\and-more']) {
-    const variants = [value, JSON.stringify(value).slice(1, -1), encodeURIComponent(value), Buffer.from(value).toString('base64')];
+  for (const value of [secret, 'password-with-"quotes"&slashes\\and-more', 'key +/~']) {
+    const variants = [value, JSON.stringify(value).slice(1, -1), encodeURIComponent(value), new URLSearchParams([['', value]]).toString().slice(1), Buffer.from(value).toString('base64')];
     const source = 'before ' + variants.join(' middle ') + ' after';
     for (let size = 1; size <= source.length; size++) {
       let output = ''; const filter = outputFilter(value, text => { output += text; });
@@ -91,6 +91,55 @@ test('output filtering masks literal and encoded values across every chunk bound
     }
   }
 });
+
+test('legacy bearer connections remain readable and changing auth settings retains the saved key', async t => {
+  const { directory, store } = await fixture(t);
+  await store.list();
+  const file = path.join(directory, 'credentials.json');
+  const legacy = JSON.stringify({ version: 1, profiles: [{ id: 'service', label: 'Service API', type: 'api', baseUrl: 'https://api.example.com/v1/', secret }] });
+  await fs.writeFile(file, legacy, { mode: 0o600 });
+  assert.equal((await store.forUse('service')).authType, 'bearer');
+  assert.equal(await fs.readFile(file, 'utf8'), legacy);
+  const before = await store.list();
+  const saved = await store.save({ profile: { ...before.profiles[0], authType: 'header', authName: 'X-API-Key', authPrefix: '', testPath: 'account', secret: '' }, revision: before.revision });
+  assert.equal(JSON.stringify(saved).includes(secret), false);
+  assert.equal((await store.forUse('service')).secret, secret);
+  assert.equal((await store.list()).profiles[0].authName, 'X-API-Key');
+});
+
+test('API authentication and test-path validation rejects unsafe configuration', async t => {
+  const { store } = await fixture(t);
+  const profile = { id: 'service', label: 'Service API', type: 'api', baseUrl: 'https://api.example.com/v1/', secret };
+  for (const change of [{ authType: 'unknown' }, { authType: 'header', authName: 'bad:name' }, { authType: 'header', authName: 'Host' },
+    { authType: 'header', authName: 'Content-Length' }, { authType: 'header', authName: 'X-Key', authPrefix: 'Token\r\ninjected' },
+    { authType: 'query', authName: 'key\ninjected' }, { testPath: '/outside' }, { testPath: '../outside' }, { testPath: 'https://other.test/' }]) {
+    await assert.rejects(create(store, { ...profile, ...change }), error => error.status === 400 && !error.message.includes(secret));
+  }
+});
+
+for (const [authType, authName, authPrefix] of [['bearer', undefined, undefined], ['header', 'X-API-Key', ''], ['header', 'Authorization', 'Token'], ['query', 'api_key', undefined], ['query', 'api[key]', undefined]]) {
+  test(`API ${authType} ${authName || ''} ${authPrefix || ''} authentication uses the saved key and configured test path`, async t => {
+    const { store } = await fixture(t); let received;
+    const key = authType === 'query' ? secret + '/+ ~' : secret;
+    const server = createServer((req, res) => {
+      const url = new URL(req.url, 'http://localhost'); received = { headers: req.headers, url };
+      res.end(JSON.stringify({ echo: authType === 'query' ? url.search : req.headers[(authName || 'authorization').toLowerCase()] }));
+    });
+    server.listen(0, '127.0.0.1'); await once(server, 'listening');
+    t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+    await create(store, { id: 'service', label: 'Service API', type: 'api', baseUrl: 'http://127.0.0.1:' + server.address().port + '/v1/', secret: key,
+      authType, authName, authPrefix, testPath: 'account' });
+    const profile = await store.forUse('service');
+    assert.equal(await testCredential(profile), 0);
+    assert.equal(received.url.pathname, '/v1/account');
+    if (authType === 'query') { assert.equal(received.url.searchParams.get(authName), key); assert.equal(received.headers.authorization, undefined); }
+    else assert.equal(received.headers[(authName || 'authorization').toLowerCase()], (authType === 'bearer' ? 'Bearer ' : authPrefix ? authPrefix + ' ' : '') + key);
+    let output = '';
+    assert.equal(await apiRequest(profile, 'GET', 'projects?limit=2', { stdout: { write: value => { output += value; } } }), 0);
+    assert.equal(received.url.searchParams.get('limit'), '2');
+    assert.equal(output.includes(secret), false); assert.match(output, /\[redacted\]/);
+  });
+}
 
 test('API helper authenticates internally, filters output and never follows redirects', async t => {
   let calls = 0, received;
@@ -104,11 +153,11 @@ test('API helper authenticates internally, filters output and never follows redi
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
-  const profile = { id: 'ha', type: 'api', baseUrl: 'http://127.0.0.1:' + server.address().port + '/api/', secret };
+  const profile = { id: 'project-api', type: 'api', baseUrl: 'http://127.0.0.1:' + server.address().port + '/api/', secret };
   let output = '';
-  assert.equal(await apiRequest(profile, 'POST', 'services/light/turn_on', { body: '{"entity_id":"light.kitchen"}', stdout: { write: text => { output += text; } } }), 0);
+  assert.equal(await apiRequest(profile, 'POST', 'projects', { body: '{"name":"demo-project"}', stdout: { write: text => { output += text; } } }), 0);
   assert.equal(output, 'hello [redacted] goodbye');
-  assert.deepEqual(received, { url: '/api/services/light/turn_on', method: 'POST', body: '{"entity_id":"light.kitchen"}' });
+  assert.deepEqual(received, { url: '/api/projects', method: 'POST', body: '{"name":"demo-project"}' });
   await assert.rejects(apiRequest(profile, 'GET', 'redirect'), /redirects are not followed/);
   assert.equal(calls, 2, 'redirect destination was never requested');
   await assert.rejects(apiRequest(profile, 'GET', 'unauthorized', { probe: true }), error => !error.message.includes(secret) && /HTTP 401/.test(error.message));

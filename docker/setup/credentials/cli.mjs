@@ -8,9 +8,9 @@ const USAGE = `Use saved credentials without putting their values in commands:
 Manage connections in Setup → Server credentials.
 For JSON request bodies, use --stdin and pipe the body into t3-api.
 Examples:
-  t3-ssh homeserver -- uptime
-  t3-api homeassistant GET states/light.kitchen
-  printf '%s' '{"entity_id":"light.kitchen"}' | t3-api homeassistant POST services/light/turn_on --stdin
+  t3-ssh build-server -- uptime
+  t3-api project-api GET projects/demo-project
+  printf '%s' '{"name":"demo-project"}' | t3-api project-api POST projects --stdin
 `;
 
 async function main() {

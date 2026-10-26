@@ -50,23 +50,50 @@ try {
       await dialog.waitFor(); await target.getByLabel('Name', { exact: true }).fill(label);
       await target.getByLabel('Connection ID', { exact: true }).fill(id);
       await target.getByLabel('Connection type').selectOption(type);
-      if (type === 'ssh') { await target.getByLabel('Host', { exact: true }).fill('192.0.2.10'); await target.getByLabel('Username', { exact: true }).fill(id === 'homeserver' ? 'oliver' : 'root'); }
-      else await target.getByLabel('API base URL').fill('http://192.0.2.20/api/');
+      if (type === 'ssh') { await target.getByLabel('Host', { exact: true }).fill('192.0.2.10'); await target.getByLabel('Username', { exact: true }).fill(id === 'build-server' ? 'deploy' : 'root'); }
+      else {
+        await target.getByLabel('API base URL').fill('https://api.example.com/v1/');
+        await target.getByLabel('Authentication', { exact: true }).selectOption('header');
+        await target.getByLabel('Header name', { exact: true }).fill('X-API-Key');
+        await target.getByLabel('Test path (optional)', { exact: true }).fill('account');
+      }
       await target.locator('#credential-secret').fill(type === 'ssh' ? secret : token);
       await dialog.getByRole('button', { name: 'Save connection', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' }); await target.locator(`[data-key="credential-${id}"]`).waitFor();
     };
-    await add('homeserver', 'HomeServer'); await add('homeassistant-ssh', 'Home Assistant SSH'); await add('homeassistant', 'Home Assistant API', 'api');
+    await add('build-server', 'Build server'); await add('staging-server', 'Staging server'); await add('project-api', 'Project API', 'api');
     await capture('saved');
+    await target.getByRole('button', { name: 'Edit Project API', exact: true }).click();
+    assert.equal(await target.getByLabel('Authentication', { exact: true }).inputValue(), 'header');
+    await target.locator('#credential-secret').fill(token);
+    await target.getByLabel('Header name', { exact: true }).fill('Custom-Key');
+    await target.getByLabel('Authentication', { exact: true }).selectOption('query');
+    assert.equal(await target.getByLabel('Query parameter name', { exact: true }).inputValue(), 'api_key');
+    assert.equal(await target.locator('#credential-secret').inputValue(), token);
+    await capture('query-auth');
+    await target.getByLabel('Authentication', { exact: true }).selectOption('header');
+    assert.equal(await target.locator('#credential-secret').inputValue(), token);
+    await target.getByLabel('Header name', { exact: true }).fill('Authorization');
+    await target.getByLabel('Value prefix (optional)', { exact: true }).fill('Token');
+    await capture('header-auth');
+    await dialog.getByRole('button', { name: 'Save connection', exact: true }).click();
+    await dialog.waitFor({ state: 'hidden' });
+    await target.getByRole('button', { name: 'Reload', exact: true }).waitFor({ state: 'visible' });
+    await target.getByRole('button', { name: 'Edit Project API', exact: true }).click();
+    assert.equal(await target.getByLabel('Header name', { exact: true }).inputValue(), 'Authorization');
+    assert.equal(await target.getByLabel('Value prefix (optional)', { exact: true }).inputValue(), 'Token');
+    assert.equal(await target.locator('#credential-secret').inputValue(), '');
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+
     assert.equal((await target.content()).includes(secret), false);
     assert.equal((await target.content()).includes(token), false);
-    for (const [label, expected] of [['HomeServer', 't3-ssh homeserver -- uptime'], ['Home Assistant API', 't3-api homeassistant GET ""']]) {
+    for (const [label, expected] of [['Build server', 't3-ssh build-server -- uptime'], ['Project API', 't3-api project-api GET account']]) {
       await target.getByRole('button', { name: 'Copy skill command for ' + label, exact: true }).click();
       const copied = await target.evaluate(() => window.__copiedSkillCommand);
       assert.equal(copied, expected);
       assert.equal(copied.includes(secret), false); assert.equal(copied.includes(token), false);
     }
-    await target.getByRole('button', { name: 'Edit HomeServer', exact: true }).click();
+    await target.getByRole('button', { name: 'Edit Build server', exact: true }).click();
     assert.equal(await target.locator('#credential-secret').inputValue(), '');
     assert.equal(await target.getByLabel('Connection ID', { exact: true }).isDisabled(), true);
     assert.equal(await target.getByLabel('Connection type').isDisabled(), true);
@@ -77,7 +104,7 @@ try {
     await capture('edit');
     // An overlapping editor must not silently replace another window's edit.
     const current = await (await f.request('/credentials')).json();
-    const old = current.profiles.find(profile => profile.id === 'homeserver');
+    const old = current.profiles.find(profile => profile.id === 'build-server');
     await f.request('/credentials/save', { profile: { ...old, label: 'Updated elsewhere' }, revision: current.revision });
     await target.locator('#credential-secret').fill('replacement-fixture-password');
     await dialog.getByRole('button', { name: 'Save connection', exact: true }).click();
@@ -90,7 +117,7 @@ try {
     await target.getByRole('button', { name: 'Reload', exact: true }).click();
     await target.getByRole('button', { name: 'Edit Updated elsewhere', exact: true }).waitFor();
     await target.getByRole('button', { name: 'Edit Updated elsewhere', exact: true }).click();
-    await target.getByLabel('Name', { exact: true }).fill('HomeServer');
+    await target.getByLabel('Name', { exact: true }).fill('Build server');
     // Saving twice while the request is pending still issues exactly one write.
     let release, started, saves = 0;
     const gate = new Promise(resolve => { release = resolve; });
@@ -102,19 +129,19 @@ try {
     await target.locator('#credential-secret').press('Enter'); await page.keyboard.press('Escape');
     assert.equal(await dialog.count(), 1); assert.equal(await dialog.getByRole('button', { name: 'Cancel', exact: true }).isDisabled(), true);
     release(); await dialog.waitFor({ state: 'hidden' }); await page.unroute('**/credentials/save', intercept);
-    assert.equal(saves, 1); await target.getByRole('button', { name: 'Edit HomeServer', exact: true }).waitFor();
+    assert.equal(saves, 1); await target.getByRole('button', { name: 'Edit Build server', exact: true }).waitFor();
     await page.route('**/credentials/test', route => route.fulfill({ json: { ok: true, message: 'Connection succeeded.' } }));
-    await target.getByRole('button', { name: 'Test Home Assistant API', exact: true }).click();
+    await target.getByRole('button', { name: 'Test Project API', exact: true }).click();
     await target.getByText('Connection succeeded', { exact: true }).waitFor();
     const failRead = route => route.fulfill({ status: 500, json: { ok: false, error: 'Fixture read failed.' } });
     await page.route('**/credentials', failRead);
     await target.getByRole('button', { name: 'Reload', exact: true }).click(); await target.getByRole('alert').waitFor();
-    assert.equal(await target.getByRole('button', { name: 'Edit HomeServer', exact: true }).isDisabled(), true);
+    assert.equal(await target.getByRole('button', { name: 'Edit Build server', exact: true }).isDisabled(), true);
     await capture('read-error'); await page.unroute('**/credentials', failRead);
     await target.getByRole('button', { name: 'Reload', exact: true }).click();
-    await target.getByRole('button', { name: 'Delete Home Assistant SSH', exact: true }).click();
+    await target.getByRole('button', { name: 'Delete Staging server', exact: true }).click();
     await target.getByRole('alertdialog').getByRole('button', { name: 'Delete connection', exact: true }).click();
-    await target.locator('[data-key="credential-homeassistant-ssh"]').waitFor({ state: 'hidden' });
+    await target.locator('[data-key="credential-staging-server"]').waitFor({ state: 'hidden' });
     assert.equal(await target.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     for (const response of await Promise.all(responses)) for (const value of [secret, token, 'replacement-fixture-password']) assert.equal(response.includes(value), false);
     assert.deepEqual(errors, []); await capture('after-delete');

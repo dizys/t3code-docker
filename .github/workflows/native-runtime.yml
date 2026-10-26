@@ -47,7 +47,9 @@ jobs:
           node-version: '24'
       - uses: oras-project/setup-oras@v1
         with:
-          version: 1.3.6
+          # The action's bundled release catalog predates this official build.
+          url: https://github.com/oras-project/oras/releases/download/v1.3.6/oras_1.3.6_linux_amd64.tar.gz
+          checksum: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
       - name: Verify the OCI publication contract offline
         run: node scripts/native-publish-smoke.mjs
       - id: plan
@@ -127,7 +129,8 @@ jobs:
           path: native-artifacts
       - uses: oras-project/setup-oras@v1
         with:
-          version: 1.3.6
+          url: https://github.com/oras-project/oras/releases/download/v1.3.6/oras_1.3.6_linux_amd64.tar.gz
+          checksum: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io

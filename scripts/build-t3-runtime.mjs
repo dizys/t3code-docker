@@ -3,7 +3,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { promisify, parseEnv } from "node:util";
 import { fileURLToPath } from "node:url";
 import { releaseForVersion, unpackRelease, executableVersion } from "../docker/runtime/releases.mjs";
 import { releaseForVersion as patchedReleaseForVersion } from "../docker/runtime/distribution.mjs";
@@ -12,6 +12,25 @@ import { PATCH_REVISION } from "../docker/runtime/distribution-spec.mjs";
 import { files, applySourcePatches } from "../docker/runtime/patches/index.mjs";
 
 const execute = promisify(execFile);
+// These values are explicitly public in upstream's checked-in .env.example.
+// Do not build from the operator's environment or copy unrelated env fields.
+export function publicBuildEnvironment(example) {
+  const parsed = parseEnv(example), result = {};
+  for (const name of ["T3CODE_CLERK_PUBLISHABLE_KEY", "T3CODE_CLERK_JWT_TEMPLATE", "T3CODE_CLERK_CLI_OAUTH_CLIENT_ID", "T3CODE_RELAY_URL"]) {
+    const value = parsed[name]?.trim();
+    if (!value || value.length > 2048) throw new Error(`The release's public defaults are missing or invalid: ${name}.`);
+    result[name] = value;
+  }
+  let relay;
+  try { relay = new URL(result.T3CODE_RELAY_URL); }
+  catch { throw new Error("The release's public Connect defaults are invalid."); }
+  if (relay.protocol !== "https:" || relay.username || relay.password || relay.pathname !== "/" || relay.search || relay.hash
+    || !/^pk_(?:live|test)_[A-Za-z0-9+/=_-]+$/.test(result.T3CODE_CLERK_PUBLISHABLE_KEY)
+    || !/^[A-Za-z0-9_-]+$/.test(result.T3CODE_CLERK_JWT_TEMPLATE)
+    || !/^[A-Za-z0-9_-]+$/.test(result.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID)) throw new Error("The release's public Connect defaults are invalid.");
+  return result;
+}
+
 export async function buildRuntime(version, arch, destination, { run = execute, fetcher = fetch, source = null } = {}) {
   if (!exactVersion(version) || !["x64", "arm64"].includes(arch) || !path.isAbsolute(destination)) throw new Error("Choose an exact T3 release, a supported architecture and an absolute output directory.");
   if (Number(process.versions.node.split(".")[0]) < 26) throw new Error("Building the patched T3 runtime requires Node 26 or newer.");
@@ -41,6 +60,12 @@ export async function buildRuntime(version, arch, destination, { run = execute, 
     const commit = (await command("git", ["rev-parse", "HEAD"])).stdout.trim();
     const tag = (await command("git", ["rev-parse", `v${version}^{commit}`])).stdout.trim();
     if (!/^[a-f0-9]{40}$/.test(commit) || commit !== tag || (await command("git", ["status", "--porcelain"])).stdout.trim()) throw new Error("Build from a clean checkout of the exact upstream release tag.");
+    for (const file of [".env", ".env.local"]) {
+      try { await fs.access(path.join(checkout, file)); throw new Error("Native builds require a checkout without local environment files; use the release's checked-in public defaults."); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+    }
+    const publicEnvironment = publicBuildEnvironment(await fs.readFile(path.join(checkout, ".env.example"), "utf8"));
+    const buildEnvironment = { ...Object.fromEntries(Object.entries(options.env).filter(([name]) => !/^(?:T3CODE_|VITE_|EXPO_PUBLIC_)/.test(name))), ...publicEnvironment };
     const original = Object.fromEntries(await Promise.all(files.map(async (file) => [file, await fs.readFile(path.join(checkout, file), "utf8")])));
     const patched = applySourcePatches(original);
     for (const [file, text] of Object.entries(patched)) await fs.writeFile(path.join(checkout, file), text);
@@ -51,7 +76,7 @@ export async function buildRuntime(version, arch, destination, { run = execute, 
       await fs.writeFile(name, JSON.stringify({ ...pkg, version }, null, 2) + "\n");
     }
     console.error("[t3-runtime] compiling the patched server");
-    await command("corepack", ["pnpm", "exec", "node", "apps/server/scripts/cli.ts", "build-exe", "--target", `linux-${arch}`]);
+    await command("corepack", ["pnpm", "exec", "node", "apps/server/scripts/cli.ts", "build-exe", "--target", `linux-${arch}`], { env: buildEnvironment });
     await fs.copyFile(path.join(checkout, `apps/server/dist-exe/t3-linux-${arch}`), path.join(unpacked, "t3"));
     await fs.chmod(path.join(unpacked, "t3"), 0o755);
     const containerPatch = { revision: PATCH_REVISION, source: commit, upstreamIntegrity: release.integrity };

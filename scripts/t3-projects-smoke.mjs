@@ -34,6 +34,12 @@ try {
   const issued = await execute(binary, ["auth", "session", "issue", "--ttl", "5m", "--subject", "workspace-smoke", "--json"], { env, timeout: 60_000 });
   const session = JSON.parse(issued.stdout.slice(issued.stdout.indexOf("{")));
   assert.equal(typeof session.token, "string", "Native CLI did not issue a session");
+  const connected = await execute(binary, ["connect", "status", "--json"], { env, timeout: 60_000 });
+  const connect = JSON.parse(connected.stdout.slice(connected.stdout.indexOf("{")));
+  assert.equal(connect.desired, false, "Connect must remain off in the disposable home");
+  assert.equal(connect.authenticated, false);
+  assert.equal(connect.linked, false);
+  assert.ok(["available", "missing"].includes(connect.relayClient?.status), "Public Connect capability must survive a local source build");
   const log = await fs.open(path.join(root, "server.log"), "wx", 0o600);
   child = spawn(binary, ["serve", "--host", "127.0.0.1", "--port", String(port), "--no-browser", workspace], { env, stdio: ["ignore", log.fd, log.fd] });
   done = new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
@@ -62,7 +68,7 @@ try {
     const { auditNativeProjectDirectory } = await import("./lib/project-directory-browser.cjs");
     await auditNativeProjectDirectory({ binary, base: `http://127.0.0.1:${port}`, env, workspace, version: manifest.version, execute, output: process.env.T3_PROJECTS_UI_OUTPUT });
   }
-  console.log(JSON.stringify({ newProjectsRoot: workspace, nativeProjectsCreated: 2, collisionHandling: true, existingProjectsPreserved: true }));
+  console.log(JSON.stringify({ newProjectsRoot: workspace, nativeProjectsCreated: 2, collisionHandling: true, existingProjectsPreserved: true, connectAvailable: true }));
 } finally {
   api?.close();
   if (child && child.exitCode === null) {

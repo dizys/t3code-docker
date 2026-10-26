@@ -6,14 +6,22 @@ patched distribution.
 
 Register a source patch in `docker/runtime/patches/index.mjs`. Each patch declares
 the files it changes and applies bounded, unambiguous source edits. The registry
-and patch contents determine the build's SHA-256 revision. Upstream source drift
-fails the build before a runtime can be published.
+and patch contents determine the build's SHA-256 revision. Increment the
+registry's `BUILD_REVISION` when changing the compiler or packaging contract so
+existing immutable artifacts cannot be reused. Upstream source drift fails the
+build before a runtime can be published.
 
 The builder checks out the exact upstream release tag and verifies the matching
 official CLI archive. It compiles the patched server, keeping that archive's
 client, native modules and resource monitor. Its manifest records the patch
 revision, upstream source commit and original archive checksum. Compiler
 dependencies remain outside the final image.
+
+Compilation loads the exact tag's checked-in `.env.example`, allowing only the
+four public Clerk and relay settings that enable T3 Connect. It excludes local
+environment files and operator build overrides. These public defaults require
+no private upstream credentials. Native checks exercise `connect status --json`
+and compare Connect/relay discovery before and after an integration trial.
 
 CI builds and tests Linux AMD64 and ARM64. The native project smoke starts the
 actual binary in a disposable home, reads the same project-root metadata clients

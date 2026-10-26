@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 import { createT3Api } from "../docker/setup/t3-api.mjs";
 import { createRuntimeManager } from "../docker/runtime/manager.mjs";
 import { releaseForVersion, unpackRelease, archiveStem } from "../docker/runtime/releases.mjs";
-import { runtimePaths, readJson, readSelection, writeJson } from "../docker/runtime/state.mjs";
+import { runtimePaths, readJson, readSelection, selectedRuntime, writeJson } from "../docker/runtime/state.mjs";
 import { PATCH_REVISION, distributionBlob } from "../docker/runtime/distribution-spec.mjs";
 import { nativeRegistry } from "../tests/fixtures/native-registry.mjs";
 
@@ -48,12 +48,20 @@ try {
   };
   const before = await until(() => api.call("server.getConfig", {}));
   assert.equal(before.newProjectsRoot, path.join(env.T3CODE_HOME, "projects"));
+  const connectFacts = async (executable) => {
+    const output = await execute(executable, ["connect", "status", "--json"], { env, timeout: 60_000 });
+    const result = JSON.parse(output.stdout.slice(output.stdout.indexOf("{")));
+    return { desired: result.desired, authenticated: result.authenticated, linked: result.linked,
+      relayClient: { status: result.relayClient?.status, version: result.relayClient?.version } };
+  };
+  const connectBefore = await connectFacts(env.T3_INFRA_BINARY);
   const existing = await api.call("projects.createNew", { name: "Existing project" });
   const identityBefore = await (await fetch(`http://127.0.0.1:${port}/.well-known/t3/environment`)).json();
 
   const stem = archiveStem(version), archive = path.join(root, "patched.tar.gz");
   await fs.symlink(path.dirname(binary), path.join(root, stem), "dir");
-  await execute("tar", ["-hczf", archive, "-C", root, stem], { timeout: 60_000 });
+  // This is a disposable local fixture, so favor fast compression over size.
+  await execute("tar", ["-h", "--use-compress-program=gzip -1", "-cf", archive, "-C", root, stem], { timeout: 60_000 });
   const bytes = await fs.readFile(archive), hash = createHash("sha256").update(bytes).digest("hex");
   const registry = nativeRegistry({ stable: version.includes("nightly") ? null : version, nightly: version.includes("nightly") ? version : null, layerDigest: `sha256:${hash}`, layerSize: bytes.length });
   const fetcher = (url, options) => url === distributionBlob(`sha256:${hash}`) ? Promise.resolve(new Response(bytes, { headers: { "content-length": String(bytes.length) } })) : registry.fetcher(url, options);
@@ -78,7 +86,8 @@ try {
   assert.equal(identityAfter.environmentId, identityBefore.environmentId);
   assert.equal(identityAfter.serverVersion, identityBefore.serverVersion);
   assert.equal(identityAfter.serverVersion, version);
-  console.log(JSON.stringify({ sameVersionIntegration: version, patchRevision: PATCH_REVISION, identityPreserved: true, originalSessionPreserved: true, existingProjectsPreserved: true, newProjectInWorkspace: true }));
+  assert.deepEqual(await connectFacts((await selectedRuntime(paths)).binary), connectBefore, "The integration must retain upstream's public Connect capability and relay discovery");
+  console.log(JSON.stringify({ sameVersionIntegration: version, patchRevision: PATCH_REVISION, identityPreserved: true, originalSessionPreserved: true, existingProjectsPreserved: true, newProjectInWorkspace: true, connectPreserved: true }));
 } finally {
   api?.close();
   if (supervisor && supervisor.exitCode === null) {

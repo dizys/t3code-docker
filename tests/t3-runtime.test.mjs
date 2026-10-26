@@ -6,7 +6,9 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { runtimePaths, writeJson, readJson, readSelection, selectedRuntime, exactVersion } from "../docker/runtime/state.mjs";
+import { nativeRegistry } from "./fixtures/native-registry.mjs";
+import { PATCH_REVISION, channelTag, distributionTag, manifestUrl } from "../docker/runtime/distribution-spec.mjs";
+import { runtimePaths, writeJson, readJson, readSelection, selectedRuntime, releaseDirectory, exactVersion } from "../docker/runtime/state.mjs";
 import { createRuntimeManager, packageRelease, installRelease, executableVersion } from "../docker/runtime/manager.mjs";
 import { recoverUpdate, snapshotDatabase, syncAuthentication, pruneRuntimes, projectScopes } from "../docker/runtime/supervisor.mjs";
 
@@ -32,15 +34,9 @@ const waitFor = async (fn, ms = 5000) => {
   while (Date.now() < deadline) { if (await fn()) return; await new Promise((resolve) => setTimeout(resolve, 20)); }
   throw new Error("Timed out waiting for runtime state");
 };
-const release = (version = NIGHTLY) => ({ tag_name: `v${version}`, draft: false, prerelease: version.includes("nightly") });
-const nightlyIndex = (url) => url.includes("?per_page=");
-const registry = async (url) => {
-  if (url.endsWith("/SHA256SUMS")) {
-    const version = /\/v([^/]+)\/SHA256SUMS$/.exec(url)[1];
-    return new Response(["x64", "arm64"].map((arch) => "0".repeat(64) + `  t3-${version}-linux-${arch}.tar.gz`).join("\n"));
-  }
-  return new Response(JSON.stringify(nightlyIndex(url) ? [release()] : release("0.0.45")));
-};
+const nightlyIndex = (url) => url.endsWith('/manifests/' + channelTag('nightly'));
+const stableChecksum = (url) => url.endsWith('/manifests/' + channelTag('stable'));
+const registry = nativeRegistry().fetcher;
 async function seedDatabase(file, value) {
   const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(file);
@@ -89,8 +85,9 @@ test("managed CLI resolution parks database commands during activation", async (
 test("integrity failure never executes or publishes the download", async (t) => {
   const { paths } = await world(t);
   const pkg = await packageRelease("nightly", { fetcher: registry });
+  pkg.size = Buffer.byteLength("corrupt archive");
   let runs = 0;
-  await assert.rejects(installRelease(paths, pkg, { fetcher: async () => new Response("corrupt archive"), run: async () => { runs += 1; } }), /integrity check/);
+  await assert.rejects(installRelease(paths, pkg, { fetcher: async (url) => new Response(url.includes("/token?") ? JSON.stringify({ token: "fixture" }) : "corrupt archive"), run: async () => { runs += 1; } }), /integrity check/);
   assert.equal(runs, 0);
   assert.equal((await selectedRuntime(paths)).version, "0.0.45");
   assert.deepEqual(await fs.readdir(paths.versions), []);
@@ -124,6 +121,33 @@ test("same-channel Update preserves newer installed releases", async (t) => {
   assert.equal(await readJson(paths.operation), null);
 });
 
+test("a same-version integration uses the pinned native release even after its channel advances", async (t) => {
+  const { env, paths } = await world(t);
+  await fakeRuntime(paths, "0.0.45");
+  await writeJson(path.join(paths.versions, "0.0.45/.installed.json"), { version: "0.0.45", database: "statev2.sqlite", scopes: ["orchestration:read"] });
+  await writeJson(paths.selection, { schema: 1, channel: "stable", version: "0.0.45" });
+  const feed = nativeRegistry({ stable: "0.0.50" }), pinned = nativeRegistry({ stable: "0.0.45" });
+  for (const [url, text] of pinned.records) if (url !== manifestUrl(channelTag("stable"))) feed.records.set(url, text);
+  let installed, restarted = false;
+  const manager = createRuntimeManager({ env, fetcher: feed.fetcher, supervised: () => true, restart: async () => { restarted = true; },
+    install: async (paths, release) => {
+      installed = release;
+      const directory = releaseDirectory(paths, release);
+      await writeJson(path.join(directory, ".installed.json"), { version: release.version, patchRevision: release.patchRevision, database: "statev2.sqlite", scopes: ["orchestration:read"] });
+      return directory;
+    } });
+  assert.equal((await manager.update({ channel: "stable", version: "0.0.45" })).http, 202);
+  await waitFor(() => restarted);
+  const request = await readJson(paths.request);
+  assert.equal(installed.version, "0.0.45");
+  assert.equal(request.version, "0.0.45");
+  assert.equal(request.patchRevision, PATCH_REVISION);
+  assert.equal(request.previous.version, "0.0.45");
+  assert.ok(feed.calls.some(({ url }) => url === manifestUrl(distributionTag("0.0.45"))));
+  assert.equal(feed.calls.some(({ url }) => url === manifestUrl(channelTag("stable"))), false);
+  assert.equal((await selectedRuntime(paths)).patchRevision, null, "staging alone never changes the saved selection");
+});
+
 test("cached release checks remain available offline without selecting or installing", async (t) => {
   const { env, paths } = await world(t);
   await writeJson(paths.releases, { checkedAt: 1, channels: { stable: { version: "0.0.45" } } });
@@ -148,7 +172,7 @@ test("a failed selected channel keeps its successful timestamp across restarts",
   const { env } = await world(t);
   let offline = false;
   const options = { env, fetcher: async (url) => {
-    if (offline && url.endsWith("/latest")) throw new Error("stable offline");
+    if (offline && stableChecksum(url)) throw new Error("stable offline");
     return registry(url);
   } };
   const manager = createRuntimeManager(options);
@@ -188,14 +212,14 @@ test("switching checks report the requested channel independently of the selecte
   const calls = [];
   const manager = createRuntimeManager({ env, fetcher: async (url) => {
     calls.push(url);
-    if (url.endsWith('/latest')) throw new Error('stable offline');
+    if (stableChecksum(url)) throw new Error('stable offline');
     return registry(url);
   } });
   const [stable, nightly] = await Promise.all([manager.check(), manager.check({ channel: 'nightly' })]);
   assert.match(stable.error, /stable offline/);
   assert.equal(nightly.error, null);
   assert.equal(nightly.channels.nightly.version, NIGHTLY);
-  assert.equal(calls.length, 3, 'concurrent channel checks share GitHub requests, including the successful channel checksum');
+  assert.equal(calls.length, 4, 'concurrent channel checks share anonymous registry authentication');
   await assert.rejects(manager.check({ channel: 'preview' }), /Stable or Nightly/);
 });
 
@@ -207,11 +231,11 @@ test("legacy cached releases are shown without claiming a verified channel times
   assert.equal(status.checkedAt, null);
 });
 
-async function fakeRuntime(paths, version, mode = "ready", bundled = false, auth = {}) {
-  const dir = bundled ? path.dirname(paths.binary) : path.join(paths.versions, version);
+async function fakeRuntime(paths, version, mode = "ready", bundled = false, auth = {}, patchRevision) {
+  const dir = bundled ? path.dirname(paths.binary) : releaseDirectory(paths, { version, patchRevision });
   await fs.mkdir(dir, { recursive: true });
   await writeJson(path.join(dir, "package.json"), { version });
-  await writeJson(path.join(dir, ".installed.json"), { version });
+  await writeJson(path.join(dir, ".installed.json"), { version, ...(patchRevision ? { patchRevision } : {}) });
   const code = `#!${process.execPath}
 const fs = require('node:fs');
 const path = require('node:path');
@@ -228,6 +252,7 @@ if (process.argv[2] === 'auth') {
   return;
 }
 fs.appendFileSync(path.join(home, 'starts'), version + ' ' + process.pid + '\\n');
+fs.writeFileSync(path.join(home, 'project-environment.json'), JSON.stringify({ projectsDir: process.env.T3CODE_PROJECTS_DIR, home, version }));
 if (context.update) {
   const {DatabaseSync} = require('node:sqlite');
   const db = new DatabaseSync(path.join(home, 'userdata/statev2.sqlite'));
@@ -266,6 +291,76 @@ async function requestTrial(paths, version, channel = "nightly", database = {}) 
   process.kill(Number(await fs.readFile(path.join(paths.run, "t3.pid"), "utf8")), "SIGTERM");
   return request;
 }
+
+test("the workspace is the New project default across native release changes", async (t) => {
+  const { paths, env, root } = await world(t);
+  env.T3_WORKSPACE = path.join(root, "Work spaces 世界");
+  delete env.T3CODE_PROJECTS_DIR;
+  await seedDatabase(path.join(paths.home, "userdata/statev2.sqlite"), "original data");
+  await fakeRuntime(paths, "0.0.45", "ready", true);
+  await fakeRuntime(paths, NIGHTLY);
+  const sup = await supervisor(t, env);
+  const recorded = () => readJson(path.join(paths.home, "project-environment.json"));
+  await waitFor(async () => (await recorded())?.version === "0.0.45");
+  assert.deepEqual(await recorded(), { projectsDir: env.T3_WORKSPACE, home: paths.home, version: "0.0.45" });
+  await requestTrial(paths, NIGHTLY);
+  await waitFor(async () => (await readJson(paths.operation))?.phase === "succeeded");
+  assert.deepEqual(await recorded(), { projectsDir: env.T3_WORKSPACE, home: paths.home, version: NIGHTLY });
+  assert.doesNotThrow(() => process.kill(sup.child.pid, 0));
+});
+
+test("an explicit native New project directory takes precedence over the workspace", async (t) => {
+  const { paths, env, root } = await world(t);
+  env.T3_WORKSPACE = path.join(root, "workspace");
+  env.T3CODE_PROJECTS_DIR = path.join(root, "chosen projects");
+  await fakeRuntime(paths, "0.0.45", "ready", true);
+  await supervisor(t, env);
+  const file = path.join(paths.home, "project-environment.json");
+  await waitFor(async () => Boolean(await readJson(file)));
+  assert.deepEqual(await readJson(file), { projectsDir: env.T3CODE_PROJECTS_DIR, home: paths.home, version: "0.0.45" });
+});
+
+test("an integration update can replace the same native version without overwriting its original runtime", async (t) => {
+  const { paths, env } = await world(t);
+  await seedDatabase(path.join(paths.home, "userdata/statev2.sqlite"), "original data");
+  await fakeRuntime(paths, "0.0.45");
+  const original = await fs.readFile(path.join(paths.versions, "0.0.45/t3"));
+  await writeJson(paths.selection, { schema: 1, channel: "stable", version: "0.0.45" });
+  await fakeRuntime(paths, "0.0.45", "ready", false, {}, PATCH_REVISION);
+  await supervisor(t, env);
+  await requestTrial(paths, "0.0.45", "stable", { patchRevision: PATCH_REVISION });
+  await waitFor(async () => (await readJson(paths.operation))?.phase === "succeeded");
+  assert.equal((await readSelection(paths)).patchRevision, PATCH_REVISION);
+  assert.equal((await selectedRuntime(paths)).patchRevision, PATCH_REVISION);
+  assert.equal((await selectedRuntime(paths)).version, "0.0.45");
+  assert.deepEqual(await fs.readFile(path.join(paths.versions, "0.0.45/t3")), original);
+});
+
+test("a failed same-version integration trial restores the original runtime and database", async (t) => {
+  const { paths, env } = await world(t);
+  await seedDatabase(path.join(paths.home, "userdata/statev2.sqlite"), "original data");
+  await fakeRuntime(paths, "0.0.45");
+  const selection = { schema: 1, channel: "stable", version: "0.0.45" };
+  await writeJson(paths.selection, selection);
+  await fakeRuntime(paths, "0.0.45", "crash", false, {}, PATCH_REVISION);
+  await supervisor(t, env);
+  await requestTrial(paths, "0.0.45", "stable", { patchRevision: PATCH_REVISION });
+  await waitFor(async () => (await readJson(paths.operation))?.phase === "rolled-back");
+  assert.deepEqual(await readSelection(paths), selection);
+  assert.equal((await selectedRuntime(paths)).patchRevision, null);
+  assert.equal(await databaseContent(path.join(paths.home, "userdata/statev2.sqlite")), "original data");
+});
+
+test("runtime selection rejects invalid and mismatched patch identities", async (t) => {
+  const { paths } = await world(t);
+  await assert.rejects(Promise.resolve().then(() => releaseDirectory(paths, { version: "0.0.45", patchRevision: "../escape" })), /Invalid/);
+  await writeJson(paths.selection, { schema: 1, channel: "stable", version: "0.0.45", patchRevision: "../escape" });
+  await assert.rejects(readSelection(paths), /invalid/);
+  await fakeRuntime(paths, "0.0.45", "ready", false, {}, PATCH_REVISION);
+  await writeJson(paths.selection, { schema: 1, channel: "stable", version: "0.0.45", patchRevision: PATCH_REVISION });
+  await writeJson(path.join(releaseDirectory(paths, { version: "0.0.45", patchRevision: PATCH_REVISION }), ".installed.json"), { version: "0.0.45", patchRevision: "a".repeat(64) });
+  await assert.rejects(selectedRuntime(paths), /patch is missing/);
+});
 
 test("a ready upgrade commits without replacing the supervisor; stable can be selected again", async (t) => {
   const { paths, env } = await world(t);
@@ -358,6 +453,21 @@ test("recovery preserves a committed target even if cleanup was interrupted", as
   assert.equal((await readJson(paths.operation)).phase, "succeeded");
 });
 
+test("recovery requires the committed integration identity as well as its native version", async (t) => {
+  const { paths } = await world(t);
+  const request = { id: randomUUID(), version: "0.0.45", channel: "stable", patchRevision: PATCH_REVISION, fromVersion: "0.0.45", phase: "starting", previous: { schema: 1, channel: "stable", version: "0.0.45" } };
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await fs.writeFile(database, "committed data");
+  await writeJson(paths.request, request);
+  await writeJson(paths.selection, { schema: 1, version: request.version, channel: "stable", updateId: request.id, patchRevision: "a".repeat(64) });
+  await assert.rejects(recoverUpdate(paths), /does not match/);
+  assert.equal((await readJson(paths.request)).id, request.id);
+  await writeJson(paths.selection, { schema: 1, version: request.version, channel: "stable", updateId: request.id, patchRevision: PATCH_REVISION });
+  await recoverUpdate(paths);
+  assert.equal((await readJson(paths.operation)).phase, "succeeded");
+  assert.equal(await fs.readFile(database, "utf8"), "committed data");
+});
+
 test("a SQLite snapshot includes committed WAL data and needs no disappearing sidecars", async (t) => {
   const { paths } = await world(t);
   const { DatabaseSync } = await import("node:sqlite");
@@ -426,6 +536,25 @@ test("retired nightly caches are removed while active, previous and channel targ
   await writeJson(paths.releases, { channels: { stable: { version: "0.0.45" }, nightly: { version: NIGHTLY } } });
   await pruneRuntimes(paths, { version: NIGHTLY, previous: { version: previous } });
   assert.deepEqual((await fs.readdir(paths.versions)).sort(), ["0.0.45", previous, NIGHTLY, "unrecognized"].sort());
+});
+
+test("patch cache cleanup keeps the active, previous and channel builds without accumulating retired variants", async (t) => {
+  const { paths } = await world(t);
+  const previous = "b".repeat(64), retired = "c".repeat(64), target = "d".repeat(64), oldVersion = "0.0.44";
+  for (const revision of [PATCH_REVISION, previous, retired]) await fakeRuntime(paths, "0.0.45", "ready", false, {}, revision);
+  await fakeRuntime(paths, "0.0.45");
+  await fakeRuntime(paths, NIGHTLY, "ready", false, {}, target);
+  await fakeRuntime(paths, oldVersion, "ready", false, {}, retired);
+  const unknown = path.join(paths.versions, "0.0.45/patches", "e".repeat(64));
+  await fs.mkdir(unknown);
+  await fs.writeFile(path.join(unknown, "unrecognized"), "Keep unowned files");
+  await writeJson(paths.releases, { channels: { stable: { version: "0.0.45", patchRevision: PATCH_REVISION }, nightly: { version: NIGHTLY, patchRevision: target } } });
+  await pruneRuntimes(paths, { version: "0.0.45", patchRevision: PATCH_REVISION, previous: { version: "0.0.45", patchRevision: previous } });
+  assert.deepEqual((await fs.readdir(path.join(paths.versions, "0.0.45/patches"))).sort(), [PATCH_REVISION, previous, "e".repeat(64)].sort());
+  await fs.access(path.join(releaseDirectory(paths, { version: NIGHTLY, patchRevision: target }), "t3"));
+  await fs.access(path.join(paths.versions, "0.0.45/t3"));
+  await assert.rejects(fs.access(path.join(paths.versions, oldVersion)), { code: "ENOENT" });
+  assert.equal(await fs.readFile(path.join(unknown, "unrecognized"), "utf8"), "Keep unowned files");
 });
 
 const LEGACY = ["orchestration:read", "orchestration:operate", "terminal:operate", "access:read", "access:write"];

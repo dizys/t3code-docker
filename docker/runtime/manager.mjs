@@ -3,8 +3,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { packageRelease, unpackRelease, executableVersion } from "./releases.mjs";
-import { CHANNELS, channelOf, exactVersion, databaseName, validScopes, runtimePaths, readJson, writeJson, readSelection, selectedRuntime, operationBusy } from "./state.mjs";
+import { unpackRelease, executableVersion } from "./releases.mjs";
+import { packageRelease, releaseForVersion } from "./distribution.mjs";
+import { PATCH_REVISION } from "./distribution-spec.mjs";
+import { CHANNELS, channelOf, exactVersion, databaseName, validScopes, runtimePaths, readJson, writeJson, readSelection, selectedRuntime, releaseDirectory, operationBusy } from "./state.mjs";
 // The checkout and image deliberately have different infrastructure prefixes.
 const localHarness = new URL("../harness/", import.meta.url);
 const harnessBase = existsSync(new URL("version.mjs", localHarness)) ? localHarness : new URL("file:///opt/t3-harness/");
@@ -14,7 +16,8 @@ const [{ compareVersions }, { acquireLock, liveHolder }, { createFs }] = await P
 export { databaseBusy, operationBusy } from "./state.mjs";
 
 const execute = promisify(execFile);
-export { packageRelease, executableVersion } from "./releases.mjs";
+export { executableVersion } from "./releases.mjs";
+export { packageRelease } from "./distribution.mjs";
 const errorText = (error) => String(error?.message ?? error).slice(0, 400);
 
 /** Ask the release's own CLI which data store it opens, in a disposable home. */
@@ -33,7 +36,7 @@ export async function discoverRuntime(binary, paths, { run = execute, env = proc
 }
 
 export async function installRelease(paths, release, { fetcher = fetch, run = execute, env = process.env, bridge = "/usr/local/share/t3-client/setup-bridge.js", onPhase = async () => {} } = {}) {
-  const destination = path.join(paths.versions, release.version);
+  const destination = releaseDirectory(paths, release);
   const preflight = async (binary) => {
     const version = await run(binary, ["--version"], { timeout: 30_000 });
     if (executableVersion(version.stdout) !== release.version) throw new Error(`The executable reports a different T3 Code version (${version.stdout.trim().slice(0, 160)}).`);
@@ -43,6 +46,7 @@ export async function installRelease(paths, release, { fetcher = fetch, run = ex
   };
   const cached = await readJson(path.join(destination, ".installed.json"));
   if (cached?.version === release.version) {
+    if (release.patchRevision && cached.patchRevision !== release.patchRevision) throw new Error("The cached runtime has a different integration patch.");
     await preflight(path.join(destination, "t3"));
     if (!cached.database || !validScopes(cached.scopes)) await writeJson(path.join(destination, ".installed.json"), { ...cached, ...await discoverRuntime(path.join(destination, "t3"), paths, { run, env }) });
     return destination;
@@ -61,7 +65,8 @@ export async function installRelease(paths, release, { fetcher = fetch, run = ex
     if (!shell.includes("</body>") || !script.includes("data-t3-setup-entry") || /<\/script/i.test(script)) throw new Error("This release cannot preserve the Setup entry. The running version was kept.");
     await fs.writeFile(shellPath, shell.replace("</body>", `<script data-t3-setup-bridge>\n${script}\n</script>\n</body>`));
     const capabilities = await discoverRuntime(binary, paths, { run, env });
-    await writeJson(path.join(unpacked, ".installed.json"), { version: release.version, integrity: release.integrity, package: release.name, ...capabilities });
+    await writeJson(path.join(unpacked, ".installed.json"), { version: release.version, integrity: release.integrity, package: release.name, ...(release.patchRevision ? { patchRevision: release.patchRevision, distributionDigest: release.distributionDigest ?? null, manifestDigest: release.manifestDigest ?? null } : {}), ...capabilities });
+    await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
     await fs.rename(unpacked, destination);
     return destination;
   } finally { await fs.rm(stage, { recursive: true, force: true }); }
@@ -84,7 +89,7 @@ export function createRuntimeManager({ env = process.env, fetcher = fetch, insta
     if (channel !== undefined && !CHANNELS.includes(channel)) throw new Error("Choose Stable or Nightly.");
     checking ??= (async () => {
       await load();
-      const results = await Promise.allSettled(CHANNELS.map((channel) => packageRelease(channel, { fetcher, token: env.GITHUB_TOKEN })));
+      const results = await Promise.allSettled(CHANNELS.map((channel) => packageRelease(channel, { fetcher })));
       checkErrors = {};
       results.forEach((result, index) => {
         if (result.status === "fulfilled") {
@@ -114,7 +119,7 @@ export function createRuntimeManager({ env = process.env, fetcher = fetch, insta
     }
     const hasHistory = (name) => fs.access(path.join(paths.home, "userdata", name)).then(() => true, () => false);
     const separateHistory = await hasHistory("state.sqlite") && await hasHistory("statev2.sqlite");
-    return { ...selection, version: runtime.version, bundled: runtime.bundled, separateHistory, releases: releases.channels, checkedAt: releases.channelCheckedAt[selection.channel] ?? null, checking: Boolean(checking), checkError: checkErrors[selection.channel] ?? null, operation, supported: supervised() };
+    return { ...selection, version: runtime.version, patchRevision: runtime.patchRevision, expectedPatchRevision: PATCH_REVISION, bundled: runtime.bundled, separateHistory, releases: releases.channels, checkedAt: releases.channelCheckedAt[selection.channel] ?? null, checking: Boolean(checking), checkError: checkErrors[selection.channel] ?? null, operation, supported: supervised() };
   };
   const update = async ({ channel, version } = {}) => {
     if (!CHANNELS.includes(channel) || !exactVersion(version) || channelOf(version) !== channel) return { http: 400, body: { ok: false, error: "Choose a published Stable or Nightly release." } };
@@ -132,19 +137,20 @@ export function createRuntimeManager({ env = process.env, fetcher = fetch, insta
       const current = await selectedRuntime(paths, selection);
       if (!exactVersion(current.version)) throw new Error("This bundled T3 Code build cannot be upgraded in place. Use a Stable or Nightly container build first.");
       if (channel === selection.channel && compareVersions(version, current.version) < 0) throw new Error("Update will not downgrade the current T3 Code version.");
-      if (version === current.version && channel === selection.channel) { preparing = false; await lock.release(); return { http: 200, body: { ok: true, current: true } }; }
+      if (version === current.version && channel === selection.channel && current.patchRevision === PATCH_REVISION) { preparing = false; await lock.release(); return { http: 200, body: { ok: true, current: true } }; }
+      const integrationOnly = version === current.version && channel === selection.channel;
       operation = { id: randomUUID(), phase: "checking", channel, version, fromVersion: current.version, startedAt: Date.now() };
       await writeJson(paths.operation, operation);
       const phase = async (name) => { operation.phase = name; await writeJson(paths.operation, operation); };
       void (async () => {
         try {
-          const release = await packageRelease(channel, { fetcher, token: env.GITHUB_TOKEN });
+          const release = integrationOnly ? await releaseForVersion(version, { fetcher }) : await packageRelease(channel, { fetcher });
           if (release.version !== version) throw new Error("A newer release was published. Check for updates again before installing.");
           const directory = await install(paths, release, { fetcher, env, bridge: env.T3_SETUP_BRIDGE, onPhase: phase });
           const installed = await readJson(path.join(directory, ".installed.json"));
           const previous = current.database && current.scopes ? current : await discoverRuntime(current.binary, paths, { env });
           if (!databaseName(installed.database) || !validScopes(installed.scopes)) throw new Error("The staged release has no valid authentication capabilities.");
-          operation = { ...operation, fromDatabase: previous.database, targetDatabase: installed.database, fromScopes: previous.scopes, targetScopes: installed.scopes };
+          operation = { ...operation, ...(release.patchRevision ? { patchRevision: release.patchRevision } : {}), fromDatabase: previous.database, targetDatabase: installed.database, fromScopes: previous.scopes, targetScopes: installed.scopes };
           if (!supervised()) throw new Error("T3 Code stopped while the update was downloading. The saved selection was kept.");
           await phase("stopping");
           await writeJson(paths.request, { ...operation, previous: selection });

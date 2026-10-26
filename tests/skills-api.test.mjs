@@ -96,6 +96,10 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
     assert.equal((await post("/context/skills/" + operation, {}, { "sec-fetch-site": "cross-site" })).status, 403);
     assert.equal((await post("/context/skills/" + operation, null)).status, 400);
   }
+  // Reset the intentional login throttle between authorization groups using
+  // the real login route; cumulative guessing delays are tested elsewhere.
+  const login = await fetch(base + "/login", { method: "POST", headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ key: "skills-fixture-key" }) });
+  assert.equal((await login.json()).ok, true);
   assert.equal((await post("/context/skills/source", { source: "file:///etc/passwd" })).status, 400);
   const importSource = path.join(home, "source/imported/SKILL.md");
   await fs.mkdir(path.dirname(importSource), { recursive: true });

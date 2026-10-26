@@ -8,7 +8,8 @@ Environment variables (all optional except where noted):
 | `T3CODE_PORT` | `3773` | Server port inside the container |
 | `T3CODE_HOST` | `0.0.0.0` | Bind interface inside the container |
 | `T3CODE_HOME` | `/home/t3/.t3` | State directory (`userdata/state.sqlite`) |
-| `T3_WORKSPACE` | `/workspace` | Absolute workspace directory, scanned for projects and used as T3's initial folder for browsing and cloning repositories |
+| `T3_WORKSPACE` | `/workspace` | Absolute workspace directory, scanned for projects and used for New project, browsing and repository cloning defaults |
+| `T3CODE_PROJECTS_DIR` | `T3_WORKSPACE` | Override the native New project directory independently of the workspace |
 | `T3_AUTO_ADD_PROJECTS` | `1` | Register each git checkout under the workspace |
 | `T3_PRINT_PAIRING_ON_START` | `0` | Create a pairing link at startup and print it to the log |
 | `T3_PREINSTALL` | `default` | What the first start installs onto the volume: `default` (Claude Code, Codex, OpenCode and the toolchains), `all` (every agent and toolchain), `agents`, `toolchains`, `source-control` (glab, fj, tea, az), ids like `claude,go,glab`, or `none`. They combine (`default,source-control`); one on its own replaces the default |
@@ -35,10 +36,15 @@ preference, are kept across restarts. Changing `T3_WORKSPACE` updates the defaul
 only while it is still managed by the image. Explicit clone destinations always
 take precedence.
 
-T3's **New project** action currently creates repositories in
-`$T3CODE_HOME/projects`, independently of that preference. Changing this action
-requires native T3 support; the image does not move existing projects or redirect
-that directory.
+**New project** creates repositories directly in `T3_WORKSPACE`, unless
+`T3CODE_PROJECTS_DIR` is explicitly set. Existing projects keep their paths;
+T3 state, credentials and scratch folders continue to use `T3CODE_HOME`.
+
+The image maintains its own small T3 source patch for this behavior. Stable and
+Nightly updates use verified builds of that patch. An existing selected upstream
+runtime remains usable after an image upgrade; **Setup → Updates** offers the
+integration update, including when its native version stays the same. See
+[T3 Code updates](t3code-updates.md).
 
 Installed agents and toolchains live under `/home/t3/.local/share/mise`, so they
 persist when the whole home directory is mounted. With only the state directory

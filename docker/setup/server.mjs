@@ -2272,8 +2272,9 @@ const autoTick = async () => {
       if (idle && !await autoBusyReason().catch(() => "busy")) {
         try {
           const selection = await runtimeManager.status();
-          const release = selection?.releases?.[selection.channel]?.version;
-          if (selection.supported && release && selection.version && release !== selection.version) {
+          const target = selection?.releases?.[selection.channel], release = target?.version;
+          const integrationUpdate = release === selection?.version && target?.patchRevision === selection.expectedPatchRevision && target.patchRevision !== selection.patchRevision;
+          if (selection.supported && release && selection.version && (release !== selection.version || integrationUpdate)) {
             const result = await runtimeManager.update({ channel: selection.channel, version: release });
             if (result.http === 202) {
               await persist({ lastT3RunAt: Date.now(), lastResult: `Started T3 Code update to ${release}` });

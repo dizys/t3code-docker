@@ -717,6 +717,8 @@ html.tc-locked { overflow: hidden; }
 .tc-toaster > .tc-toast { pointer-events: auto; transition: opacity var(--dur-base), translate var(--dur-base); }
 .tc-toaster > .tc-toast[data-leaving] { opacity: 0; translate: 0 6px; }
 .tc-toast .tc-btn { margin: -6px -4px -6px 4px; }
+/* A retained error must not cover the actions when its retry opens a modal. */
+.tc-root:has(.tc-layer [role="alertdialog"][aria-modal="true"]) .tc-toaster { display: none; }
 @media (max-width: 1023.98px) {
   .tc-toaster { left: 16px; right: 16px; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 12px); align-items: center; }
 }

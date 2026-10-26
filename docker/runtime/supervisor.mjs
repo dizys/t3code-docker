@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CHANNELS, exactVersion, databaseName, validScopes, runtimePaths, readJson, writeJson, readSelection, selectedRuntime } from "./state.mjs";
+import { CHANNELS, exactVersion, databaseName, validScopes, validPatchRevision, runtimePaths, readJson, writeJson, readSelection, selectedRuntime } from "./state.mjs";
 
 const sqlite = /\.(?:sqlite3?|db)(?:-wal|-shm|-journal)?$/;
 const exists = async (file) => { try { await fs.access(file); return true; } catch (error) { if (error.code === "ENOENT") return false; throw error; } };
@@ -90,6 +90,7 @@ export function validateRequest(request) {
   }
   if ((request.fromDatabase !== undefined && !databaseName(request.fromDatabase)) || (request.targetDatabase !== undefined && !databaseName(request.targetDatabase))) throw new Error("Invalid upgrade database path.");
   if ((request.fromScopes !== undefined && !validScopes(request.fromScopes)) || (request.targetScopes !== undefined && !validScopes(request.targetScopes))) throw new Error("Invalid upgrade authentication capabilities.");
+  if ((request.patchRevision !== undefined && !validPatchRevision(request.patchRevision)) || (request.previous.patchRevision !== undefined && !validPatchRevision(request.previous.patchRevision))) throw new Error("Invalid runtime integration patch.");
   return request;
 }
 
@@ -173,9 +174,20 @@ export async function pruneRuntimes(paths, request) {
   const releases = await readJson(paths.releases);
   const keep = new Set([request.version, request.previous?.version, ...CHANNELS.map((channel) => releases?.channels?.[channel]?.version)]);
   for (const entry of await fs.readdir(paths.versions, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !exactVersion(entry.name) || keep.has(entry.name)) continue;
+    if (!entry.isDirectory() || !exactVersion(entry.name)) continue;
     const dir = path.join(paths.versions, entry.name);
-    if ((await readJson(path.join(dir, ".installed.json")))?.version === entry.name) await fs.rm(dir, { recursive: true, force: true });
+    const patches = await fs.readdir(path.join(dir, "patches"), { withFileTypes: true }).catch((error) => { if (error.code === "ENOENT") return []; throw error; });
+    const recognized = (await readJson(path.join(dir, ".installed.json")))?.version === entry.name;
+    let patched = false;
+    for (const patch of patches) {
+      if (!patch.isDirectory() || !validPatchRevision(patch.name)) continue;
+      const target = path.join(dir, "patches", patch.name), installed = await readJson(path.join(target, ".installed.json"));
+      if (installed?.version !== entry.name || installed.patchRevision !== patch.name) continue;
+      patched = true;
+      const retained = [request, request.previous, ...CHANNELS.map((channel) => releases?.channels?.[channel])].some((release) => release?.version === entry.name && release.patchRevision === patch.name);
+      if (keep.has(entry.name) && !retained) await fs.rm(target, { recursive: true, force: true });
+    }
+    if (!keep.has(entry.name) && (recognized || patched)) await fs.rm(dir, { recursive: true, force: true });
   }
 }
 
@@ -184,10 +196,10 @@ export async function recoverUpdate(paths) {
   if (!pending) return;
   const request = validateRequest(pending);
   const selection = await readSelection(paths);
-  if (selection.updateId === request.id && selection.version === request.version) {
+  if (selection.updateId === request.id && selection.version === request.version && selection.patchRevision === request.patchRevision) {
     await writeJson(paths.operation, { ...request, previous: undefined, phase: "succeeded", finishedAt: Date.now() });
   } else {
-    if (selection.version !== request.previous.version || selection.channel !== request.previous.channel) throw new Error("The pending upgrade does not match T3 Code's saved selection.");
+    if (selection.version !== request.previous.version || selection.channel !== request.previous.channel || selection.patchRevision !== request.previous.patchRevision) throw new Error("The pending upgrade does not match T3 Code's saved selection.");
     if (["starting", "restoring"].includes(request.phase)) {
       await writeJson(paths.request, { ...request, phase: "restoring" });
       await restoreDatabase(paths, request.id);
@@ -216,7 +228,9 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
   const launch = async (runtime, update = null) => {
     if (stopping) throw new Error("The container is stopping.");
     const process_ = spawn(runtime.binary, args, {
-      env: { ...env, T3_SERVICE_LAUNCHER_CONTEXT: JSON.stringify({ protocol: 3, childVersion: runtime.version, ...(update ? { update } : {}) }) },
+      env: { ...env,
+        ...(env.T3_WORKSPACE && !env.T3CODE_PROJECTS_DIR?.trim() ? { T3CODE_PROJECTS_DIR: env.T3_WORKSPACE } : {}),
+        T3_SERVICE_LAUNCHER_CONTEXT: JSON.stringify({ protocol: 3, childVersion: runtime.version, ...(update ? { update } : {}) }) },
       stdio: ["inherit", "inherit", "inherit", "ipc"],
     });
     const done = new Promise((resolve) => {
@@ -276,7 +290,7 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
       snapshot = true;
       await phase("starting");
       await syncAuthentication(paths, request);
-      const runtime = await selectedRuntime(paths, { version: request.version });
+      const runtime = await selectedRuntime(paths, { version: request.version, patchRevision: request.patchRevision });
       if (request.targetDatabase) {
         // DDL equality does not guarantee that the release can decode its
         // scopes or client metadata. Its own CLI validates both copied tables
@@ -295,7 +309,7 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
       child = await launch(runtime, { id: request.id, fromVersion: request.fromVersion, targetVersion: request.version, dbPath: path.join(paths.home, "userdata", request.targetDatabase || "statev2.sqlite"), status: "pending" });
       await child.prepared;
       if (stopping) return;
-      await writeJson(paths.selection, { schema: 1, channel: request.channel, version: request.version, updateId: request.id });
+      await writeJson(paths.selection, { schema: 1, channel: request.channel, version: request.version, ...(request.patchRevision ? { patchRevision: request.patchRevision } : {}), updateId: request.id });
       committed = true;
       await new Promise((resolve, reject) => child.process.send({ type: "committed", updateId: request.id }, (error) => error ? reject(error) : resolve()));
       await fs.rm(paths.backup, { recursive: true, force: true });

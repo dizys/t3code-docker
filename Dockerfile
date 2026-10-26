@@ -17,6 +17,9 @@
 # See README.md for the runtime contract.
 
 ARG NODE_IMAGE=node:24-trixie-slim
+ARG T3_BUILD_NODE_IMAGE=node:26.12.1-trixie-slim
+
+FROM ${T3_BUILD_NODE_IMAGE} AS t3-build-node
 
 # ---------------------------------------------------------------------------
 # base - OS packages, trust anchors, the unprivileged user
@@ -200,6 +203,27 @@ RUN set -eux; \
 # base), and the harness installer. No baked harness executables, no baked
 # language runtimes, no browser.
 # ---------------------------------------------------------------------------
+FROM base AS t3-native-build
+COPY --from=t3-build-node /usr/local/bin/node /usr/local/bin/node
+COPY docker/runtime/ /src/docker/runtime/
+COPY scripts/build-t3-runtime.mjs /src/scripts/build-t3-runtime.mjs
+# The one bundled version pin; scripts/bump-versions.sh refreshes it.
+ARG T3_VERSION=0.1.2
+ARG TARGETARCH
+ENV npm_config_store_dir=/var/cache/pnpm
+RUN --mount=type=cache,target=/var/cache/pnpm set -eux; \
+    corepack enable; \
+    case "$TARGETARCH" in amd64) arch=x64 ;; arm64) arch=arm64 ;; *) exit 1 ;; esac; \
+    node /src/scripts/build-t3-runtime.mjs "$T3_VERSION" "$arch" /out/runtime; \
+    stem="t3-${T3_VERSION}-linux-${arch}"; \
+    mv /out/runtime "/out/${stem}"; \
+    tar --sort=name --mtime=@0 --owner=0 --group=0 -czf "/out/${stem}.tar.gz" -C /out "$stem"; \
+    mv "/out/${stem}" /out/runtime; \
+    cd /out; sha256sum "${stem}.tar.gz" > SHA256SUMS
+
+FROM scratch AS t3-runtime-artifact
+COPY --from=t3-native-build /out/*.tar.gz /out/SHA256SUMS /
+
 FROM base AS core
 
 # The non-browser union: everything the old full target installed via apt except
@@ -213,11 +237,6 @@ RUN set -eux; \
         postgresql-client redis-tools; \
     rm -rf /var/lib/apt/lists/*
 
-# Pinned so a rebuild is reproducible; `scripts/bump-versions.sh` refreshes it
-# against published releases. The agent harnesses are not baked and therefore carry
-# no pins here: the harness installer resolves and records an exact version on
-# explicit install.
-ARG T3_VERSION=0.1.2
 ARG TARGETARCH
 
 # T3 Code is image infrastructure. Its platform distribution installs into a
@@ -228,16 +247,11 @@ ENV T3_INFRA_PREFIX=/opt/t3 \
     T3_INFRA_BINARY=/opt/t3/t3 \
     T3_INFRA_LAUNCHER=/usr/local/bin/t3-admin
 
-# Upstream's npm platform packages are frozen. Install the exact GitHub CLI
-# archive and verify SHA256SUMS with the same implementation Setup uses.
+# The native builder applies our source patch to the exact upstream release.
+# Compiler dependencies stay in that stage; only its runtime enters the image.
 COPY docker/runtime/ /opt/t3-runtime/
+COPY --from=t3-native-build /out/runtime/ /opt/t3/
 RUN set -eux; \
-    case "$TARGETARCH" in \
-      amd64) t3_arch=x64 ;; \
-      arm64) t3_arch=arm64 ;; \
-      *) echo "unsupported T3 architecture: $TARGETARCH" >&2; exit 1 ;; \
-    esac; \
-    "$T3_INFRA_NODE" /opt/t3-runtime/install.mjs "$T3_VERSION" "$t3_arch" "$T3_INFRA_PREFIX"; \
     # Root-owned and not group/other writable: the t3 user runs the server and
     # must never be able to modify it.
     chown -R root:root "$T3_INFRA_PREFIX"; \

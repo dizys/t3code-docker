@@ -809,7 +809,7 @@
     const view = M.updatesView(s, ui, n);
     const rt = view.runtime;
     const rows = [
-      ...(rt && (rt.available || rt.busy) ? [{ runtime: true, key: 't3', name: 'T3 Code', version: rt.version, latest: rt.busy ? rt.operation.version : rt.latest, state: rt.busy ? 'running' : 'update' }] : []),
+      ...(rt && (rt.available || rt.busy) ? [{ runtime: true, key: 't3', name: rt.integrationUpdate ? 'T3 Code integration' : 'T3 Code', version: rt.version, latest: rt.versionTo, state: rt.busy ? 'running' : 'update' }] : []),
       ...view.available,
     ];
     const shown = rows.slice(0, 4);
@@ -1488,16 +1488,17 @@
     const view = M.runtimeView(s);
     if (!view) return '';
     const checking = ui.runtimeChecking || view.checking;
-    const busy = view.busy || checking;
+    const submitting = Boolean(ui.runtimeSubmitting);
+    const busy = view.busy || checking || submitting;
     const channelName = view.channel === 'nightly' ? 'Nightly' : 'Stable';
-    const targetVersion = view.busy && view.operation.version ? view.operation.version : view.available ? view.latest : null;
-    const state = view.busy ? view.phaseText : checking ? 'Checking for updates' : view.available ? channelName + ' update available'
-      : view.checkError ? 'Couldn’t check for updates' : view.verified ? 'Up to date' : 'Not checked yet';
+    const targetVersion = view.versionTo;
+    const state = view.busy ? view.phaseText : submitting ? 'Starting update' : checking ? 'Checking for updates' : view.integrationUpdate ? 'Container integration update available' : view.available ? channelName + ' update available'
+      : view.checkError ? 'Couldn’t check for updates' : view.integrationMissing ? 'Check for a container integration update' : view.verified ? 'Up to date' : 'Not checked yet';
     return html`<div class="tc-group tc-runtime" data-key="runtime">
       <div class="tc-row tc-runtime-row">
         <span class="tc-row-lead tc-mark tc-runtime-mark" aria-hidden="true"></span>
         <div class="tc-row-main" role="status" aria-live="polite">
-          <div class="tc-row-title"><span class="tc-row-name">T3 Code</span><span class="tc-version">${view.version || 'unknown version'}${targetVersion ? html` <span class="tc-version-arrow" aria-label="to">→</span> ${targetVersion}` : ''}</span>${busy ? html`<span class="tc-badge tc-badge--info"><span class="tc-spinner" aria-hidden="true"></span>${view.busy ? 'Updating' : 'Checking'}</span>` : ''}</div>
+          <div class="tc-row-title"><span class="tc-row-name">T3 Code</span><span class="tc-version">${view.version || 'unknown version'}${targetVersion ? html` <span class="tc-version-arrow" aria-label="to">→</span> ${targetVersion}` : ''}</span>${busy ? html`<span class="tc-badge tc-badge--info"><span class="tc-spinner" aria-hidden="true"></span>${view.busy || submitting ? 'Updating' : 'Checking'}</span>` : ''}</div>
           <span class="tc-status">${view.available || view.busy ? '' : view.checkError ? dot('warn') : ''}<span class="tc-status-text"><span>${state}</span>${view.checkedAt && !busy ? ' · checked ' + M.relTime(view.checkedAt, now()) : ''}</span></span>
         </div>
         <div class="tc-row-actions">${view.available || view.error ? html`<button class="tc-btn tc-btn--primary tc-btn--sm" type="button" data-cmd="t3.update" data-channel="${view.error ? view.operation.channel : view.channel}"${busy || !view.supported || !view.latest ? raw(' disabled') : ''}>${view.error ? 'Retry update' : 'Update and restart'}</button>` : ''}</div>
@@ -2861,7 +2862,7 @@
     }
   };
   const updateRuntime = async (channel = state.status?.t3?.runtime?.channel) => {
-    if (M.runtimeView(state.status)?.busy || ui.runtimeChecking) return;
+    if (M.runtimeView(state.status)?.busy || ui.runtimeChecking || ui.runtimeSubmitting) return;
     const checked = await checkRuntime({ channel });
     if (checked?.errors?.[channel]) {
       Kit.toast('Could not check ' + (channel === 'nightly' ? 'Nightly' : 'Stable') + ' releases', { tone: 'danger', detail: checked.errors[channel] });
@@ -2871,10 +2872,11 @@
     if (!target) return;
     const current = state.status?.t3?.runtime;
     const switching = current?.channel !== channel;
+    const integrationUpdate = !switching && target === current?.version && checked.channels[channel].patchRevision !== current?.patchRevision;
     const name = channel === 'nightly' ? 'Nightly' : 'Stable';
     const ok = await Kit.confirm({
-      title: switching ? 'Switch to ' + name + '?' : 'Update T3 Code?',
-      body: html`Install <span class="tc-runtime-target tc-mono tc-mono--body">${target}</span> and restart T3 Code. The container keeps running.`,
+      title: switching ? 'Switch to ' + name + '?' : integrationUpdate ? 'Install T3 integration update?' : 'Update T3 Code?',
+      body: integrationUpdate ? html`Apply the container integration and restart T3 Code. Your version stays <span class="tc-runtime-target tc-mono tc-mono--body">${target}</span> on ${name}.` : html`Install <span class="tc-runtime-target tc-mono tc-mono--body">${target}</span> and restart T3 Code. The container keeps running.`,
       consequences: [
         ...(channel === 'nightly' && switching ? [{ icon: 'moon', text: 'Nightly gives you new features earlier and can be less reliable.' }] : []),
         { icon: 'circle-stop', text: 'Active agent turns and T3 Code terminals stop. Open apps reconnect.' },
@@ -2885,11 +2887,15 @@
       confirm: switching ? 'Switch and restart' : 'Update and restart', tone: 'primary',
     });
     if (!ok) return;
-    const response = await api('/t3/update', { body: { channel, version: target } });
-    if (!response.ok) { Kit.toast('Could not update T3 Code', { tone: 'danger', detail: response.error }); return; }
-    if (response.data.current) Kit.toast('T3 Code is already up to date');
-    else { runtimePending = response.data.operation.id; Kit.toast('T3 Code update started', { tone: 'info', detail: 'The current version keeps running while the download is verified.' }); }
-    await loadStatus();
+    ui.runtimeSubmitting = true;
+    render();
+    try {
+      const response = await api('/t3/update', { body: { channel, version: target } });
+      if (!response.ok) { Kit.toast('Could not update T3 Code', { tone: 'danger', detail: response.error }); return; }
+      if (response.data.current) Kit.toast('T3 Code is already up to date');
+      else { runtimePending = response.data.operation.id; Kit.toast('T3 Code update started', { tone: 'info', detail: 'The current version keeps running while the download is verified.' }); }
+      await loadStatus();
+    } finally { ui.runtimeSubmitting = false; render(); }
   };
 
   const restartT3 = async () => {

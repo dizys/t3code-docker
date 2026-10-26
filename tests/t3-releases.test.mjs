@@ -6,10 +6,11 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
-import { archiveStem, archiveChecksum, packageRelease, releaseForVersion, unpackRelease, validateArchive } from "../docker/runtime/releases.mjs";
+import { archiveStem, archiveChecksum, packageRelease, releaseForVersion, unpackRelease, validateArchive, fetchRelease } from "../docker/runtime/releases.mjs";
 import { installRelease } from "../docker/runtime/manager.mjs";
 import { installImageRelease } from "../docker/runtime/install.mjs";
 import { runtimePaths, readJson, writeJson } from "../docker/runtime/state.mjs";
+import { PATCH_REVISION, distributionBlob } from "../docker/runtime/distribution-spec.mjs";
 
 const execute = promisify(execFile);
 const VERSION = "0.1.1-nightly.20261019.3348";
@@ -24,12 +25,12 @@ async function world(t) {
   return root;
 }
 
-async function fixture(t, { manifest, banner = VERSION, compatible = true, link = false } = {}) {
+async function fixture(t, { manifest, banner = VERSION, compatible = true, link = false, native = false, revision = PATCH_REVISION } = {}) {
   const root = await world(t);
   const stem = archiveStem(VERSION);
   const contents = path.join(root, stem);
   await fs.mkdir(path.join(contents, "client"), { recursive: true });
-  if (manifest) await writeJson(path.join(contents, "package.json"), { name: "t3-runtime", version: manifest });
+  if (manifest || native) await writeJson(path.join(contents, "package.json"), { name: "t3-runtime", version: manifest || VERSION, ...(native ? { containerPatch: { revision, source: "a".repeat(40), upstreamIntegrity: "sha256-" + "b".repeat(64) } } : {}) });
   await fs.writeFile(path.join(contents, "client/index.html"), "<html><body>client</body></html>");
   await fs.writeFile(path.join(contents, "t3"), `#!${process.execPath}
 const fs = require('node:fs');
@@ -48,14 +49,67 @@ else if (process.argv[2] === 'auth') {
   await execute("/usr/bin/tar", ["-czf", file, "-C", root, stem]);
   const bytes = await fs.readFile(file);
   const release = { version: VERSION, name: "t3-runtime", root: stem, url: `https://github.com/pingdotgg/t3code/releases/download/v${VERSION}/${stem}.tar.gz`, integrity: `sha256-${createHash("sha256").update(bytes).digest("hex")}` };
+  if (native) { release.patchRevision = PATCH_REVISION; release.url = distributionBlob(release.integrity.replace("sha256-", "sha256:")); }
   const env = { ...process.env, T3CODE_HOME: path.join(root, "home") };
   const bridge = path.join(root, "bridge.js");
   await fs.writeFile(bridge, 'console.log("data-t3-setup-entry");');
-  return { root, release, env, bridge, bytes, fetcher: async (url) => new Response(url.endsWith("/SHA256SUMS") ? `${release.integrity.slice(7)}  ${stem}.tar.gz\n` : bytes), paths: runtimePaths(env) };
+  return { root, release, env, bridge, bytes, fetcher: async (url) => new Response(url.includes("/token?") ? JSON.stringify({ token: "fixture" }) : url.endsWith("/SHA256SUMS") ? `${release.integrity.slice(7)}  ${stem}.tar.gz\n` : bytes), paths: runtimePaths(env) };
 }
 
 const MiB = 1024 * 1024;
 const space = (available) => ({ bavail: available, bsize: 1 });
+
+test("a patched build stages separately from the same unpatched version and records its provenance", async (t) => {
+  const f = await fixture(t, { native: true });
+  const old = path.join(f.paths.versions, VERSION);
+  await fs.mkdir(old, { recursive: true });
+  await fs.writeFile(path.join(old, "t3"), "Keep the original runtime");
+  await writeJson(path.join(old, ".installed.json"), { version: VERSION });
+  const target = await installRelease(f.paths, f.release, f);
+  assert.equal(target, path.join(old, "patches", PATCH_REVISION));
+  assert.equal((await readJson(path.join(target, ".installed.json"))).patchRevision, PATCH_REVISION);
+  assert.equal(await fs.readFile(path.join(old, "t3"), "utf8"), "Keep the original runtime");
+  assert.equal(await readJson(f.paths.selection), null);
+});
+
+test("an archive with a valid checksum but a different native patch never executes or becomes selectable", async (t) => {
+  const f = await fixture(t, { native: true, revision: "c".repeat(64) });
+  let executed = false;
+  await assert.rejects(installRelease(f.paths, f.release, { ...f, run: async (command, args, options) => {
+    if (command !== "/usr/bin/tar") { executed = true; throw new Error("Native code must not run"); }
+    return execute(command, args, options);
+  } }), /patch metadata/);
+  assert.equal(executed, false);
+  assert.equal(await readJson(f.paths.selection), null);
+  assert.deepEqual(await fs.readdir(f.paths.versions), []);
+});
+
+test("verified OCI archive sizes bound downloads even when the storage response has no length", async (t) => {
+  const f = await fixture(t, { native: true });
+  for (const size of [f.bytes.length - 1, f.bytes.length + 1]) {
+    const stage = await fs.mkdtemp(path.join(f.root, "size-"));
+    await assert.rejects(unpackRelease(stage, { ...f.release, size }, f), /declared size/);
+  }
+  const stage = await fs.mkdtemp(path.join(f.root, "size-header-"));
+  await assert.rejects(unpackRelease(stage, { ...f.release, size: f.bytes.length }, { fetcher: async (url) => new Response(url.includes("/token?") ? JSON.stringify({ token: "fixture" }) : f.bytes, { headers: url.includes("/token?") ? {} : { "content-length": String(f.bytes.length + 1) } }) }), /verified archive size/);
+  const target = await installRelease(f.paths, { ...f.release, size: f.bytes.length }, f);
+  await fs.access(path.join(target, "t3"));
+});
+
+test("anonymous native pull credentials never follow a storage redirect", async () => {
+  const url = distributionBlob("sha256:" + "a".repeat(64)), cdn = "https://pkg-containers.githubusercontent.com/signed-runtime?temporary=fixture";
+  const calls = [];
+  const response = await fetchRelease(url, { fetcher: async (target, options) => {
+    calls.push({ target, options });
+    if (target.includes("/token?")) return new Response(JSON.stringify({ token: "public-only" }));
+    if (target === url) return new Response(null, { status: 307, headers: { location: cdn } });
+    assert.equal(target, cdn);
+    return new Response("archive");
+  }, token: "must-not-use-user-token" });
+  assert.equal(await response.text(), "archive");
+  assert.equal(calls[1].options.headers.authorization, "Bearer public-only");
+  assert.equal(calls[2].options.headers.authorization, undefined);
+});
 
 test("a full state volume refuses staging before requesting an archive and keeps live state", async (t) => {
   const f = await fixture(t);

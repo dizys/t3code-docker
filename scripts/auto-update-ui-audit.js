@@ -70,7 +70,9 @@ const geometry = () => {
       let updates = { refreshing: false, manual: false, errors: {} }, checkRequests = 0, startFailure = false;
       let holdStatus = null;
       let rustReply = 'fail', rustRequests = 0, rustStarted, finishRust;
+      let runtimeReply = 'fail', runtimeRequests = 0, runtimeStarted, finishRuntime;
       const runtime = { ...fixture.t3?.runtime, channel: 'stable', version: '0.1.0',
+        expectedPatchRevision: null, patchRevision: null,
         releases: { stable: { version: '0.1.0' }, nightly: { version: '0.1.1-nightly.20261017.1' } }, checkedAt: 1, checking: false,
         checkError: "GitHub's release API rate limit was reached. Try checking again later; the running version was kept.", operation: null, supported: true };
 
@@ -113,6 +115,14 @@ const geometry = () => {
           const row = fixture.toolchains.find(t => t.id === 'rust');
           Object.assign(row, { failed: false, failure: null, latestVersion: '1.99.1', newestVersion: null, operationState: 'ok' });
           return route.fulfill({ json: { ok: true, changed: false, message: 'Rust 1.99.1 is already up to date.' } });
+        }
+        if (method === 'POST' && url.pathname.endsWith('/t3/update')) {
+          runtimeRequests++;
+          assert.deepEqual(route.request().postDataJSON(), { channel: runtime.channel, version: runtime.version }, 'an integration update keeps the exact native version and channel');
+          if (runtimeReply === 'fail') return route.fulfill({ status: 503, json: { ok: false, error: 'The runtime registry is temporarily unavailable. The running version was kept.' } });
+          await new Promise((resolve) => { finishRuntime = resolve; runtimeStarted(); });
+          runtime.operation = { id: 'integration-fixture', phase: 'downloading', channel: runtime.channel, version: runtime.version, patchRevision: runtime.expectedPatchRevision };
+          return route.fulfill({ status: 202, json: { ok: true, operation: runtime.operation } });
         }
         return route.continue();
       });
@@ -373,6 +383,55 @@ const geometry = () => {
       await control().click();
       await card.getByText('Up to date', { exact: true }).waitFor();
       await finishCheck();
+
+      const savedRuntime = structuredClone(runtime), savedServerVersion = fixture.server.version;
+      Object.assign(runtime, { channel: 'nightly', version: '0.1.3-nightly.20261026.3710', expectedPatchRevision: 'a'.repeat(64),
+        releases: { stable: { version: '0.1.2', patchRevision: 'a'.repeat(64) }, nightly: { version: '0.1.3-nightly.20261026.3710', patchRevision: 'a'.repeat(64) } } });
+      fixture.server.version = runtime.version;
+      await refreshStatus();
+      await card.getByText('Container integration update available', { exact: true }).waitFor();
+      assert.equal(await card.locator('.tc-version-arrow').count(), 0, 'same-version integration has no duplicate version arrow');
+      await check('same-version integration ready');
+      await host.screenshot({ path: path.join(output, `${tag}-integration-ready.png`) });
+      await card.getByRole('button', { name: 'Update and restart', exact: true }).click();
+      const integrationDialog = page.getByRole('alertdialog', { name: 'Install T3 integration update?' });
+      await integrationDialog.waitFor();
+      assert.match(await integrationDialog.innerText(), /Your version stays.*on Nightly/s);
+      assert.equal(await page.locator('#toaster').evaluate(el => getComputedStyle(el).display), 'none', 'earlier notifications cannot paint over the confirmation');
+      await check('same-version integration confirmation');
+      await host.screenshot({ path: path.join(output, `${tag}-integration-update.png`) });
+      await integrationDialog.screenshot({ path: path.join(output, `${tag}-integration-confirmation.png`) });
+      await integrationDialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await integrationDialog.waitFor({ state: 'hidden' });
+      assert.equal(runtimeRequests, 0, 'cancelling never submits an update');
+      await card.getByRole('button', { name: 'Update and restart', exact: true }).click();
+      await integrationDialog.getByRole('button', { name: 'Update and restart', exact: true }).click();
+      await page.getByText('Could not update T3 Code', { exact: true }).waitFor();
+      assert.equal(runtimeRequests, 1);
+      await page.waitForFunction(() => document.querySelector('[data-cmd="t3.update"]')?.disabled === false);
+      runtimeReply = 'hold';
+      const startedRuntime = new Promise(resolve => { runtimeStarted = resolve; });
+      await card.getByRole('button', { name: 'Update and restart', exact: true }).click();
+      await integrationDialog.getByRole('button', { name: 'Update and restart', exact: true }).click();
+      await startedRuntime;
+      try {
+        await card.getByText('Starting update', { exact: true }).waitFor();
+        assert.equal(await card.getByRole('button', { name: 'Update and restart', exact: true }).isDisabled(), true);
+        assert.equal(await card.getByRole('button', { name: 'Stable', exact: true }).isDisabled(), true);
+        await host.keyboard.press('Enter');
+        await refreshStatus();
+        assert.equal(runtimeRequests, 2, 'a pending submission cannot be repeated by keyboard or polls');
+        await check('integration submission');
+      } finally { finishRuntime(); }
+      await card.getByText('Downloading', { exact: true }).waitFor();
+      assert.equal(await card.locator('.tc-version-arrow').count(), 0);
+      runtime.patchRevision = runtime.expectedPatchRevision;
+      runtime.operation = { ...runtime.operation, phase: 'succeeded' };
+      await refreshStatus();
+      await card.getByText('Up to date', { exact: true }).waitFor();
+      await page.getByText('T3 Code updated', { exact: true }).waitFor();
+      Object.assign(runtime, savedRuntime);
+      fixture.server.version = savedServerVersion;
 
       // An older cache and failed click can describe the same Rust failure.
       // Keep one error, never offer a channel as a version, and keep feedback

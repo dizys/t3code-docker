@@ -165,10 +165,17 @@
    */
   const paletteOwnsFirst = ({ before = 0, virtualActions = false } = {}) => before === 0 && !virtualActions;
 
+  /** T3 tracks its own visual selection; primitive hover/ARIA may name an unpainted row. */
+  const paletteActiveIndex = (rows) => {
+    const marked = rows.findIndex((row) => row.hasAttribute('data-active') && row.getAttribute('data-active') !== 'false');
+    if (marked >= 0) return marked;
+    return rows.findIndex((row) => /(^|\s)bg-\S+!(\s|$)/.test(row.className));
+  };
+
   if (typeof document === 'undefined') {
     globalThis.T3SetupBridge = {
       PROBE_PATHS, isSettingsPath, embedUrl, readHello, badgeText, entryLabel, fromConsole,
-      PALETTE_ITEMS, paletteMatches, paletteStep, paletteOwnsFirst,
+      PALETTE_ITEMS, paletteMatches, paletteStep, paletteOwnsFirst, paletteActiveIndex,
     };
     return;
   }
@@ -200,13 +207,14 @@
     'html.dark .t3-setup-pill:hover{border-color:rgba(255,255,255,.36);color:#fff;}',
     '.t3-setup-pill svg{width:13px;height:13px;flex:none;}',
     // The entry: its own list after T3's, set apart by a rule.
-    '.t3-setup-list{margin-top:2px;padding-top:var(--sidebar-content-inset,.5rem);',
+    '.t3-setup-list{container:t3-setup-entry / inline-size;margin-top:2px;padding-top:var(--sidebar-content-inset,.5rem);',
     'border-top:1px solid var(--sidebar-border,var(--border,rgba(0,0,0,.08)));}',
     '.t3-setup-badge{margin-left:auto;flex:none;min-width:18px;height:18px;padding:0 5px;border-radius:999px;',
     'display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;line-height:1;',
     'font-variant-numeric:tabular-nums;color:var(--warning-foreground,#b45309);',
     'background:var(--warning-surface,rgba(245,158,11,.12));}',
     '.t3-setup-badge[hidden]{display:none;}',
+    '@container t3-setup-entry (max-width:80px){.t3-setup-badge{display:none;}}',
     // The dialog: T3's own (a frosted backdrop over its background colour, a
     // large rounded panel, scale and fade), full screen on a phone.
     '.t3-setup-layer{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;}',
@@ -354,10 +362,15 @@
   };
 
   // ---------------------------------------------------------------- entry --
-  /** T3's settings list in each sidebar drawn now (a phone draws it in a sheet). */
-  const settingsMenus = () => [...document.querySelectorAll('[data-sidebar="content"]')]
-    .map((content) => content.querySelector('[data-sidebar="menu"]'))
-    .filter((menu) => menu && !menu.hasAttribute(ENTRY) && menu.querySelector('[data-sidebar="menu-button"]'));
+  /** Use Settings' last navigation group, excluding its compact search menu and results. */
+  const settingsMenus = () => {
+    const nav = document.querySelector('nav[aria-label="Settings sections"]');
+    const contents = (nav || document).querySelectorAll('[data-sidebar="content"]');
+    return [...contents].map((content) => [...content.querySelectorAll('[data-sidebar="menu"]')]
+      .filter((menu) => !menu.hasAttribute(ENTRY) && menu.getAttribute('role') !== 'listbox'
+        && menu.querySelector('[data-sidebar="menu-button"]'))
+      .at(-1)).filter(Boolean);
+  };
 
   /** A Setup row made from T3's own last row, so it is styled exactly as T3's are. */
   const buildEntry = (menu) => {
@@ -591,10 +604,7 @@
   // T3's active row, as T3 draws it: with a forced background class (bg-accent!).
   // Before its first arrow key after a search it has none, though Enter would
   // still take its first row.
-  const theirActive = (rows) => {
-    const active = rows.findIndex((row) => row.hasAttribute('data-active'));
-    return active >= 0 ? active : rows.findIndex((row) => /(^|\s)bg-\S+!(\s|$)/.test(row.className));
-  };
+  const theirActive = (rows) => paletteActiveIndex(rows);
   const ourGroup = () => palette.dialog && palette.dialog.querySelector('[data-t3-setup-palette]');
   const subPage = () => {
     const footer = palette.dialog.querySelector('[data-slot="command-footer"]');
@@ -753,8 +763,7 @@
     palette.dialog.toggleAttribute('data-t3-setup-owns', palette.own >= 0);
     const mine = rows[palette.own];
     const theirRowList = theirRows();
-    const theirs = theirRowList.find((row) => row.hasAttribute('data-active'))
-      || theirRowList.find((row) => row.hasAttribute('data-highlighted'));
+    const theirs = theirRowList[theirActive(theirRowList)];
     const active = mine ? mine.id : theirs ? theirs.id : '';
     if (active && palette.input.getAttribute('aria-activedescendant') !== active) palette.input.setAttribute('aria-activedescendant', active);
     if (mine) mine.scrollIntoView({ block: 'nearest' });
@@ -762,7 +771,15 @@
 
   const syncPalette = () => {
     if (!palette.dialog) return;
-    if (!palette.dialog.isConnected || !palette.input.isConnected) return detachPalette();
+    if (!palette.dialog.isConnected) return detachPalette();
+    if (!palette.input.isConnected) {
+      // T3 can remount its input while asynchronous search state arrives. Its
+      // focus event may precede the combobox role, so recover through the DOM.
+      const replacement = palette.dialog.querySelector('input[role="combobox"]');
+      if (replacement) attachPalette(replacement);
+      else removeGroup();
+      return;
+    }
     const query = palette.input.value;
     const items = state.base && state.paired === true && !subPage() ? paletteMatches(query) : [];
     if (!items.length) {
@@ -813,7 +830,7 @@
     Object.assign(palette, { dialog, input, items: [], own: -1, chosen: false, query: null });
     // T3 redraws its list as results arrive; put Setup's group back each time.
     palette.watch = new MutationObserver(schedulePalette);
-    palette.watch.observe(dialog, { childList: true, subtree: true });
+    palette.watch.observe(dialog, { childList: true, subtree: true, attributes: true, attributeFilter: ['role'] });
     schedulePalette();
   };
 

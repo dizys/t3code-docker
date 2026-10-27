@@ -167,6 +167,32 @@ test("Setup does not take the first highlight from T3's virtualized Actions", ()
   assert.equal(B.paletteOwnsFirst({ before: 0, virtualActions: false }), true);
 });
 
+const nativeRow = (id, attributes = {}, className = "") => ({
+  id, className,
+  hasAttribute: (name) => Object.hasOwn(attributes, name),
+  getAttribute: (name) => attributes[name] ?? null,
+});
+
+test("native palette navigation uses T3's painted selection rather than the primitive default", () => {
+  const initial = [nativeRow("native-first", { "data-highlighted": "", "aria-selected": "true" }), nativeRow("native-next")];
+  assert.equal(B.paletteActiveIndex(initial), -1, "a primitive default is not T3's painted highlight");
+  assert.equal(B.paletteStep({ key: "ArrowDown", own: 0, ours: 1, theirs: initial.length, at: -1, before: 0 }).pass, true,
+    "leaving Setup must let T3 paint its first native row");
+  const rows = [nativeRow("native-first", { "data-active": "true" }), nativeRow("native-next")];
+  const at = B.paletteActiveIndex(rows);
+  assert.equal(at, 0);
+  const next = B.paletteStep({ key: "ArrowUp", own: -1, ours: 1, theirs: rows.length, at, before: 0 });
+  assert.equal(next.own, 0);
+  assert.equal(next.pass, false, "ArrowUp from the first native row returns to Setup");
+});
+
+test("false native active flags are ignored and older palette styles remain supported", () => {
+  assert.equal(B.paletteActiveIndex([nativeRow("inactive", { "data-active": "false" }), nativeRow("active", { "data-active": "" })]), 1);
+  assert.equal(B.paletteActiveIndex([nativeRow("old", {}, "p-2 bg-accent! text-accent-foreground!")]), 0);
+  assert.equal(B.paletteActiveIndex([nativeRow("plain", { "data-highlighted": "false" })]), -1);
+  assert.equal(B.paletteActiveIndex([]), -1);
+});
+
 test("the build step injects the bridge once, before </body>, or fails loudly", () => {
   const dir = mkdtempSync(join(tmpdir(), "t3-client-"));
   const shell = join(dir, "index.html");

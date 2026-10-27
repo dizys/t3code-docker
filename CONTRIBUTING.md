@@ -22,6 +22,10 @@ Issues and pull requests are welcome. Before opening one:
   `docker/t3-client/setup-bridge.js`, and prints a pairing link.
   `scripts/setup-bridge-audit.js` checks those pages in a browser, through the
   same router.
+  It covers grouped Settings navigation, its compact phone rail, native search,
+  the older sidebar sheet, and opening/closing Setup with focus restored.
+  Set `T3_BRIDGE_UI_OUTPUT=/tmp/t3-bridge-ui` to save desktop and phone
+  screenshots in both themes.
   `node scripts/console-screens.js` photographs every setup page in light and
   dark, on a phone, a tablet, a desktop and inside T3 Code, in three states:
   set up, first start, and everything needing attention at once. Its data

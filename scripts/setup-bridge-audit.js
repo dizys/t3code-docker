@@ -8,6 +8,7 @@
  *   T3_PAIR_CREDENTIAL   a pairing credential for this T3 (`t3 auth pairing create`)
  *   --bridge FILE        serve T3's shell with this bridge instead of the one
  *                        built into it, to try a working copy against an image
+ *   T3_BRIDGE_UI_OUTPUT  optional light/dark desktop and phone screenshots
  *
  * The console is only reachable from T3 Code when one origin serves both, so
  * this starts that origin itself, with the image's own one-port router
@@ -20,7 +21,7 @@
  *   - opens the console in a dialog, signed in on its T3 session, in T3's
  *     theme, with the rest of the page inert;
  *   - closes it with Escape and gets focus back on the entry;
- *   - on a phone, opens it from T3's sidebar sheet as a full-screen dialog;
+ *   - on a phone, opens it from the Settings rail or older sidebar sheet as a full-screen dialog;
  * and the console refuses a state change that did not come from its own
  * origin, even with a valid T3 session.
  *
@@ -45,6 +46,8 @@ const T3 = new URL(arg("--t3", "http://127.0.0.1:3773"));
 const SETUP = new URL(arg("--setup", "http://127.0.0.1:3774"));
 const BRIDGE = arg("--bridge", null);
 const CREDENTIAL = process.env.T3_PAIR_CREDENTIAL || "";
+const OUTPUT = process.env.T3_BRIDGE_UI_OUTPUT;
+if (OUTPUT) fs.mkdirSync(OUTPUT, { recursive: true });
 const CHROME = process.env.CHROME_PATH
   || (fs.existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
 
@@ -122,6 +125,20 @@ const visit = async (page, url) => {
 
 const ENTRY = "[data-t3-setup-entry] button";
 const settingsRow = (label) => `[data-sidebar="menu-button"]:not([data-t3-setup-entry] *):text-is("${label}")`;
+const captureSettings = async (page, name) => {
+  if (!OUTPUT) return;
+  fs.mkdirSync(OUTPUT, { recursive: true });
+  await page.locator(ENTRY).scrollIntoViewIfNeeded();
+  const wasDark = await page.evaluate(() => document.documentElement.classList.contains("dark"));
+  try {
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), theme === "dark");
+      await page.screenshot({ path: path.join(OUTPUT, `settings-${name}-${theme}.png`), animations: "disabled" });
+    }
+  } finally {
+    await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), wasDark);
+  }
+};
 
 const run = async (base) => {
   const browser = await chromium.launch({
@@ -130,10 +147,11 @@ const run = async (base) => {
     // would then refuse T3's WebSocket to a loopback address.
     args: ["--no-sandbox", "--disable-features=LocalNetworkAccessChecks"],
   });
+  let page;
   try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     await useBridge(context);
-    const page = await context.newPage();
+    page = await context.newPage();
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
 
@@ -170,7 +188,9 @@ const run = async (base) => {
       const last = rows[rows.length - 1].getBoundingClientRect();
       const mine = entry.querySelector("button").getBoundingClientRect();
       return {
-        after: list.getAttribute("data-sidebar") === "menu",
+        after: list.getAttribute("data-sidebar") === "menu"
+          && list === [...entry.closest('[data-sidebar="content"]').querySelectorAll('[data-sidebar="menu"]')]
+            .filter((menu) => !menu.hasAttribute('data-t3-setup-entry') && menu.getAttribute('role') !== 'listbox').at(-1),
         height: [Math.round(last.height), Math.round(mine.height)],
         left: [Math.round(last.left), Math.round(mine.left)],
         width: [Math.round(last.width), Math.round(mine.width)],
@@ -179,10 +199,22 @@ const run = async (base) => {
         popup: entry.querySelector("button").getAttribute("aria-haspopup"),
       };
     });
-    expect(geometry.after && geometry.below, "it comes after T3's own settings list");
+    expect(geometry.after && geometry.below, "it comes after T3's own settings list", JSON.stringify(geometry));
     expect(geometry.height[0] === geometry.height[1] && geometry.left[0] === geometry.left[1] && geometry.width[0] === geometry.width[1],
       "it is drawn exactly like T3's rows", JSON.stringify(geometry));
     expect(/^Setup/.test(geometry.label) && geometry.popup === "dialog", "it says what it is and that it opens a dialog", JSON.stringify(geometry));
+    await captureSettings(page, "desktop");
+
+    const settingsSearch = page.locator('nav[aria-label="Settings sections"] input[aria-label="Search settings"]');
+    if (await settingsSearch.count()) {
+      await settingsSearch.fill("general");
+      await page.locator('[role="listbox"][aria-label="Settings search results"]').waitFor();
+      await page.locator(ENTRY).waitFor({ state: "detached" });
+      expect(await page.locator(ENTRY).count() === 0, "Setup does not copy native search-result rows");
+      await settingsSearch.fill("");
+      await page.locator(ENTRY).waitFor();
+      expect(await page.locator(ENTRY).count() === 1, "clearing Settings search restores one Setup entry");
+    }
 
     const hello = await page.evaluate(() => fetch("/__setup/hello").then((r) => r.json()));
     expect(hello.signedIn === true, "the console accepts this browser's T3 session", JSON.stringify(hello));
@@ -279,10 +311,15 @@ const run = async (base) => {
     });
     const search = async (query, { setupRows = true } = {}) => {
       await closePalette();
-      await page.keyboard.press("Control+k");
+      // The native Search button is ready with the sidebar, independently of
+      // the asynchronous keybinding preferences on a newly loaded client.
+      const openSearch = page.getByRole("button", { name: /^Search/ }).first();
+      if (await openSearch.count()) await openSearch.click();
+      else await page.keyboard.press("Control+k");
       await page.locator(PALETTE + ' input[role="combobox"]').fill(query, { timeout: 5000 });
       if (setupRows) await page.locator(PALETTE + " [data-t3-setup-item]").first().waitFor({ state: "visible", timeout: 5000 });
       await page.waitForTimeout(600);
+      if (setupRows) await page.locator(PALETTE + " [data-t3-setup-item]").first().waitFor({ state: "visible", timeout: 5000 });
       return rows();
     };
     const dialogRoute = async () => {
@@ -315,11 +352,16 @@ const run = async (base) => {
     expect(found && found.ours.join() === "pair" && found.ourLit === 0, "\"pair\" offers Pair a device", JSON.stringify(found));
     if (found.theirs) {
       await page.keyboard.press("ArrowDown");
-      await page.waitForTimeout(200);
+      await page.waitForFunction(() => {
+        const dialog = document.querySelector('[data-command-palette="true"]');
+        return dialog && !dialog.hasAttribute('data-t3-setup-owns')
+          && [...dialog.querySelectorAll('[data-slot="command-item"]:not([data-t3-setup-item])')]
+            .some(row => row.hasAttribute('data-active') && getComputedStyle(row).backgroundColor !== 'rgba(0, 0, 0, 0)');
+      });
       const down = await rows();
       expect(down.ourLit === -1 && down.theirLitPainted === true, "ArrowDown moves on to T3's own results", JSON.stringify(down));
       await page.keyboard.press("ArrowUp");
-      await page.waitForTimeout(200);
+      await page.locator(PALETTE + ' [data-t3-setup-item][data-highlighted]').waitFor();
       const up = await rows();
       expect(up.ourLit === 0 && up.theirLitPainted !== true, "and ArrowUp back to Setup's", JSON.stringify(up));
     } else {
@@ -374,6 +416,25 @@ const run = async (base) => {
     }
     await closePalette();
 
+    // Replace the native input as an isolated final scenario: React retains
+    // references to the original node, so close this page after the assertion.
+    await search("mise");
+    await page.locator(PALETTE + ' input[role="combobox"]').evaluate((input) => {
+      const next = input.cloneNode(true);
+      next.value = input.value;
+      next.removeAttribute('role');
+      next.setAttribute('data-audit-remount', '');
+      document.querySelector('[data-t3-setup-palette]')?.remove();
+      input.replaceWith(next);
+      next.focus();
+    });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await page.locator(PALETTE + ' [data-t3-setup-palette]').waitFor({ state: 'detached' });
+    await page.locator(PALETTE + ' input[data-audit-remount]').evaluate((input) => input.setAttribute('role', 'combobox'));
+    await page.locator(PALETTE + ' [data-t3-setup-item="toolchains"]').waitFor();
+    expect((await rows()).ours.join() === 'toolchains', "Setup recovers when native search replaces its input before the combobox role");
+    await page.close();
+
     console.log("The console's own guard");
     // Asked from here rather than from the page, which cannot set Sec-Fetch-Site.
     const cookies = (await context.cookies()).filter((c) => c.name.startsWith("t3_session")).map((c) => `${c.name}=${c.value}`).join("; ");
@@ -399,11 +460,31 @@ const run = async (base) => {
     });
     await useBridge(phone);
     const mobile = await phone.newPage();
-    await mobile.goto(base + "/settings/general");
-    await mobile.waitForSelector('[data-sidebar="trigger"]', { timeout: 20000 });
-    await mobile.locator('[data-sidebar="trigger"]').first().click();
+    page = mobile;
+    await visit(mobile, base + "/settings/general");
+    const modernSettings = await mobile.locator('nav[aria-label="Settings sections"]').waitFor({ timeout: 5000 })
+      .then(() => true, () => false);
+    if (!modernSettings) {
+      await mobile.waitForSelector('[data-sidebar="trigger"]', { timeout: 20000 });
+      await mobile.locator('[data-sidebar="trigger"]').first().click();
+    }
     await mobile.waitForSelector(ENTRY, { timeout: 10000 }).catch(() => null);
-    expect(await mobile.locator(ENTRY).count() === 1, "T3's sidebar sheet has the entry too");
+    expect(await mobile.locator(ENTRY).count() === 1, "T3's phone settings navigation has the entry too");
+    await mobile.locator(ENTRY).scrollIntoViewIfNeeded();
+    if (modernSettings) {
+      const compact = await mobile.locator(ENTRY).evaluate((button) => {
+        const row = button.getBoundingClientRect(), icon = button.querySelector('svg').getBoundingClientRect();
+        const nativeRows = button.closest('[data-t3-setup-entry]').previousElementSibling.querySelectorAll('[data-sidebar="menu-button"]');
+        const nativeIcon = nativeRows[nativeRows.length - 1].querySelector('svg').getBoundingClientRect();
+        return { width: row.width, iconInside: icon.left >= row.left && icon.right <= row.right,
+          aligned: Math.abs(icon.left - nativeIcon.left) <= 1 && Math.abs(icon.width - nativeIcon.width) <= 1,
+          badgeHidden: getComputedStyle(button.querySelector('.t3-setup-badge')).display === 'none',
+          label: button.getAttribute('aria-label') };
+      });
+      expect(compact.width > 0 && compact.iconInside && compact.aligned && compact.badgeHidden && /^Setup/.test(compact.label),
+        "the compact Settings rail matches native icons and keeps its accessible label", JSON.stringify(compact));
+    }
+    await captureSettings(mobile, "phone");
     await mobile.locator(ENTRY).tap();
     await mobile.waitForSelector(".t3-setup-layer[data-ready]", { timeout: 20000 }).catch(() => null);
     const sheet = await mobile.evaluate(() => {
@@ -413,18 +494,36 @@ const run = async (base) => {
     });
     expect(sheet.open && sheet.full, "it opens full screen", JSON.stringify(sheet));
     // T3's sheet animates out; it must be gone once that is over.
-    const sheetGone = await mobile.waitForFunction(() => !document.querySelector('[data-mobile="true"]'), null, { timeout: 3000 })
-      .then(() => true, () => false);
-    expect(sheetGone, "having closed T3's sheet, as T3's own rows do");
+    if (!modernSettings) {
+      const sheetGone = await mobile.waitForFunction(() => !document.querySelector('[data-mobile="true"]'), null, { timeout: 3000 })
+        .then(() => true, () => false);
+      expect(sheetGone, "having closed T3's sheet, as T3's own rows do");
+    }
     const phoneFrame = mobile.frames().find((f) => f.url().includes("/__setup/"));
     await phoneFrame.waitForSelector('.tc-phonebar [data-cmd="embed.close"]', { timeout: 15000 });
     await phoneFrame.locator('.tc-phonebar [data-cmd="embed.close"]').tap();
     await mobile.waitForSelector(".t3-setup-layer", { state: "detached", timeout: 5000 }).catch(() => null);
     expect(await mobile.locator(".t3-setup-layer").count() === 0, "its close button closes it");
+    if (modernSettings) {
+      expect(await mobile.locator('nav[aria-label="Settings sections"]').isVisible(), "closing Setup returns to the native Settings modal");
+      expect(await mobile.locator(ENTRY).evaluate((button) => document.activeElement === button), "phone focus returns to Setup in the Settings rail");
+    }
     await phone.close();
 
     expect(errors.length === 0, "no script errors on T3's pages", errors.join("\n    "));
     await context.close();
+  } catch (error) {
+    if (OUTPUT && page) {
+      await page.screenshot({ path: path.join(OUTPUT, "failure.png"), animations: "disabled", timeout: 5000 }).catch(() => {});
+      fs.writeFileSync(path.join(OUTPUT, "failure.json"), JSON.stringify(await page.evaluate(() => ({
+        path: location.pathname,
+        settings: Boolean(document.querySelector('nav[aria-label="Settings sections"]')),
+        layers: [...document.querySelectorAll('.t3-setup-layer')].map(node => ({ state: node.dataset.state, ready: node.hasAttribute('data-ready'), inert: node.inert })),
+        active: document.activeElement?.getAttribute('aria-label'),
+        palette: document.querySelector('[data-command-palette="true"]')?.outerHTML,
+      })).catch(() => ({})), null, 2));
+    }
+    throw error;
   } finally {
     await browser.close();
   }

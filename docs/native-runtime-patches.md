@@ -17,6 +17,12 @@ client, native modules and resource monitor. Its manifest records the patch
 revision, upstream source commit and original archive checksum. Compiler
 dependencies remain outside the final image.
 
+Linux ARM64 runners use upstream's native `build-exe` command without a
+cross-build target, retaining its SEA injection workaround for 16/64 KiB page
+kernels. The builder reads that path's `dist-exe/t3` output; explicit targets
+use the platform-named output. Keep the build Node version aligned with the
+upstream release's declared version for native ARM64 compilation.
+
 Compilation loads the exact tag's checked-in `.env.example`, allowing only the
 four public Clerk and relay settings that enable T3 Connect. It excludes local
 environment files and operator build overrides. These public defaults require

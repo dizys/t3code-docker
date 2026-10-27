@@ -12,6 +12,17 @@ import { PATCH_REVISION } from "../docker/runtime/distribution-spec.mjs";
 import { files, applySourcePatches } from "../docker/runtime/patches/index.mjs";
 
 const execute = promisify(execFile);
+export function executableBuildPlan(arch, { platform = process.platform, hostArch = process.arch } = {}) {
+  if (!["x64", "arm64"].includes(arch)) throw new Error("Choose a supported Linux runtime architecture.");
+  // Upstream's native ARM64 path injects SEA into the host binary so it works
+  // on 16/64 KiB page kernels. An explicit --target bypasses that workaround.
+  const nativeArm = platform === "linux" && hostArch === "arm64" && arch === "arm64";
+  return {
+    args: ["pnpm", "exec", "node", "apps/server/scripts/cli.ts", "build-exe", ...(nativeArm ? [] : ["--target", `linux-${arch}`])],
+    output: nativeArm ? "t3" : `t3-linux-${arch}`,
+  };
+}
+
 // These values are explicitly public in upstream's checked-in .env.example.
 // Do not build from the operator's environment or copy unrelated env fields.
 export function publicBuildEnvironment(example) {
@@ -76,8 +87,9 @@ export async function buildRuntime(version, arch, destination, { run = execute, 
       await fs.writeFile(name, JSON.stringify({ ...pkg, version }, null, 2) + "\n");
     }
     console.error("[t3-runtime] compiling the patched server");
-    await command("corepack", ["pnpm", "exec", "node", "apps/server/scripts/cli.ts", "build-exe", "--target", `linux-${arch}`], { env: buildEnvironment });
-    await fs.copyFile(path.join(checkout, `apps/server/dist-exe/t3-linux-${arch}`), path.join(unpacked, "t3"));
+    const build = executableBuildPlan(arch);
+    await command("corepack", build.args, { env: buildEnvironment });
+    await fs.copyFile(path.join(checkout, "apps/server/dist-exe", build.output), path.join(unpacked, "t3"));
     await fs.chmod(path.join(unpacked, "t3"), 0o755);
     const containerPatch = { revision: PATCH_REVISION, source: commit, upstreamIntegrity: release.integrity };
     const manifest = { name: "t3-runtime", version, distribution: release.url, integrity: release.integrity, containerPatch };

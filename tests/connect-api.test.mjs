@@ -41,7 +41,9 @@ if (args[0] === 'connect' && args[1] === 'status') {
   try { await fs.access(root + '/fail-status'); process.exit(1); } catch {}
   console.log(JSON.stringify({ desired: true, authenticated: true, linked: true }));
 } else if (args[0] === 'connect' && args[1] === 'link') {
-  await fs.writeFile(root + '/link-args', JSON.stringify(args));
+  // The parent waits for this file to appear. Publish only complete JSON.
+  await fs.writeFile(root + '/link-args.tmp', JSON.stringify(args));
+  await fs.rename(root + '/link-args.tmp', root + '/link-args');
   console.log('Open this URL on a device with a browser:\\nhttps://fixture.invalid/device\\nConfirm this code when asked: TEST-CODE');
   setInterval(() => {}, 1000);
 } else if (args[0] === 'auth' && args[2] === 'issue') {

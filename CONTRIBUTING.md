@@ -150,12 +150,20 @@ the tested digests into one manifest without rebuilding. `latest` points at
 [Docker Hub publishing](docs/dockerhub-publishing.md).
 
 `node scripts/files-ui-audit.js http://127.0.0.1:23785/__setup/ dev` checks Files
-against synthetic in-memory paths. It covers desktop, tablet, phone, narrow phone
-and embedded layouts in both themes, including selection, polling, late replies,
-previews, Sizes, managed paths and permission/missing states. Screenshots go to
+against synthetic in-memory paths. It covers desktop, laptop, tablet, phone,
+narrow phone and embedded layouts in both themes, including 800px and 1100px
+frames inside a larger window. It checks toolbar grouping, filename space,
+wrapping badges, deep paths, resize and scroll preservation, selection, polling,
+late replies, previews, Sizes, managed paths and permission/missing states.
+Screenshots go to
 `/tmp/t3-files-ui-audit` (`T3_FILES_UI_OUTPUT` overrides it). Use the existing
 Playwright installation through `NODE_PATH` and `CHROME_PATH`, as above. It cannot
 read or change the production filesystem.
+
+`T3_FILES_UI_LAYOUT_ONLY=1` runs the focused Files layout cases, including
+Details open/closed, long labels and paths, and Sizes. The default run retains
+the full interaction checks. `T3_FILES_UI_VARIANTS=laptop,embedded-modal,embedded-compact`
+narrows either run while iterating on a constrained console.
 
 `node scripts/files-space-ui-audit.js URL KEY` checks archive and cleanup flows.
 It reads the console document from that URL and serves its download fixture over

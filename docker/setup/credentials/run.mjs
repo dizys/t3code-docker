@@ -53,7 +53,7 @@ export async function sshRequest(profile, command, { stdout = process.stdout, st
   return code;
 }
 
-export async function apiRequest(profile, method, relative, { body, stdout = process.stdout, probe = false, signal = AbortSignal.timeout(30000) } = {}) {
+export async function apiRequest(profile, method, relative, { body, stdout = process.stdout, stderr = process.stderr, probe = false, signal = AbortSignal.timeout(30000) } = {}) {
   if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new CredentialError('Use GET, HEAD, POST, PUT, PATCH or DELETE.');
   const target = apiTarget(profile, relative);
   try {
@@ -66,7 +66,10 @@ export async function apiRequest(profile, method, relative, { body, stdout = pro
     if (probe) {
       await response.body?.cancel();
       if (!response.ok) throw new CredentialError('The API did not accept the request (HTTP ' + response.status + '). Check the address and authentication settings.', 502);
-    } else if (response.body) await pump(Readable.fromWeb(response.body), value => stdout.write(value), profile.secret);
+    } else {
+      if (response.body) await pump(Readable.fromWeb(response.body), value => stdout.write(value), profile.secret);
+      if (!response.ok) stderr.write('HTTP ' + response.status + '\n');
+    }
     return response.ok ? 0 : 1;
   } catch (error) {
     if (error instanceof CredentialError) throw error;

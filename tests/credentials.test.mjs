@@ -198,3 +198,23 @@ setTimeout(()=>{process.stdout.write(secret.slice(5)+' done');process.stderr.wri
   if (interrupted.signalCode === null && interrupted.exitCode === null) await once(interrupted, 'close');
   assert.equal(interrupted.signalCode, 'SIGTERM');
 });
+
+test('SSH hosts accept IPv6 addresses including leading ::', async t => {
+  const { store } = await fixture(t);
+  for (const host of ['::1', '::', '2001:db8::1']) {
+    await create(store, { ...ssh, id: 'v6-' + host.length, host });
+  }
+  await assert.rejects(create(store, { ...ssh, id: 'bad-host', host: '-oProxyCommand=bad' }));
+});
+
+test('API helper reports HTTP status on stderr for non-probe failures without the secret', async t => {
+  const server = createServer((req, res) => { res.writeHead(401); res.end(secret); });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const profile = { id: 'project-api', type: 'api', baseUrl: 'http://127.0.0.1:' + server.address().port + '/api/', secret };
+  let output = '', error = '';
+  assert.equal(await apiRequest(profile, 'GET', 'projects', { stdout: { write: value => { output += value; } }, stderr: { write: value => { error += value; } } }), 1);
+  assert.equal(output, '[redacted]');
+  assert.match(error, /HTTP 401/);
+  assert.equal((output + error).includes(secret), false);
+});

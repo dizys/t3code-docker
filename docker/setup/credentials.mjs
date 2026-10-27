@@ -3,6 +3,7 @@
 import * as fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
+import { isIP } from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
 
 export class CredentialError extends Error {
@@ -32,7 +33,7 @@ function normalize(input, previous) {
   if (!text(secret, 8192)) fail('Enter a password or API key of up to 8192 characters, without line breaks.');
   const profile = { id: input.id, label: input.label.trim(), type: input.type, secret };
   if (input.type === 'ssh') {
-    if (!text(input.host, 253) || !/^[a-zA-Z0-9][a-zA-Z0-9.:-]*$/.test(input.host)) fail('Enter a hostname or IP address, without a username or port.');
+    if (!text(input.host, 253) || !(isIP(input.host) || /^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(input.host))) fail('Enter a hostname or IP address, without a username or port.');
     if (!text(input.username, 64) || !/^[a-zA-Z_][a-zA-Z0-9_.-]*\$?$/.test(input.username)) fail('Enter a valid SSH username.');
     if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) fail('Enter an SSH port from 1 to 65535.');
     Object.assign(profile, { host: input.host, username: input.username, port: input.port });

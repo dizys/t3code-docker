@@ -24,6 +24,7 @@ export const STYLES = ["design/tokens.css", "design/components.css", "console.cs
 export const CONSOLE_SCRIPTS = [
   "client/base.js",
   "design/ui.js",
+  "client/appearance.js",
   "client/routes.js",
   "client/model.js",
   "client/kit.js",
@@ -52,7 +53,7 @@ export const CONSOLE_SCRIPTS = [
   "client/files.js",
   "app.js",
 ];
-export const UNLOCK_SCRIPTS = ["client/base.js", "design/ui.js", "client/unlock.js"];
+export const UNLOCK_SCRIPTS = ["client/base.js", "design/ui.js", "client/appearance.js", "client/unlock.js"];
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -74,7 +75,11 @@ const { T3Routes: ROUTES } = runClassic(["client/routes.js"], ["T3Routes"]);
  * rather than shipping a page whose script ends early.
  */
 export function loadAssets() {
-  const css = STYLES.map((path) => `/* ${path} */\n${read(path)}`).join("\n");
+  // The native client uses Inter Variable. Inline its Latin subset too, keeping
+  // the console's single-response delivery and system/CJK fallback fonts.
+  const inter = readFileSync(new URL("design/fonts/inter-latin-variable.woff2", import.meta.url)).toString("base64");
+  const font = `@font-face{font-family:"Inter Variable";font-style:normal;font-weight:100 900;font-display:swap;src:url(data:font/woff2;base64,${inter}) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}`;
+  const css = [font, ...STYLES.map((path) => `/* ${path} */\n${read(path)}`)].join("\n");
   if (/<\/style/i.test(css)) throw new Error("a stylesheet contains </style and cannot be inlined");
   const script = (path) => {
     const code = read(path);
@@ -116,6 +121,7 @@ export const contentSecurityPolicy = (nonce) => [
   "default-src 'none'",
   `script-src 'nonce-${nonce}'`,
   "style-src 'unsafe-inline'",
+  "font-src data:",
   "img-src data: blob:",
   "frame-src blob:",
   "connect-src 'self'",
@@ -190,7 +196,12 @@ export function renderConsole({ assets, nonce, mount, embed = false }) {
     </div>
   </nav>
   <main class="tc-main" id="main" tabindex="-1">
-${embed ? `    <div class="tc-embed-corner">${CLOSE}</div>` : ""}
+    <header class="tc-topbar tc-console-topbar">
+      <nav aria-label="Breadcrumb"><ol class="tc-crumbs"><li><a href="#overview">Setup</a></li><li id="current-page" aria-current="page">Overview</li></ol></nav>
+      <span class="tc-spacer"></span>
+      <a class="tc-btn tc-btn--ghost tc-btn--icon" id="page-guide" href="${ROUTES.docUrl('setup-page.md')}" target="_blank" rel="noopener" aria-label="Overview guide"><i data-icon="info"></i></a>
+${embed ? `      <div class="tc-embed-corner">${CLOSE}</div>` : ""}
+    </header>
     <header class="tc-phonebar">
       <span class="tc-wordmark" aria-label="T3 Code"><span>Code</span></span><span class="tc-badge tc-badge--outline tc-badge--sm">Setup</span>
       <span class="tc-spacer"></span>

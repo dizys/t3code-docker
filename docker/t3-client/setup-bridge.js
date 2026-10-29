@@ -172,10 +172,34 @@
     return rows.findIndex((row) => /(^|\s)bg-\S+!(\s|$)/.test(row.className));
   };
 
+  // The wire format uses native names. The console maps these roles onto its
+  // own components and accepts only supported literal colors and font lists.
+  const APPEARANCE_COLORS = ['background', 'card', 'popover', 'muted', 'foreground', 'muted-foreground',
+    'placeholder', 'border', 'input', 'primary', 'primary-foreground', 'update-foreground', 'ring', 'accent',
+    'sidebar', 'sidebar-foreground', 'sidebar-muted-foreground', 'sidebar-border', 'sidebar-row-hover',
+    'sidebar-row-active', 'sidebar-row-selected', 'sidebar-control-surface', 'warning', 'warning-foreground',
+    'warning-surface', 'destructive', 'destructive-foreground', 'error-surface', 'success', 'success-foreground',
+    'info', 'info-foreground'];
+  // These are the adjusted roles used by native index.css's @theme mapping.
+  // Primary and semantic feedback colors intentionally stay unadjusted.
+  const APPEARANCE_CONTRAST = new Set(['foreground', 'muted-foreground', 'placeholder', 'border', 'input',
+    'sidebar-foreground', 'sidebar-muted-foreground', 'sidebar-border']);
+  const appearanceFromStyles = (styles) => {
+    const read = name => styles.getPropertyValue('--' + name).trim();
+    const colors = {};
+    for (const name of APPEARANCE_COLORS) {
+      const value = (APPEARANCE_CONTRAST.has(name) && read('contrast-' + name)) || read(name);
+      if (value) colors[name] = value;
+    }
+    return { version: 1, colors, fonts: { sans: read('font-sans'), mono: read('font-mono'), smoothing: styles.getPropertyValue('-webkit-font-smoothing').trim() },
+      fontSize: styles.fontSize, radius: read('control-radius') };
+  };
+
   if (typeof document === 'undefined') {
     globalThis.T3SetupBridge = {
       PROBE_PATHS, isSettingsPath, embedUrl, readHello, badgeText, entryLabel, fromConsole,
       PALETTE_ITEMS, paletteMatches, paletteStep, paletteOwnsFirst, paletteActiveIndex,
+      APPEARANCE_COLORS, appearanceFromStyles,
     };
     return;
   }
@@ -217,16 +241,15 @@
     '@container t3-setup-entry (max-width:80px){.t3-setup-badge{display:none;}}',
     // The dialog: T3's own (a frosted backdrop over its background colour, a
     // large rounded panel, scale and fade), full screen on a phone.
-    '.t3-setup-layer{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;}',
+    '.t3-setup-layer{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:1.5rem;}',
     '.t3-setup-backdrop{position:absolute;inset:0;background:color-mix(in srgb,var(--background,#fff) 60%,transparent);',
     '-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);transition:opacity .2s ease-in-out;}',
     'html.dark .t3-setup-backdrop{background:color-mix(in srgb,var(--background,#0a0a0a) 64%,transparent);}',
-    '.t3-setup-panel{position:relative;display:flex;width:min(1200px,100%);height:min(880px,100%);overflow:hidden;',
-    'border-radius:var(--radius-2xl,18px);background:var(--background,#fff);outline:none;',
-    'border:1px solid color-mix(in srgb,var(--foreground,#000) 10%,transparent);box-shadow:0 24px 64px -24px #000000a6;',
+    '.t3-setup-panel{position:relative;display:flex;width:min(80rem,100%);height:min(60rem,100%);overflow:hidden;',
+    'border-radius:var(--radius-2xl,1rem);background:var(--background,#fff);outline:none;',
+    'border:1px solid var(--border,#e4e4e7);box-shadow:0 25px 50px -12px #00000066;',
     'transition:scale .2s ease-in-out,opacity .2s ease-in-out,translate .2s ease-in-out;}',
-    'html.dark .t3-setup-panel{border-color:color-mix(in srgb,#fff 8%,transparent);',
-    'box-shadow:inset 0 1px #ffffff0a,0 24px 72px -20px #000000e6;}',
+    '@media (min-width:1024px){.t3-setup-layer{padding:2.5rem;}}',
     '.t3-setup-frame{display:block;flex:1;min-width:0;height:100%;border:0;background:transparent;color-scheme:normal;',
     'opacity:0;transition:opacity .15s ease-out;}',
     '.t3-setup-layer[data-ready] .t3-setup-frame{opacity:1;}',
@@ -455,6 +478,7 @@
 
   // ----------------------------------------------------------- the dialog --
   const theme = () => (document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+  const appearance = () => appearanceFromStyles(getComputedStyle(document.documentElement));
   const toConsole = (frame, message) => {
     if (frame.contentWindow) frame.contentWindow.postMessage(Object.assign({ source: 't3-code' }, message), location.origin);
   };
@@ -525,8 +549,22 @@
     document.addEventListener('keydown', onKey, true);
     backdrop.addEventListener('click', () => closeDialog());
     // The console keeps T3's theme as T3 switches it.
-    const themeWatch = new MutationObserver(() => toConsole(frame, { type: 'theme', theme: theme() }));
-    themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    let appearanceQueued = false;
+    const sendAppearance = () => {
+      appearanceQueued = false;
+      if (state.dialog?.frame !== frame) return;
+      const message = { type: 'theme', theme: theme(), appearance: appearance() };
+      const signature = JSON.stringify(message);
+      if (signature === state.dialog.appearanceSignature) return;
+      state.dialog.appearanceSignature = signature;
+      toConsole(frame, message);
+    };
+    const themeWatch = new MutationObserver(() => {
+      if (appearanceQueued) return;
+      appearanceQueued = true;
+      requestAnimationFrame(sendAppearance);
+    });
+    themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme-id'] });
 
     state.dialog = { layer, frame, trigger, inerted, onKey, themeWatch, bodyWatch };
     syncBadges();
@@ -562,7 +600,11 @@
       dialog.layer.setAttribute('data-ready', '');
       // Keys go to the console from here on, Escape included.
       dialog.frame.focus();
-      toConsole(dialog.frame, { type: 'theme', theme: theme() });
+      const message = { type: 'theme', theme: theme(), appearance: appearance() };
+      // Every new frame document needs an initial snapshot, including unlock
+      // followed by the console. Subsequent unchanged root mutations do not.
+      dialog.appearanceSignature = JSON.stringify(message);
+      toConsole(dialog.frame, message);
     } else if (type === 'close') {
       closeDialog();
     } else if (type === 'attention' && Number.isInteger(event.data.count) && event.data.count >= 0) {

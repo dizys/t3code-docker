@@ -1902,6 +1902,16 @@
     const s = state.status;
     const n = now();
     document.body.dataset.consoleRoute = state.route;
+    const pageInfo = T3Routes.page(state.route);
+    const title = pageInfo?.title || titleOf(state.route);
+    if ($('current-page').textContent !== title) $('current-page').textContent = title;
+    const guide = $('page-guide');
+    guide.hidden = !pageInfo?.doc;
+    if (pageInfo?.doc) {
+      const href = T3Routes.docUrl(pageInfo.doc, s?.image?.version);
+      if (guide.getAttribute('href') !== href) guide.setAttribute('href', href);
+      guide.setAttribute('aria-label', pageInfo.title + ' guide');
+    }
     if (s) renderShell(s, n);
     const route = state.route;
     const el = $('page-' + route);
@@ -4053,7 +4063,10 @@
     window.addEventListener('message', (e) => {
       const m = e.data;
       if (e.source !== window.parent || e.origin !== location.origin || !m || m.source !== 't3-code') return;
-      if (m.type === 'theme' && (m.theme === 'light' || m.theme === 'dark') && m.theme !== themeMode()) setTheme(m.theme);
+      if (m.type === 'theme' && (m.theme === 'light' || m.theme === 'dark')) {
+        if (m.theme !== themeMode()) setTheme(m.theme);
+        if (!T3Appearance.apply(document.documentElement, m.appearance)) T3Appearance.clear(document.documentElement);
+      }
     });
     // Escape closes the dialog once nothing on this page wants it: an open
     // menu, sheet or palette takes it first (Kit stops it there).

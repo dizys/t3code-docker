@@ -72,6 +72,7 @@
       if (m.type === 'theme' && (m.theme === 'light' || m.theme === 'dark')) {
         document.documentElement.setAttribute('data-theme', m.theme);
         document.documentElement.setAttribute('data-theme-mode', m.theme);
+        if (!T3Appearance.apply(document.documentElement, m.appearance)) T3Appearance.clear(document.documentElement);
       }
     });
     window.parent.postMessage({ source: 't3-setup', type: 'ready' }, location.origin);

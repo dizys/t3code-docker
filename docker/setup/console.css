@@ -2916,8 +2916,15 @@ button.tc-fd-item:hover { background: var(--hover); }
 .tc-files-trash-name > span { display: flex; flex-direction: column; min-width: 0; }
 .tc-files-trash-name strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tc-files-trash-name small { font-size: 0.6875rem; color: var(--fg-muted); }
-#files-transfers .tc-tray { position: fixed; right: 1.5rem; bottom: 1.25rem; z-index: var(--z-sticky); max-width: calc(100vw - 32px); }
-.tc-files-transfer-list { max-height: min(32.5rem,65dvh); overflow-y: auto; }
+#files-transfers .tc-tray { --_tray-top: var(--topbar); --_tray-bottom: 1.25rem;
+  position: fixed; right: 1.5rem; bottom: var(--_tray-bottom); z-index: var(--z-sticky); max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - var(--_tray-top) - var(--_tray-bottom) - 1.25rem); }
+/* Keep the summary, collapse control and footer reachable while history scrolls. */
+:is(#files-transfers .tc-tray,.tc-files-transfer-sheet) > :is(.tc-tray-head,.tc-tray-foot) { flex: none; }
+.tc-files-transfer-list { min-height: 0; max-height: min(32.5rem,65dvh); overflow-y: auto; }
+@media (min-width: 640px) and (max-width: 1023.98px) {
+  #files-transfers .tc-tray { --_tray-top: var(--phonebar-h); --_tray-bottom: calc(var(--tabbar-h) + 1rem + env(safe-area-inset-bottom,0px)); }
+}
 .tc-files-transfer-list .tc-tray-item small { white-space: normal; overflow-wrap: anywhere; }
 .tc-files-transfer-list .tc-tray-item b { max-width: 100%; }
 .tc-files-transfer-list .tc-btn--link[data-transfer-action="show"] { align-self: flex-start; min-width: 0; max-width: 100%; }

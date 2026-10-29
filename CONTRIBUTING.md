@@ -22,6 +22,12 @@ Issues and pull requests are welcome. Before opening one:
   `docker/t3-client/setup-bridge.js`, and prints a pairing link.
   `scripts/setup-bridge-audit.js` checks those pages in a browser, through the
   same router.
+  It also checks full native appearance synchronization, including custom colors,
+  contrast, fonts, size, legacy fallback and unsaved-draft preservation.
+  `node scripts/appearance-ui-audit.js URL KEY` checks standalone role parity
+  against the pinned native reference, offline Inter delivery and forced-color
+  focus at phone, tablet and desktop widths. See the
+  [design system](docker/setup/design/README.md) for source mapping and sync rules.
   It covers grouped Settings navigation, its compact phone rail, native search,
   the older sidebar sheet, and opening/closing Setup with focus restored.
   Set `T3_BRIDGE_UI_OUTPUT=/tmp/t3-bridge-ui` to save desktop and phone

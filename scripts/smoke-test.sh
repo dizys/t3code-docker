@@ -1579,6 +1579,7 @@ setup_bridge_works() {
     process.stdout.write(JSON.parse(out.slice(out.indexOf("{"))).credential);
   ')" || return 1
   docker cp scripts/setup-bridge-audit.js "$NAME:/tmp/setup-bridge-audit.js" >/dev/null 2>&1 || return 1
+  docker cp scripts/appearance-ui-audit.js "$NAME:/tmp/appearance-ui-audit.js" >/dev/null 2>&1 || return 1
   { printf '\nsetup-bridge-audit:\n'
     docker exec \
       -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \

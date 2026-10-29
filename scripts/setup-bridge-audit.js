@@ -132,11 +132,13 @@ const captureSettings = async (page, name) => {
   const wasDark = await page.evaluate(() => document.documentElement.classList.contains("dark"));
   try {
     for (const theme of ["light", "dark"]) {
-      await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), theme === "dark");
+      await page.emulateMedia({ colorScheme: theme });
+      await page.waitForFunction(dark => document.documentElement.classList.contains("dark") === dark, theme === "dark");
       await page.screenshot({ path: path.join(OUTPUT, `settings-${name}-${theme}.png`), animations: "disabled" });
     }
   } finally {
-    await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), wasDark);
+    await page.emulateMedia({ colorScheme: wasDark ? "dark" : "light" });
+    await page.waitForFunction(dark => document.documentElement.classList.contains("dark") === dark, wasDark);
   }
 };
 
@@ -222,6 +224,7 @@ const run = async (base) => {
     expect(badge === (hello.attention > 0 ? String(hello.attention) : ""), "the count beside it is the console's", `badge "${badge}", console ${hello.attention}`);
 
     console.log("The dialog");
+    const nativeModal = await page.locator('[data-app-modal]').boundingBox();
     await page.click(ENTRY);
     await page.waitForSelector(".t3-setup-layer[data-ready]", { timeout: 20000 }).catch(() => null);
     expect(await page.locator(".t3-setup-layer[data-ready]").count() === 1, "Setup opens the console in a dialog");
@@ -236,6 +239,16 @@ const run = async (base) => {
     }));
     expect(inside.app && inside.via && inside.via.via === "t3", "it opens signed in, without the setup key", JSON.stringify(inside));
     expect(inside.close && inside.lockless, "it has a close button and leaves the theme to T3");
+    if (nativeModal) {
+      // The frame can become ready during the modal's opening scale animation.
+      await page.waitForFunction(native => {
+        const rect = document.querySelector('.t3-setup-panel').getBoundingClientRect();
+        return ['x', 'y', 'width', 'height'].every(key => Math.abs(rect[key] - native[key]) <= 1);
+      }, nativeModal, { timeout: 3000 });
+      const setupModal = await page.locator('.t3-setup-panel').boundingBox();
+      expect(['x', 'y', 'width', 'height'].every(key => Math.abs(setupModal[key] - nativeModal[key]) <= 1),
+        'Setup uses the native Settings modal dimensions and gutters', JSON.stringify({ nativeModal, setupModal }));
+    }
     const modal = await page.evaluate(() => ({
       dialog: document.querySelector('.t3-setup-panel[role="dialog"][aria-modal="true"]') !== null,
       reachable: [...document.body.children]
@@ -246,11 +259,15 @@ const run = async (base) => {
 
     const themeOf = () => frame.evaluate(() => document.documentElement.getAttribute("data-theme"));
     const startTheme = await themeOf();
-    await page.evaluate(() => document.documentElement.classList.toggle("dark"));
-    await page.waitForTimeout(300);
+    const nextTheme = startTheme === 'dark' ? 'light' : 'dark';
+    await page.emulateMedia({ colorScheme: nextTheme });
+    await frame.waitForFunction(theme => document.documentElement.getAttribute('data-theme') === theme, nextTheme);
     const switched = await themeOf();
-    await page.evaluate(() => document.documentElement.classList.toggle("dark"));
+    await page.emulateMedia({ colorScheme: startTheme });
+    await frame.waitForFunction(theme => document.documentElement.getAttribute('data-theme') === theme, startTheme);
     expect(startTheme !== switched && (switched === "dark" || switched === "light"), "it follows T3's theme as it changes", `${startTheme} -> ${switched}`);
+
+    await require('./appearance-ui-audit.js').nativeAppearance({ page, frame, expect, output: OUTPUT });
 
     await frame.locator("#main").focus();
     await page.keyboard.press("Escape");

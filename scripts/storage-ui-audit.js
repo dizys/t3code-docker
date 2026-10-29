@@ -125,7 +125,14 @@ const geometry = () => {
       };
       await navigate();
       const tag = `${width}x${height}-${theme}${embed?'-embedded':''}`;
-      const check = async state => assert.deepEqual(await surface.evaluate(geometry),[],tag+' '+state);
+      const check = async state => {
+        const findings = await surface.evaluate(geometry);
+        if (findings.length) {
+          await page.screenshot({ path: path.join(output, tag + '-failure.png'), fullPage: true });
+          console.error(await surface.evaluate(() => [...document.querySelectorAll('.tc-storage *, .tc-layer [role=dialog] *')].filter(el => el.getBoundingClientRect().width && getComputedStyle(el).overflowX === 'visible' && el.scrollWidth > el.clientWidth + 1).slice(0, 12).map(el => ({ cls: el.className, parent: el.parentElement.className, width: el.clientWidth, content: el.scrollWidth, text: el.textContent.trim().slice(0, 90) }))));
+        }
+        assert.deepEqual(findings, [], tag + ' ' + state);
+      };
       const snap = async name => { await check(name); await page.screenshot({path:path.join(output,`${tag}-${name}.png`)}); };
       const writes = () => requests.filter(r => !r.route.endsWith('/preview') && !r.route.endsWith('/refresh'));
       const cleanRequests = () => requests.filter(r => r.route.endsWith('/clean'));

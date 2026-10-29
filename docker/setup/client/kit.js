@@ -305,8 +305,9 @@ const Kit = (() => {
     if(event.type==='scroll'){
       if(layer.panel.contains(event.target))return;
       const target=event.target===document?window:event.target,prior=layer.scrollOffsets?.get(target),current=target===window?[window.scrollX,window.scrollY]:[target.scrollLeft,target.scrollTop];
-      // A scroll queued before a pointer opened the menu is not a new move.
-      if(prior&&prior[0]===current[0]&&prior[1]===current[1])return;
+      // Independent scrollers cannot move this anchor. An ancestor's scroll
+      // queued before the menu opened is not a new move either.
+      if(!prior||prior[0]===current[0]&&prior[1]===current[1])return;
     }
     layer.close('moved');
   };

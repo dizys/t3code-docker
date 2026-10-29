@@ -296,6 +296,7 @@ const geometry = () => {
       const control = () => page.locator('[data-cmd="updates.check"]').first();
       const firstTop = () => page.locator('#page-updates [data-key="runtime"]').evaluate((el) => el.getBoundingClientRect().top);
       const refreshStatus = () => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await page.evaluate(() => document.fonts.ready);
       await page.evaluate(() => window.scrollTo(0, 0));
       const idleTop = await firstTop();
       const controlSize = () => control().evaluate((el) => { const { width, height } = el.getBoundingClientRect(); return { width, height }; });
@@ -510,6 +511,33 @@ const geometry = () => {
       } finally { finishRust(); }
       await page.getByText('Rust 1.99.1 is already up to date.', { exact: true }).waitFor();
       await rust.waitFor({ state: 'hidden' });
+
+      // A native custom font can make the idle label wider than its minimum.
+      // Exercise real checks with both wide mono and serif text, at every size.
+      const originalFont = await page.evaluate(() => document.documentElement.style.getPropertyValue('--font-sans'));
+      try {
+        for (const family of ['"Liberation Mono", monospace', 'serif']) {
+          await page.evaluate(async family => {
+            document.documentElement.style.setProperty('--font-sans', family);
+            await document.fonts.ready;
+            window.scrollTo(0, 0);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          }, family);
+          await page.getByRole('button', { name: 'Check for updates', exact: true }).waitFor();
+          const size = await controlSize(), top = await firstTop();
+          await control().click();
+          await page.getByRole('button', { name: 'Checking for updates', exact: true }).waitFor();
+          assert.deepEqual(await controlSize(), size, family + ': progress keeps the idle control size');
+          assert.equal(await firstTop(), top, family + ': progress keeps the page position');
+          await finishCheck();
+          assert.deepEqual(await controlSize(), size, family + ': completion keeps the idle control size');
+        }
+      } finally {
+        await page.evaluate(value => {
+          if (value) document.documentElement.style.setProperty('--font-sans', value);
+          else document.documentElement.style.removeProperty('--font-sans');
+        }, originalFont);
+      }
       url.hash = 'toolchains'; await page.goto(url.href);
       const installedRust = page.locator('#page-toolchains [data-key="row-toolchain:rust"]');
       await installedRust.getByText(/With clippy and rustfmt.*up to date/).waitFor();

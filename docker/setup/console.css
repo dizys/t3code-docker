@@ -477,8 +477,12 @@ html.tc-locked { overflow: hidden; }
 .tc-row-details::after { content: ""; position: absolute; inset: -13px -4px; }
 .tc-row-details:hover { color: var(--accent-text); }
 .tc-row-details:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
-.tc-update-check--label { min-width: 10.5rem; }
-.tc-update-check > .tc-spinner { width: 1rem; height: 1rem; flex: 0 0 16px; }
+/* Reserve the idle label's actual width, including custom native fonts. The
+   shorter progress label occupies the same cell without moving nearby content. */
+.tc-update-check--label { display: inline-grid; min-width: 10.5rem; }
+.tc-update-check--label > span { grid-area: 1 / 1; display: inline-flex; align-items: center; justify-content: center; gap: inherit; }
+.tc-update-check-size { visibility: hidden; pointer-events: none; }
+.tc-update-check-content > .tc-spinner { width: 1rem; height: 1rem; flex: 0 0 1rem; margin: 0 -2px; }
 .tc-check-failures { list-style: none; padding: 0; margin: var(--space-4) 0 0; }
 .tc-check-failures > li { padding: var(--space-3) 0; border-top: 1px solid var(--hairline); font-size: 0.875rem; }
 .tc-check-failures strong { display: block; margin-bottom: var(--space-2); font-weight: 500; }

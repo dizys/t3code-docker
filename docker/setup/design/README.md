@@ -1,9 +1,10 @@
 # Setup design system
 
 Setup uses the existing vanilla JavaScript Kit and `tc-` components. Its shared
-appearance follows native T3 Code Settings. The current reference is **T3 0.1.4**,
+appearance follows native T3 Code Settings. The measured reference is **T3 0.1.4**,
 [commit 783581d](https://github.com/pingdotgg/t3code/tree/783581d461dc72cdd8f78fc8abb4ad536dfc4547/apps/web/src).
-The shared UI at `0.1.5-nightly.20261029.3867` uses the same recipes.
+Stable **0.1.5**, [commit 6d450a4](https://github.com/pingdotgg/t3code/tree/6d450a4284852af137b2f3407fddd89eb76e7644/apps/web/src),
+and the checked `0.1.5-nightly.20261029.3867` use the same shared recipes.
 
 | File | Responsibility |
 | --- | --- |

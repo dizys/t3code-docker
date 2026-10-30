@@ -143,7 +143,7 @@ const T3McpUI = (() => {
       Kit.menu(trigger, { label: p.name + ' · ' + name, head: { title: p.name + ' · ' + name },
         status: state.kind === 'differs' ? html`<div class="tc-menu-status">${icon('triangle-alert')}<span>${S.describeDiff(differences.get(provider + ':' + name))}</span></div>` : null, items, footer });
     };
-    window.matchMedia('(max-width: 1023.98px)').addEventListener('change', () => { paint(); editor.repaint(); });
+    Kit.COMPACT.addEventListener('change', () => { paint(); editor.repaint(); });
     document.addEventListener('input', event => { if (event.target.id === 'mcp-search') { query = event.target.value; paint(); } });
     return {
       content: () => html`<div id="mcp-library" class="tc-skills-library tc-mcp-library" data-key="mcp-library" data-keep>${markup || body()}</div>`,

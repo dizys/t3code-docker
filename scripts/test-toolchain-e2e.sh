@@ -547,7 +547,7 @@ has "the launcher still runs the recorded version" "${VERSION[claude]}" "$(dex "
 is "T3 still runs it through the launcher" "$claude_launcher" \
   "$(field '.providerInstances.claudeAgent.config.binaryPath // .providers.claudeAgent.binaryPath // empty' "$(settings_body)")"
 
-section "OpenCode v2 in an isolated home (Stable keeps its v1 provider)"
+section "OpenCode v2 in an isolated home (the default install stays on v1)"
 docker cp "${ROOT}/scripts/opencode-auth-smoke.mjs" "$NAME:/tmp/opencode-auth-smoke.mjs" >/dev/null
 opencode_v2_out="$(docker exec -i -u t3 \
   -e HOME=/tmp/t3-opencode-v2-e2e \
@@ -568,7 +568,7 @@ const manager = createHarnessManager();
 await mkdir(process.env.HOME, { recursive: true });
 const versions = await manager.versions("opencode");
 assert.ok(versions.latest.startsWith("1."));
-assert.ok(versions.releases.some(r => r.version.startsWith("2.") && r.supported && r.requiresNightly));
+assert.ok(versions.releases.some(r => r.version.startsWith("2.") && r.supported && !r.requiresNightly && r.minimumT3Version === "0.1.2"));
 const first = await manager.install("opencode");
 assert.equal(first.ok, true, first.error);
 assert.ok(first.harness.installedVersion.startsWith("1."));

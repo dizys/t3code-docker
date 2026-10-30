@@ -8,6 +8,7 @@
  *   T3_PAIR_CREDENTIAL   a pairing credential for this T3 (`t3 auth pairing create`)
  *   --bridge FILE        serve T3's shell with this bridge instead of the one
  *                        built into it, to try a working copy against an image
+ *   T3_BRIDGE_UI_OUTPUT  optional light/dark desktop and phone screenshots
  *
  * The console is only reachable from T3 Code when one origin serves both, so
  * this starts that origin itself, with the image's own one-port router
@@ -17,10 +18,10 @@
  *   - sees the Setup pill on the pairing screen, and no entry;
  *   - pairs through T3's own /pair page, after which the pill is gone;
  *   - finds Setup at the end of the Settings sidebar, drawn like T3's rows;
- *   - opens the console in a dialog, signed in on its T3 session, in T3's
+ *   - opens the console inside native Settings, signed in on its T3 session, in T3's
  *     theme, with the rest of the page inert;
  *   - closes it with Escape and gets focus back on the entry;
- *   - on a phone, opens it from T3's sidebar sheet as a full-screen dialog;
+ *   - on a phone, opens it from the Settings rail or older sidebar sheet as a full-screen dialog;
  * and the console refuses a state change that did not come from its own
  * origin, even with a valid T3 session.
  *
@@ -45,6 +46,8 @@ const T3 = new URL(arg("--t3", "http://127.0.0.1:3773"));
 const SETUP = new URL(arg("--setup", "http://127.0.0.1:3774"));
 const BRIDGE = arg("--bridge", null);
 const CREDENTIAL = process.env.T3_PAIR_CREDENTIAL || "";
+const OUTPUT = process.env.T3_BRIDGE_UI_OUTPUT;
+if (OUTPUT) fs.mkdirSync(OUTPUT, { recursive: true });
 const CHROME = process.env.CHROME_PATH
   || (fs.existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
 
@@ -122,312 +125,213 @@ const visit = async (page, url) => {
 
 const ENTRY = "[data-t3-setup-entry] button";
 const settingsRow = (label) => `[data-sidebar="menu-button"]:not([data-t3-setup-entry] *):text-is("${label}")`;
-
-const run = async (base) => {
-  const browser = await chromium.launch({
-    executablePath: CHROME,
-    // A substituted shell (--bridge) loses its address space, and Chromium
-    // would then refuse T3's WebSocket to a loopback address.
-    args: ["--no-sandbox", "--disable-features=LocalNetworkAccessChecks"],
-  });
+const captureSettings = async (page, name) => {
+  if (!OUTPUT) return;
+  fs.mkdirSync(OUTPUT, { recursive: true });
+  await page.locator(ENTRY).scrollIntoViewIfNeeded();
+  const wasDark = await page.evaluate(() => document.documentElement.classList.contains("dark"));
   try {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    await useBridge(context);
-    const page = await context.newPage();
-    const errors = [];
-    page.on("pageerror", (error) => errors.push(error.message));
-
-    console.log("Before pairing");
-    await page.goto(base + "/");
-    await page.waitForSelector(".t3-setup-pill", { timeout: 20000 }).catch(() => null);
-    expect(await page.locator(".t3-setup-pill").count() === 1, "the pairing screen shows the Setup pill");
-    expect(await page.locator(".t3-setup-pill").getAttribute("href") === "/__setup/", "the pill opens the console's own page");
-
-    console.log("Pairing");
-    // Leave T3 first so the link loads a new document, even when the unpaired
-    // page is already at /pair. Reloading after opening the link can interrupt
-    // authentication after T3 has removed the credential from its URL.
-    await page.goto("about:blank");
-    const [pairingResponse] = await Promise.all([
-      page.waitForResponse((response) => response.url() === base + "/api/auth/browser-session"
-        && response.request().method() === "POST"),
-      page.goto(base + "/pair#token=" + encodeURIComponent(CREDENTIAL)),
-    ]);
-    expect(pairingResponse.ok(), "the pairing link exchanges successfully", `HTTP ${pairingResponse.status()}`);
-    await page.waitForURL((url) => !url.pathname.startsWith("/pair"), { timeout: 30000, waitUntil: "commit" });
-    await visit(page, base + "/");
-    await page.waitForFunction(() => !document.querySelector(".t3-setup-pill"), null, { timeout: 10000 }).catch(() => null);
-    expect(await page.locator(".t3-setup-pill").count() === 0, "once paired, the pill leaves T3's own corner alone", page.url());
-
-    console.log("Settings");
-    await visit(page, base + "/settings/general");
-    await page.waitForSelector(ENTRY, { timeout: 20000 }).catch(() => null);
-    expect(await page.locator(ENTRY).count() === 1, "Settings has exactly one Setup entry");
-    const geometry = await page.evaluate(() => {
-      const entry = document.querySelector("[data-t3-setup-entry]");
-      const list = entry.previousElementSibling;
-      const rows = list.querySelectorAll('[data-sidebar="menu-button"]');
-      const last = rows[rows.length - 1].getBoundingClientRect();
-      const mine = entry.querySelector("button").getBoundingClientRect();
-      return {
-        after: list.getAttribute("data-sidebar") === "menu",
-        height: [Math.round(last.height), Math.round(mine.height)],
-        left: [Math.round(last.left), Math.round(mine.left)],
-        width: [Math.round(last.width), Math.round(mine.width)],
-        below: mine.top > last.bottom,
-        label: entry.querySelector("button").getAttribute("aria-label"),
-        popup: entry.querySelector("button").getAttribute("aria-haspopup"),
-      };
-    });
-    expect(geometry.after && geometry.below, "it comes after T3's own settings list");
-    expect(geometry.height[0] === geometry.height[1] && geometry.left[0] === geometry.left[1] && geometry.width[0] === geometry.width[1],
-      "it is drawn exactly like T3's rows", JSON.stringify(geometry));
-    expect(/^Setup/.test(geometry.label) && geometry.popup === "dialog", "it says what it is and that it opens a dialog", JSON.stringify(geometry));
-
-    const hello = await page.evaluate(() => fetch("/__setup/hello").then((r) => r.json()));
-    expect(hello.signedIn === true, "the console accepts this browser's T3 session", JSON.stringify(hello));
-    const badge = await page.locator("[data-t3-setup-entry] .t3-setup-badge").evaluate((el) => (el.hidden ? "" : el.textContent));
-    expect(badge === (hello.attention > 0 ? String(hello.attention) : ""), "the count beside it is the console's", `badge "${badge}", console ${hello.attention}`);
-
-    console.log("The dialog");
-    await page.click(ENTRY);
-    await page.waitForSelector(".t3-setup-layer[data-ready]", { timeout: 20000 }).catch(() => null);
-    expect(await page.locator(".t3-setup-layer[data-ready]").count() === 1, "Setup opens the console in a dialog");
-    const frame = page.frames().find((f) => f.url().includes("/__setup/"));
-    expect(Boolean(frame) && /[?&]embed=t3/.test(frame.url()), "the dialog holds the console, embedded", frame && frame.url());
-    await frame.waitForSelector("#app", { timeout: 15000 }).catch(() => null);
-    const inside = await frame.evaluate(async () => ({
-      app: Boolean(document.getElementById("app")),
-      close: Boolean(document.querySelector('[data-cmd="embed.close"]')),
-      lockless: !document.querySelector("#theme-toggle"),
-      via: (await fetch(BASE + "/status", { headers: { accept: "application/json" } }).then((r) => r.json())).viewer,
-    }));
-    expect(inside.app && inside.via && inside.via.via === "t3", "it opens signed in, without the setup key", JSON.stringify(inside));
-    expect(inside.close && inside.lockless, "it has a close button and leaves the theme to T3");
-    const modal = await page.evaluate(() => ({
-      dialog: document.querySelector('.t3-setup-panel[role="dialog"][aria-modal="true"]') !== null,
-      reachable: [...document.body.children]
-        .filter((node) => !node.inert && !node.classList.contains("t3-setup-layer") && !/^(SCRIPT|STYLE|LINK)$/.test(node.tagName))
-        .map((node) => node.tagName.toLowerCase() + (node.id ? "#" + node.id : "")),
-    }));
-    expect(modal.dialog && modal.reachable.length === 0, "it is modal: T3 behind it is out of reach", "still reachable: " + modal.reachable.join(", "));
-
-    const themeOf = () => frame.evaluate(() => document.documentElement.getAttribute("data-theme"));
-    const startTheme = await themeOf();
-    await page.evaluate(() => document.documentElement.classList.toggle("dark"));
-    await page.waitForTimeout(300);
-    const switched = await themeOf();
-    await page.evaluate(() => document.documentElement.classList.toggle("dark"));
-    expect(startTheme !== switched && (switched === "dark" || switched === "light"), "it follows T3's theme as it changes", `${startTheme} -> ${switched}`);
-
-    await frame.locator("#main").focus();
-    await page.keyboard.press("Escape");
-    await page.waitForSelector(".t3-setup-layer", { state: "detached", timeout: 5000 }).catch(() => null);
-    expect(await page.locator(".t3-setup-layer").count() === 0, "Escape inside the console closes the dialog");
-    expect(await page.evaluate(() => document.activeElement && document.activeElement.closest("[data-t3-setup-entry]") !== null),
-      "focus goes back to the entry");
-    expect(await page.evaluate(() => [...document.body.children].every((n) => !n.inert)), "and T3 is reachable again");
-
-    await page.click(ENTRY);
-    await page.waitForSelector(".t3-setup-layer[data-ready]", { timeout: 20000 });
-    await page.mouse.click(8, 450);
-    await page.waitForSelector(".t3-setup-layer", { state: "detached", timeout: 5000 }).catch(() => null);
-    expect(await page.locator(".t3-setup-layer").count() === 0, "a click beside the dialog closes it");
-
-    await visit(page, base + "/");
-    await page.waitForTimeout(800);
-    expect(await page.locator("[data-t3-setup-entry]").count() === 0, "outside Settings there is no entry");
-
-    console.log("The command palette");
-    const PALETTE = '[data-command-palette="true"]';
-    // T3's palette spends the first Escape after an arrow key on its own
-    // highlight (its own behaviour, not Setup's), so close it with as many as it takes.
-    const closePalette = async () => {
-      for (let i = 0; i < 3 && await page.locator(PALETTE).count(); i++) {
-        await page.keyboard.press("Escape");
-        await page.waitForTimeout(300);
-      }
-    };
-    const rows = () => page.evaluate(() => {
-      const dialog = document.querySelector('[data-command-palette="true"]');
-      if (!dialog) return null;
-      const ours = [...dialog.querySelectorAll("[data-t3-setup-item]")];
-      const theirs = [...dialog.querySelectorAll('[data-slot="command-item"]:not([data-t3-setup-item])')];
-      const lit = theirs.find((row) => row.hasAttribute("data-highlighted"));
-      const list = dialog.querySelector('[data-slot="command-list"]');
-      return {
-        query: dialog.querySelector('input[role="combobox"]')?.value,
-        ours: ours.map((row) => row.getAttribute("data-t3-setup-item")),
-        ourLit: ours.findIndex((row) => row.hasAttribute("data-highlighted")),
-        theirs: theirs.length,
-        // T3 draws its highlighted row with a background; Setup's highlight leaves it plain.
-        theirLitPainted: lit ? getComputedStyle(lit).backgroundColor !== "rgba(0, 0, 0, 0)" : null,
-        first: list ? list.firstElementChild && list.firstElementChild.hasAttribute("data-t3-setup-palette") : null,
-        virtualized: ![...dialog.querySelectorAll('[data-slot="command-group"]')].some((g) => !g.hasAttribute("data-t3-setup-palette")),
-        emptyHidden: [...dialog.querySelectorAll("[data-t3-setup-empty] > :not([data-t3-setup-host])")].every((n) => !n.getClientRects().length),
-        // A row, as T3's are: the icon beside the text, not above it.
-        rowShaped: ours.every((row) => {
-          const icon = row.querySelector("svg").getBoundingClientRect();
-          const text = row.querySelector("svg + span").getBoundingClientRect();
-          return Math.abs(icon.width - 16) < 1 && Math.abs(icon.height - 16) < 1
-            && icon.right <= text.left && icon.top < text.bottom && icon.bottom > text.top
-            && row.getBoundingClientRect().height <= 80;
-        }),
-        active: document.activeElement && document.activeElement.getAttribute("aria-activedescendant"),
-        owns: dialog.hasAttribute("data-t3-setup-owns"),
-      };
-    });
-    const search = async (query, { setupRows = true } = {}) => {
-      await closePalette();
-      await page.keyboard.press("Control+k");
-      await page.locator(PALETTE + ' input[role="combobox"]').fill(query, { timeout: 5000 });
-      if (setupRows) await page.locator(PALETTE + " [data-t3-setup-item]").first().waitFor({ state: "visible", timeout: 5000 });
-      await page.waitForTimeout(600);
-      return rows();
-    };
-    const dialogRoute = async () => {
-      await page.waitForSelector(".t3-setup-layer[data-ready]", { timeout: 20000 }).catch(() => null);
-      const frame = page.frames().find((f) => f.url().includes("/__setup/"));
-      return { open: await page.locator(".t3-setup-layer").count() === 1, palette: await page.locator(PALETTE).count(), hash: frame ? new URL(frame.url()).hash : null };
-    };
-    const closeDialog = async () => {
-      await page.keyboard.press("Escape");
-      await page.waitForSelector(".t3-setup-layer", { state: "detached", timeout: 5000 }).catch(() => null);
-    };
-
-    // First a search T3 has nothing for, on a page where its palette has shown
-    // no rows yet: Setup's has no classes of T3's to copy.
-    let found = await search("mise");
-    expect(found && found.ours.join() === "toolchains" && found.ourLit === 0 && found.rowShaped,
-      "\"mise\" offers Toolchains, drawn as a row", JSON.stringify(found));
-    if (!found.theirs) expect(found.emptyHidden, "standing in for T3's \"No matching\" line", JSON.stringify(found));
-
-    found = await search("setup");
-    expect(found && found.ours[0] === "setup" && found.ourLit === 0 && found.rowShaped, "\"setup\" lists Open setup first, highlighted", JSON.stringify(found));
-    expect(found.first !== false, "Setup's group comes first", JSON.stringify(found));
-    expect(found.active === "t3-setup-cmd-0" && found.theirLitPainted !== true, "and only Setup's row reads as highlighted", JSON.stringify(found));
-    await page.keyboard.press("Enter");
-    let opened = await dialogRoute();
-    expect(opened.open && opened.palette === 0 && opened.hash === "", "Enter closes the palette and opens Setup", JSON.stringify(opened));
-    await closeDialog();
-
-    found = await search("pair");
-    expect(found && found.ours.join() === "pair" && found.ourLit === 0, "\"pair\" offers Pair a device", JSON.stringify(found));
-    if (found.theirs) {
-      await page.keyboard.press("ArrowDown");
-      await page.waitForTimeout(200);
-      const down = await rows();
-      expect(down.ourLit === -1 && down.theirLitPainted === true, "ArrowDown moves on to T3's own results", JSON.stringify(down));
-      await page.keyboard.press("ArrowUp");
-      await page.waitForTimeout(200);
-      const up = await rows();
-      expect(up.ourLit === 0 && up.theirLitPainted !== true, "and ArrowUp back to Setup's", JSON.stringify(up));
-    } else {
-      expect(found.emptyHidden, "where T3 has nothing to offer, Setup's rows stand in for \"No matching\"", JSON.stringify(found));
+    for (const theme of ["light", "dark"]) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.waitForFunction(dark => document.documentElement.classList.contains("dark") === dark, theme === "dark");
+      await page.screenshot({ path: path.join(OUTPUT, `settings-${name}-${theme}.png`), scale: page.viewportSize().width < 768 ? 'device' : 'css', animations: "disabled" });
     }
-    await page.keyboard.press("Enter");
-    opened = await dialogRoute();
-    expect(opened.open && opened.palette === 0 && opened.hash === "#access", "it opens Setup on Access, after arrow keys too", JSON.stringify(opened));
-    await closeDialog();
-
-    // Setup's group sits where a group of commands does, after T3's Actions:
-    // a search T3's own commands also answer keeps Enter on T3's first result.
-    found = await search("open");
-    expect(found && found.ours.join() === "setup", "\"open\" finds Open setup, by its title", JSON.stringify(found));
-    if (found.theirs) {
-      expect(found.ourLit === -1 && (found.virtualized || found.first === false) && /^base-ui/.test(found.active || ""),
-        "leaving Enter with T3's first result when its Actions answer", JSON.stringify(found));
-    }
-    found = await search("open setup");
-    expect(found && found.ours.join() === "setup" && found.ourLit === 0, "\"open setup\" is Open setup, highlighted", JSON.stringify(found));
-    await page.keyboard.press("Enter");
-    opened = await dialogRoute();
-    expect(opened.open && opened.palette === 0 && opened.hash === "", "and Enter opens it", JSON.stringify(opened));
-    await closeDialog();
-    found = await search("set");
-    if (found.theirs) {
-      expect(found.ours[0] === "setup" && found.ourLit === -1 && /^base-ui/.test(found.active || ""),
-        "\"set\" lists Open setup but leaves Enter with T3's first result", JSON.stringify(found));
-    }
-    found = await search("settings", { setupRows: false });
-    expect(found && found.ours.length === 0, "\"settings\" is T3's alone", JSON.stringify(found));
-    // Different native result types expose different SVG classes, sometimes
-    // for a nested full-size illustration. The bridge must own its geometry
-    // after learning each of them, including across palette reopenings.
-    await search('setup');
-    for (const iconClass of ['text-yellow-500', 'w-full h-full', '']) {
-      await page.evaluate((iconClass) => {
-        const list = document.querySelector('[data-command-palette="true"] [data-slot="command-list"]');
-        const group = document.createElement('div');
-        group.dataset.slot = 'command-group'; group.dataset.auditPalette = '';
-        const row = document.createElement('div');
-        row.dataset.slot = 'command-item'; row.className = 'p-2';
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.setAttribute('class', iconClass); svg.setAttribute('viewBox', '0 0 24 24');
-        row.append(svg, document.createTextNode('Native result fixture')); group.append(row); list.append(group);
-        document.querySelector('[data-t3-setup-palette]')?.remove();
-      }, iconClass);
-      await page.locator('[data-t3-setup-item]').first().waitFor();
-      found = await rows();
-      expect(found.rowShaped, 'Setup icons stay 16px beside the text after learning ' + (iconClass || 'an unsized icon'), JSON.stringify(found));
-      await page.locator('[data-audit-palette]').evaluate((el) => el.remove());
-    }
-    await closePalette();
-
-    console.log("The console's own guard");
-    // Asked from here rather than from the page, which cannot set Sec-Fetch-Site.
-    const cookies = (await context.cookies()).filter((c) => c.name.startsWith("t3_session")).map((c) => `${c.name}=${c.value}`).join("; ");
-    const post = (site) => fetch(base + "/__setup/revoke", {
-      method: "POST",
-      headers: { cookie: cookies, "content-type": "application/json", ...(site ? { "sec-fetch-site": site } : {}) },
-      body: JSON.stringify({ kind: "link", id: "none" }),
-    }).then((r) => r.status);
-    expect(await post("cross-site") === 403 && await post("same-site") === 403, "a state change from another site is refused");
-    expect(await post(null) === 401, "a T3 session alone does not authorise a state change the browser did not vouch for");
-    const read = await fetch(base + "/__setup/status", { headers: { cookie: cookies, accept: "application/json" } });
-    expect(read.status === 200 && (await read.json()).viewer.via === "t3", "a T3 session reads the console");
-    const forged = await fetch(base + "/__setup/status", { headers: { cookie: cookies.replace(/=([^;]{8})/, "=x$1"), accept: "application/json" } });
-    expect(forged.status === 401, "a forged T3 session does not");
-    const framing = await fetch(base + "/__setup/", { headers: { cookie: cookies } });
-    expect(framing.headers.get("x-frame-options") === "SAMEORIGIN" && /frame-ancestors 'self'/.test(framing.headers.get("content-security-policy") || ""),
-      "only this origin may frame the console");
-
-    console.log("On a phone");
-    const phone = await browser.newContext({
-      viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2,
-      storageState: await context.storageState(),
-    });
-    await useBridge(phone);
-    const mobile = await phone.newPage();
-    await mobile.goto(base + "/settings/general");
-    await mobile.waitForSelector('[data-sidebar="trigger"]', { timeout: 20000 });
-    await mobile.locator('[data-sidebar="trigger"]').first().click();
-    await mobile.waitForSelector(ENTRY, { timeout: 10000 }).catch(() => null);
-    expect(await mobile.locator(ENTRY).count() === 1, "T3's sidebar sheet has the entry too");
-    await mobile.locator(ENTRY).tap();
-    await mobile.waitForSelector(".t3-setup-layer[data-ready]", { timeout: 20000 }).catch(() => null);
-    const sheet = await mobile.evaluate(() => {
-      const panel = document.querySelector(".t3-setup-panel");
-      const r = panel ? panel.getBoundingClientRect() : null;
-      return { open: Boolean(panel), full: r && r.width === innerWidth && r.height === innerHeight };
-    });
-    expect(sheet.open && sheet.full, "it opens full screen", JSON.stringify(sheet));
-    // T3's sheet animates out; it must be gone once that is over.
-    const sheetGone = await mobile.waitForFunction(() => !document.querySelector('[data-mobile="true"]'), null, { timeout: 3000 })
-      .then(() => true, () => false);
-    expect(sheetGone, "having closed T3's sheet, as T3's own rows do");
-    const phoneFrame = mobile.frames().find((f) => f.url().includes("/__setup/"));
-    await phoneFrame.waitForSelector('.tc-phonebar [data-cmd="embed.close"]', { timeout: 15000 });
-    await phoneFrame.locator('.tc-phonebar [data-cmd="embed.close"]').tap();
-    await mobile.waitForSelector(".t3-setup-layer", { state: "detached", timeout: 5000 }).catch(() => null);
-    expect(await mobile.locator(".t3-setup-layer").count() === 0, "its close button closes it");
-    await phone.close();
-
-    expect(errors.length === 0, "no script errors on T3's pages", errors.join("\n    "));
-    await context.close();
   } finally {
-    await browser.close();
+    await page.emulateMedia({ colorScheme: wasDark ? "dark" : "light" });
+    await page.waitForFunction(dark => document.documentElement.classList.contains("dark") === dark, wasDark);
   }
+};
+
+const run = async base => {
+  const browser = await chromium.launch({executablePath:CHROME,args:['--no-sandbox','--disable-features=LocalNetworkAccessChecks']});
+  let page;
+  try {
+    const context=await browser.newContext({viewport:{width:1440,height:900},deviceScaleFactor:2,reducedMotion:'reduce'});
+    await useBridge(context);page=await context.newPage();
+    const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    await page.goto(base+'/');
+    await page.locator('.t3-setup-pill').waitFor();
+    expect(await page.locator('.t3-setup-pill').getAttribute('href')==='/__setup/','unpaired clients have the standalone Setup pill');
+    await page.goto('about:blank');
+    const [paired]=await Promise.all([page.waitForResponse(r=>r.url()===base+'/api/auth/browser-session'&&r.request().method()==='POST'),page.goto(base+'/pair#token='+encodeURIComponent(CREDENTIAL))]);
+    expect(paired.ok(),'native pairing exchanges the disposable credential');
+    await page.waitForURL(url=>!url.pathname.startsWith('/pair'),{waitUntil:'commit'});
+    await visit(page,base+'/');
+    await visit(page,base+'/settings/general');await page.locator(ENTRY).waitFor();
+    expect(await page.locator('.t3-setup-pill').count()===0,'the pill goes away after pairing');
+    const hello=await page.evaluate(()=>fetch('/__setup/hello').then(r=>r.json()));
+    expect(hello.signedIn&&hello.protocol===2&&hello.nav.groups.length>0,'authenticated hello provides the navigation registry');
+    const pin=await page.locator(ENTRY).evaluate(button=>{
+      const pin=button.closest('[data-t3-setup-entry]'),nav=pin.parentElement,previous=pin.previousElementSibling;
+      const source=nav.querySelector('[data-sidebar=content] [data-settings-section]'),a=button.getBoundingClientRect(),b=source.getBoundingClientRect();
+      return {outside:nav.tagName==='NAV'&&!!previous.querySelector('[data-sidebar=content]'),height:a.height,nativeHeight:b.height,left:a.left,nativeLeft:b.left,width:a.width,nativeWidth:b.width,visible:a.bottom<innerHeight,label:button.getAttribute('aria-label')};
+    });
+    expect(pin.outside&&pin.visible,'the pin is outside the native scrolling list and visible');
+    expect(Math.abs(pin.height-pin.nativeHeight)<=1&&Math.abs(pin.width-pin.nativeWidth)<=1&&Math.abs(pin.left-pin.nativeLeft)<=1,'the pin copies a native page row, including its geometry',JSON.stringify(pin));
+    expect(pin.label.startsWith('Setup'),'the pin has an accessible name');
+    const badge=await page.locator('[data-t3-setup-entry] .t3-setup-badge').evaluate(el=>el.hidden?'':el.textContent);
+    expect(badge===(hello.attention>99?'99+':hello.attention?String(hello.attention):''),'the pin count matches authenticated hello');
+    await captureSettings(page,'desktop');
+    await page.setViewportSize({width:1024,height:600});
+    expect(await page.locator(ENTRY).evaluate(el=>el.getBoundingClientRect().bottom<innerHeight),'the pin remains visible at 600px height');
+    await page.setViewportSize({width:1440,height:900});
+    const bodyChildren=await page.evaluate(()=>document.body.children.length);
+    const open=async()=>{await page.locator(ENTRY).click();await page.locator('.t3-setup-pane[data-ready]').waitFor();return page.frames().find(f=>f.url().includes('/__setup/'));};
+    let frame=await open();await frame.locator('#page-overview .tc-page-head').waitFor();
+    expect(await page.locator('.t3-setup-layer').count()===0&&await page.locator('.t3-setup-pane').count()===1,'Setup uses a pane inside native Settings, with no second modal');
+    expect(await page.evaluate(count=>document.body.children.length===count,bodyChildren),'opening Setup adds no body-level overlay');
+    const geometry=await page.evaluate(()=>{
+      const nav=document.querySelector('nav[data-t3-setup-host]'),pane=document.querySelector('.t3-setup-pane'),content=document.querySelector('[data-workspace-area=settings]');
+      const n=nav.getBoundingClientRect(),p=pane.getBoundingClientRect();
+      return {adjacent:Math.abs(n.right-p.left)<=1,inert:[...content.children].every(el=>el.inert&&el.getAttribute('aria-hidden')==='true'),parent:pane.parentElement===nav.parentElement};
+    });
+    expect(geometry.adjacent&&geometry.inert&&geometry.parent,'wide pane covers only native content and masks the original nodes',JSON.stringify(geometry));
+    expect(await frame.locator('.tc-crumbs').textContent().then(t=>/Settings.*Setup.*Overview/.test(t)),'the wide header reads Settings / Setup / Overview');
+    expect(await frame.locator('.tc-sidebar,.tc-phonebar,.tc-tabbar,#page-more').count()===0,'tab mode has one navigation system');
+    await page.locator('.t3-setup-nav [data-route=agents]').focus();
+    await page.keyboard.press('ArrowDown');
+    expect(await page.locator('.t3-setup-nav [data-route=instructions]').evaluate(el=>el===document.activeElement),'arrow keys follow visual navigation order');
+    await page.keyboard.press('Home');
+    expect(await page.locator('.t3-setup-back').evaluate(el=>el===document.activeElement),'Home reaches Back to Settings');
+    const nativeURL=page.url();
+    await page.locator('.t3-setup-nav [data-route=agents]').click();
+    await frame.waitForFunction(()=>document.body.dataset.consoleRoute==='agents');
+    await page.locator('.t3-setup-nav [data-route=agents][aria-current=page]').waitFor();
+    expect(page.url()===nativeURL,'child navigation preserves the native Settings URL');
+    expect(await page.locator('.t3-setup-nav [data-route=agents]').getAttribute('href')==='/__setup/#agents','modified clicks use the standalone page address');
+    await frame.locator('#main').focus();await page.keyboard.press('g');await page.keyboard.press('o');
+    await page.locator('.t3-setup-nav [data-route=overview][aria-current=page]').waitFor();ok('the child shortcut controls the parent highlight');
+    const [standalone]=await Promise.all([context.waitForEvent('page'),page.locator('.t3-setup-nav [data-route=agents]').click({modifiers:['Control']})]);
+    await standalone.waitForLoadState('domcontentloaded');
+    expect(new URL(standalone.url()).hash==='#agents'&&!new URL(standalone.url()).searchParams.has('embed'),'Control-click opens the standalone page in a new tab');
+    await standalone.close();
+    // A sibling frame, a forged source, and malformed payloads cannot navigate.
+    await page.evaluate(()=>{
+      window.postMessage({source:'t3-setup',type:'close'},location.origin);
+      dispatchEvent(new MessageEvent('message',{source:document.querySelector('iframe.t3-setup-frame').contentWindow,origin:'https://untrusted.invalid',data:{source:'t3-setup',type:'back'}}));
+      const child=document.querySelector('iframe.t3-setup-frame').contentWindow;
+      dispatchEvent(new MessageEvent('message',{source:child,origin:location.origin,data:{source:'t3-setup',type:'settings',path:'/settings/../../pair'}}));
+    });
+    expect(await page.locator('.t3-setup-pane').count()===1&&page.url()===nativeURL,'source, origin and settings-path guards reject forged messages');
+    // Future pages arrive as data, and surviving anchors keep DOM and focus.
+    await page.locator('.t3-setup-nav [data-route=agents]').focus();
+    await page.evaluate(()=>window.__agentRow=document.querySelector('.t3-setup-nav [data-route=agents]'));
+    const future=structuredClone(hello.nav);future.current='overview';future.groups.find(g=>g.id==='system').pages.push({route:'backups',title:'Backups',icon:'hard-drive',badge:null});
+    // Reuse a supplied safe icon; no new executable markup crosses the boundary.
+    future.groups.at(-1).pages.at(-1).icon=future.groups[0].pages[0].icon;
+    await frame.evaluate(payload=>parent.postMessage({source:'t3-setup',type:'nav',...payload},location.origin),{...future,icons:hello.icons});
+    await page.locator('.t3-setup-nav [data-route=backups]').waitFor();
+    expect(await page.evaluate(()=>window.__agentRow===document.querySelector('.t3-setup-nav [data-route=agents]')&&document.activeElement===window.__agentRow),'adding a registry page keeps existing row DOM and focus');
+    const removed=structuredClone(future);removed.groups.find(g=>g.id==='agents').pages=removed.groups.find(g=>g.id==='agents').pages.filter(p=>p.route!=='agents');
+    await frame.evaluate(payload=>parent.postMessage({source:'t3-setup',type:'nav',...payload},location.origin),{...removed,icons:hello.icons});
+    await page.locator('.t3-setup-nav [data-route=agents]').waitFor({state:'detached'});
+    expect(await page.locator('.t3-setup-nav [data-route=overview]').evaluate(el=>el===document.activeElement),'removing the focused page moves focus to the current row');
+    await page.evaluate(()=>document.querySelector('.t3-setup-frame').contentWindow.postMessage({source:'t3-code',type:'navigate',route:'overview'},location.origin));
+    await page.locator('.t3-setup-nav [data-route=agents]').waitFor();
+    await require('./appearance-ui-audit.js').nativeAppearance({page,frame,expect,output:OUTPUT});
+    // Layer masking is reference-counted by the child stack, never by popovers.
+    await frame.waitForFunction(()=>document.body.dataset.consoleRoute==='overview');
+    await frame.locator('#main').focus();await page.keyboard.press('Control+k');await frame.locator('.tc-palette').waitFor();
+    await page.locator('.t3-setup-scrim').waitFor();
+    expect(await page.locator('.t3-setup-scrim').count()===1,'one host scrim covers the nav while a child modal is open');
+    expect(await page.locator('.t3-setup-nav').evaluate(el=>[...el.children].filter(c=>!c.classList.contains('t3-setup-scrim')).every(c=>c.inert)),'the drilled nav is inert during the child modal');
+    await page.keyboard.press('Escape');await frame.locator('.tc-palette').waitFor({state:'detached'});await page.locator('.t3-setup-scrim').waitFor({state:'detached'});ok('Escape closes the child layer first');
+    await page.locator('.t3-setup-back').click();await page.locator('.t3-setup-pane').waitFor({state:'detached'});
+    expect(page.url()===nativeURL&&await page.locator(ENTRY).evaluate(el=>el===document.activeElement),'Back to Settings restores the native page and pin focus');
+    expect(await page.locator('[data-workspace-area=settings]').evaluate(el=>[...el.children].every(c=>!c.inert&&!c.hasAttribute('aria-hidden'))),'leaving Setup restores native reachability');
+    frame=await open();await page.locator('.t3-setup-nav [data-route=agents]').click();await frame.locator('[data-cmd="embed.settings"]').click();
+    await page.waitForURL(url=>url.pathname==='/settings/providers');
+    await page.locator('.t3-setup-pane').waitFor({state:'detached'});
+    await page.locator('[data-settings-section="/settings/providers"][data-active=true]').waitFor();ok('the Providers link returns to the native Providers page');
+    frame=await open();await page.locator('.t3-setup-nav [data-route=access]').click();await frame.locator('#pair-label').fill('Preserve this draft across host layouts');
+    await frame.evaluate(()=>window.__resizeIdentity={});
+    for(const width of [1024,930,820,767,744,390,1024,1440]){
+      await page.setViewportSize({width,height:width<768?1000:768});
+      await frame.waitForFunction(wide=>document.documentElement.dataset.hostLayout===(wide?'wide':'compact'),width>=768);
+      expect(await frame.evaluate(()=>!!window.__resizeIdentity&&document.getElementById('pair-label').value==='Preserve this draft across host layouts'),'resizing to '+width+' preserves the frame document and draft');
+      await frame.waitForFunction(()=>document.documentElement.hasAttribute('data-compact')===(innerWidth<640));
+      const density=await frame.evaluate(()=>({width:innerWidth,compact:document.documentElement.hasAttribute('data-compact')}));
+      expect(density.compact===(density.width<640),'frame density is independent of host layout at '+width);
+    }
+    await page.reload();await page.locator('.t3-setup-pane[data-ready]').waitFor();frame=page.frames().find(f=>f.url().includes('/__setup/'));
+    await frame.waitForFunction(()=>document.body.dataset.consoleRoute==='access');ok('reload restores the open Setup page');
+    await frame.locator('.tc-console-topbar [data-cmd="embed.close"]').click();await page.locator('[data-app-modal][aria-label=Settings]').waitFor({state:'detached'});
+    expect(!new URL(page.url()).pathname.startsWith('/settings'),'the console Close button closes native Settings');
+    expect(await page.evaluate(()=>sessionStorage.getItem('t3-setup-tab'))===null,'closing Settings clears remembered Setup state');
+    // Native palette navigation is verified from chat, including new registry pages.
+    const search=async query=>{
+      const button=page.getByRole('button',{name:/^Search/}).first();if(await button.count())await button.click();else await page.keyboard.press('Control+k');
+      await page.locator('[data-command-palette=true] input[role=combobox]').fill(query);
+      await page.locator('[data-t3-setup-item]').first().waitFor();
+    };
+    for(const [query,route] of [['setup agents','agents'],['setup files','files']]){
+      const documentToken=await page.evaluate(()=>{window.__setupPaletteDocument=String(Math.random());return window.__setupPaletteDocument;});
+      await search(query);
+      const result=page.locator('[data-t3-setup-item="'+route+'"]');
+      await result.waitFor();
+      expect(await result.count()===1,'registry palette search finds '+route);
+      await page.waitForFunction(route=>{const icon=document.querySelector('[data-t3-setup-item="'+route+'"] > svg');return icon&&Math.abs(icon.getBoundingClientRect().width-16)<0.2;},route);
+      expect(await result.locator('svg').evaluate(el=>Math.abs(el.getBoundingClientRect().width-16)<0.2&&Math.abs(el.getBoundingClientRect().height-16)<0.2),'palette icons stay bounded at 16px');
+      await result.click();await page.locator('.t3-setup-pane[data-ready]').waitFor();frame=page.frames().find(f=>f.url().includes('/__setup/'));
+      await frame.waitForFunction(route=>document.body.dataset.consoleRoute===route,route);ok('native palette opens Settings / Setup / '+route);
+      expect(await page.evaluate(()=>window.__setupPaletteDocument)===documentToken,'the pinned native router opens Settings without a document reload');
+      await frame.locator('.tc-console-topbar [data-cmd="embed.close"]').click();await page.locator('.t3-setup-pane').waitFor({state:'detached'});
+    }
+    if(process.env.T3_BRIDGE_UI_FIXTURES==='1') {
+      const {routeConsole,statusFor,portsFor}=require('./lib/console-fixtures.cjs');
+      await routeConsole(page,{status:()=>statusFor('skills'),ports:()=>portsFor('ready')});
+    }
+    for(const width of [1440,1024,820,744,390]){
+      await page.setViewportSize({width,height:width===1440?900:width===1024?768:width===390?844:1000});
+      await visit(page,base+'/settings/general');await page.locator(ENTRY).waitFor();
+      if(width===390)expect(await page.locator(ENTRY).evaluate(el=>getComputedStyle(el.querySelector('.t3-setup-badge')).display==='none'),'the compact rail hides the count in favor of a dot');
+      if(OUTPUT)await captureSettings(page,String(width));
+      frame=await open();
+      for(const mode of ['light','dark']){
+        await page.emulateMedia({colorScheme:mode});await frame.waitForFunction(mode=>document.documentElement.dataset.theme===mode,mode);
+        if(OUTPUT)await page.screenshot({path:path.join(OUTPUT,`tab-${width}-${mode}.png`),scale:width<768?'device':'css',animations:'disabled'});
+      }
+      if(OUTPUT&&process.env.T3_BRIDGE_UI_FIXTURES==='1') {
+        await frame.evaluate(()=>location.hash='agents');await frame.waitForFunction(()=>document.body.dataset.consoleRoute==='agents');
+        for(const mode of ['light','dark']) {
+          await page.emulateMedia({colorScheme:mode});await frame.waitForFunction(mode=>document.documentElement.dataset.theme===mode,mode);
+          await page.screenshot({path:path.join(OUTPUT,`agents-${width}-${mode}.png`),scale:width<768?'device':'css',animations:'disabled'});
+        }
+        await frame.locator('#page-agents [data-cmd="row.menu"]').first().click();
+        await frame.getByRole('menuitem',{name:/Uninstall/}).click();
+        await frame.locator('[role=alertdialog]').waitFor();
+        for(const mode of ['dark','light']) {
+          await page.emulateMedia({colorScheme:mode});await frame.waitForFunction(mode=>document.documentElement.dataset.theme===mode,mode);
+          await page.screenshot({path:path.join(OUTPUT,`dialog-${width}-${mode}.png`),scale:width<768?'device':'css',animations:'disabled'});
+        }
+        await page.keyboard.press('Escape');await frame.locator('[role=alertdialog]').waitFor({state:'detached'});
+        await page.emulateMedia({colorScheme:'dark'});await frame.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
+      }
+      if(width<768){
+        const pane=await page.locator('.t3-setup-pane').boundingBox(),modal=await page.locator('[data-app-modal][aria-label=Settings]').boundingBox();
+        expect(Math.abs(pane.width-modal.width)<=2,'compact Setup covers the whole native Settings surface at '+width);
+        await frame.locator('#setup-pages').click();await frame.locator('.tc-pagemenu').waitFor();
+        const shape=await frame.locator('.tc-pagemenu').evaluate(el=>el.classList.contains('tc-sheet--bottom'));
+        expect(shape===(width===390),'the compact page switcher uses the right menu shape at '+width);
+        expect(await page.locator('.t3-setup-scrim').count()===0,'compact mode needs only the child backdrop');
+        if(OUTPUT)await page.screenshot({path:path.join(OUTPUT,`tab-${width}-menu-dark.png`),scale:width<768?'device':'css',animations:'disabled'});
+        await frame.locator('.tc-pagemenu [role=menuitemradio]').filter({hasText:'Agents'}).click();await frame.waitForFunction(()=>document.body.dataset.consoleRoute==='agents');
+      }
+      await frame.locator('#main').focus();await page.keyboard.press('Escape');await page.locator('.t3-setup-pane').waitFor({state:'detached'});
+    }
+    // Cross-site writes and forged native sessions remain refused.
+    const cookies=(await context.cookies()).filter(c=>c.name.startsWith('t3_session')).map(c=>`${c.name}=${c.value}`).join('; ');
+    for(const site of ['cross-site','same-site']){
+      const response=await fetch(base+'/__setup/revoke',{method:'POST',headers:{cookie:cookies,'content-type':'application/json','sec-fetch-site':site},body:JSON.stringify({kind:'link',id:'none'})});expect(response.status===403,'rejects '+site+' native-session writes');
+    }
+    const framing=await fetch(base+'/__setup/',{headers:{cookie:cookies}});
+    expect(/frame-ancestors 'self'/.test(framing.headers.get('content-security-policy')||''),'only the same origin may frame Setup');
+    expect(errors.length===0,'no browser script errors',errors.join('\n'));
+    await context.close();
+  }catch(error){
+    if(OUTPUT&&page){await page.screenshot({path:path.join(OUTPUT,'failure.png'),animations:'disabled',timeout:5000}).catch(()=>{});fs.writeFileSync(path.join(OUTPUT,'failure.json'),JSON.stringify(await page.evaluate(()=>({path:location.pathname,host:!!document.querySelector('nav[data-workspace-area=settings-nav]'),pin:!!document.querySelector('[data-t3-setup-entry]'),pane:document.querySelector('.t3-setup-pane')?.outerHTML,nav:document.querySelector('.t3-setup-nav')?.outerHTML})).catch(()=>({})),null,2));}
+    throw error;
+  }finally{await browser.close();}
 };
 
 import(pathToFileURL(ROUTER_MODULE).href).then(({ createRouterServer }) => {

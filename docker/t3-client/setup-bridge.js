@@ -6,20 +6,15 @@
 //
 //   - Before pairing, a Setup pill in the pairing screen's empty corner. It
 //     opens the console in a tab of its own, which asks for the setup key.
-//   - Once paired, a Setup entry at the end of the Settings sidebar. It opens
-//     the console over T3 Code in a dialog, already signed in, because the
-//     console accepts T3 Code's own session (docker/setup/t3-session.mjs).
-//     Beside it, how many things need the person, counted as the console's
-//     own badges count them.
-//   - In T3's command palette, Setup's commands (Open setup, Pair a device,
-//     Agents, Toolchains, Source control, Ports), found and ranked the way T3
-//     finds its own, opening the same dialog on that page.
+//   - Once paired, a pinned Setup entry in Settings opens its own pages in
+//     that same surface, with the console's grouped nav and attention count.
+//   - Native command-palette results use authenticated registry metadata and
+//     open Settings on the requested Setup page.
 //
 // Both appear only when the console answers on this origin (the documented
 // route puts it at /__setup), so a deployment that does not route it keeps
 // exactly the upstream UI. Neither reaches into T3's React tree: the entry is
-// a list of its own placed after T3's settings list, built by copying T3's own
-// row so it matches whatever T3's styles are, and put back if T3 redraws the
+// a pin outside T3's scrolling settings list, built from its own row attributes so it matches whatever T3's styles are, and put back if T3 redraws the
 // sidebar without it. Whether this browser is paired is T3's answer
 // (/api/auth/session), not a guess from the path: T3 serves its app and its
 // pairing screen at the same "/".
@@ -37,17 +32,92 @@
   /** Whether a path is one of T3 Code's settings pages. */
   const isSettingsPath = (pathname) => /^\/settings(?:\/|$)/.test(String(pathname));
 
-  /** The console's address in the dialog: embedded, in T3's theme, on a page. */
-  const embedUrl = (base, theme, route) =>
-    base + '?embed=t3&theme=' + (theme === 'dark' ? 'dark' : 'light') + (route ? '#' + route : '');
+  /** Host layout is independent of the console frame's density. */
+  const embedUrl = (base, theme, route, layout) =>
+    base + '?embed=t3&host=tab&layout=' + (layout === 'wide' ? 'wide' : 'compact')
+      + '&theme=' + (theme === 'dark' ? 'dark' : 'light') + '#' + (route || 'overview');
 
-  /** The console's /hello answer, if it was the console that answered. */
-  const readHello = (body) => (body && body.service === 't3-setup'
-    ? {
-      signedIn: body.signedIn === true,
-      attention: Number.isInteger(body.attention) && body.attention > 0 ? body.attention : 0,
+  const layoutFor = width => width >= 768 ? 'wide' : 'compact';
+  const settingsPath = path => typeof path === 'string' && /^\/settings\/[a-z0-9-]+$/.test(path);
+  const routeKey = value => typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value);
+  const boundedText = (value, max = 200) => typeof value === 'string' && value.length <= max && !/[\x00-\x1f\x7f]/.test(value);
+  const safeCount = value => Number.isSafeInteger(value) && value >= 0;
+  // Data, never executable SVG markup. Rechecked at the consuming boundary.
+  const readIconNodes = nodes => {
+    if (!Array.isArray(nodes) || !nodes.length || nodes.length > 128) return null;
+    const tags = new Set(['path','circle','rect','line','polyline','polygon','ellipse']);
+    const attrs = new Set(['d','cx','cy','r','rx','ry','x','y','x1','x2','y1','y2','width','height','points','fill']);
+    const result = [];
+    for (const node of nodes) {
+      if (!Array.isArray(node) || node.length !== 2 || !tags.has(node[0]) || !node[1] || typeof node[1] !== 'object' || Array.isArray(node[1])) return null;
+      const picked = {};
+      for (const [name,value] of Object.entries(node[1])) {
+        if (!attrs.has(name) || typeof value !== 'string' || !/^[-0-9a-zA-Z .,]{1,2000}$/.test(value) || name === 'fill' && value !== 'none' && value !== 'currentColor') return null;
+        picked[name] = value;
+      }
+      result.push([node[0],picked]);
     }
-    : null);
+    return result;
+  };
+  const readIcons = icons => {
+    if (!icons || typeof icons !== 'object' || Array.isArray(icons) || Object.keys(icons).length > 100) return null;
+    const result = Object.create(null);
+    for (const [name,nodes] of Object.entries(icons)) {
+      if (!routeKey(name)) return null;
+      const safe = readIconNodes(nodes); if (!safe) return null;
+      result[name] = safe;
+    }
+    return result;
+  };
+  const readNav = body => {
+    if (!body || !Array.isArray(body.groups) || body.groups.length > 20 || !safeCount(body.attention)) return null;
+    const seen = new Set(), groups = [];
+    for (const group of body.groups) {
+      if (!group || !routeKey(group.id) || (group.label !== null && !boundedText(group.label)) || !Array.isArray(group.pages) || !group.pages.length || group.pages.length > 50 || groups.some(g=>g.id===group.id)) return null;
+      const pages = [];
+      for (const page of group.pages) {
+        if (!page || !routeKey(page.route) || seen.has(page.route) || !boundedText(page.title) || !page.title || !routeKey(page.icon) || seen.size >= 100) return null;
+        seen.add(page.route);
+        let badge = null;
+        if (page.badge != null) {
+          const b = page.badge;
+          if (!['warn','count','live','running'].includes(b.kind) || !safeCount(b.count) || !boundedText(b.label) || !b.label) return null;
+          badge = { kind:b.kind, count:b.count, label:b.label };
+        }
+        pages.push({route:page.route,title:page.title,icon:page.icon,badge});
+      }
+      groups.push({id:group.id,label:group.label||'',pages});
+    }
+    const status = body.status;
+    if (!status || typeof status.ok !== 'boolean' || !boundedText(status.text) || !boundedText(status.version)) return null;
+    if (body.current !== null && (!routeKey(body.current) || !seen.has(body.current))) return null;
+    return {current:body.current,groups,status:{ok:status.ok,text:status.text,version:status.version},attention:body.attention};
+  };
+  const readPalette = (items, nav) => {
+    if (!Array.isArray(items) || !items.length || items.length > 101) return null;
+    const ids = new Set(), routes = new Set(nav.groups.flatMap(g=>g.pages.map(p=>p.route)));
+    const result = [];
+    for (const item of items) {
+      if (!item || !routeKey(item.id) || ids.has(item.id) || item.route !== null && !routes.has(item.route) || !boundedText(item.title) || !boundedText(item.meta,500) || !routeKey(item.icon) || !Array.isArray(item.terms) || item.terms.length > 25 || !item.terms.every(t=>boundedText(t))) return null;
+      ids.add(item.id); result.push({id:item.id,route:item.route,title:item.title,meta:item.meta,icon:item.icon,terms:[...item.terms]});
+    }
+    return result;
+  };
+  const navDiff = (prev, next) => {
+    const a = prev?.groups.flatMap(g=>g.pages.map(p=>p.route)) || [], b = next.groups.flatMap(g=>g.pages.map(p=>p.route));
+    return {added:b.filter(r=>!a.includes(r)),removed:a.filter(r=>!b.includes(r)),order:b};
+  };
+
+  const readHello = body => {
+    if (!body || body.service !== 't3-setup') return null;
+    const result = {signedIn:body.signedIn === true,attention:safeCount(body.attention) ? body.attention : 0};
+    if (result.signedIn && body.protocol === 2) {
+      const nav = readNav(body.nav), icons = readIcons(body.icons);
+      const palette = nav && readPalette(body.palette,nav);
+      if (nav && icons && palette && nav.groups.every(g=>g.pages.every(p=>Object.hasOwn(icons,p.icon)))) Object.assign(result,{protocol:2,nav,icons,palette});
+    }
+    return result;
+  };
 
   /** The count beside Setup: nothing at zero, and never more than two digits. */
   const badgeText = (count) => (count > 99 ? '99+' : count > 0 ? String(count) : '');
@@ -57,7 +127,7 @@
     ? 'Setup, ' + count + (count === 1 ? ' thing needs' : ' things need') + ' you'
     : 'Setup');
 
-  /** A message from the console in our dialog, not from another frame or origin. */
+  /** A message from the console in our pane, not from another frame or origin. */
   const fromConsole = (event, frame, origin) => Boolean(frame
     && event.source === frame.contentWindow
     && event.origin === origin
@@ -98,11 +168,11 @@
    * item's terms, and the earliest term that has them all deciding its place.
    * A leading ">" (T3's commands only) still finds them: they are commands.
    */
-  const paletteMatches = (raw) => {
+  const paletteMatches = (raw, items = PALETTE_ITEMS) => {
     const query = searchText(String(raw || '').replace(/^\s*>/, ''));
     if (!query) return [];
     const words = query.split(' ');
-    return PALETTE_ITEMS
+    return items
       .map((item, index) => {
         // A page's title also goes by Setup's name with it ("setup ports"); an
         // item's own names come before the line under it, which mentions others.
@@ -165,10 +235,41 @@
    */
   const paletteOwnsFirst = ({ before = 0, virtualActions = false } = {}) => before === 0 && !virtualActions;
 
+  /** T3 tracks its own visual selection; primitive hover/ARIA may name an unpainted row. */
+  const paletteActiveIndex = (rows) => {
+    const marked = rows.findIndex((row) => row.hasAttribute('data-active') && row.getAttribute('data-active') !== 'false');
+    if (marked >= 0) return marked;
+    return rows.findIndex((row) => /(^|\s)bg-\S+!(\s|$)/.test(row.className));
+  };
+
+  // The wire format uses native names. The console maps these roles onto its
+  // own components and accepts only supported literal colors and font lists.
+  const APPEARANCE_COLORS = ['background', 'card', 'popover', 'muted', 'foreground', 'muted-foreground',
+    'placeholder', 'border', 'input', 'primary', 'primary-foreground', 'update-foreground', 'ring', 'accent',
+    'sidebar', 'sidebar-foreground', 'sidebar-muted-foreground', 'sidebar-border', 'sidebar-row-hover',
+    'sidebar-row-active', 'sidebar-row-selected', 'sidebar-control-surface', 'warning', 'warning-foreground',
+    'warning-surface', 'destructive', 'destructive-foreground', 'error-surface', 'success', 'success-foreground',
+    'info', 'info-foreground'];
+  // These are the adjusted roles used by native index.css's @theme mapping.
+  // Primary and semantic feedback colors intentionally stay unadjusted.
+  const APPEARANCE_CONTRAST = new Set(['foreground', 'muted-foreground', 'placeholder', 'border', 'input',
+    'sidebar-foreground', 'sidebar-muted-foreground', 'sidebar-border']);
+  const appearanceFromStyles = (styles) => {
+    const read = name => styles.getPropertyValue('--' + name).trim();
+    const colors = {};
+    for (const name of APPEARANCE_COLORS) {
+      const value = (APPEARANCE_CONTRAST.has(name) && read('contrast-' + name)) || read(name);
+      if (value) colors[name] = value;
+    }
+    return { version: 1, colors, fonts: { sans: read('font-sans'), mono: read('font-mono'), smoothing: styles.getPropertyValue('-webkit-font-smoothing').trim() },
+      fontSize: styles.fontSize, radius: read('control-radius') };
+  };
+
   if (typeof document === 'undefined') {
     globalThis.T3SetupBridge = {
       PROBE_PATHS, isSettingsPath, embedUrl, readHello, badgeText, entryLabel, fromConsole,
-      PALETTE_ITEMS, paletteMatches, paletteStep, paletteOwnsFirst,
+      PALETTE_ITEMS, paletteMatches, paletteStep, paletteOwnsFirst, paletteActiveIndex,
+      APPEARANCE_COLORS, appearanceFromStyles, layoutFor, settingsPath, readNav, readIcons, readIconNodes, readPalette, navDiff,
     };
     return;
   }
@@ -180,13 +281,14 @@
     attention: 0,      // what needs the person, from the console
     checkedAt: 0,      // when the console was last asked for that count
     path: location.pathname,
-    dialog: null,      // the open dialog: see openDialog
+    tab: null,         // one pane, never reparented during resize
+    nav: null, icons: Object.create(null), paletteItems: PALETTE_ITEMS, pendingRoute: null,
   };
   const ENTRY = 'data-t3-setup-entry';
   const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
 
   // --------------------------------------------------------------- styles --
-  // T3's own custom properties first, so the entry and the dialog follow its
+  // T3's own custom properties first, so the pin and pane follow its
   // theme, including a custom one; the fallbacks are its default palette.
   const CSS = [
     // The pill: first contact, before pairing.
@@ -199,44 +301,20 @@
     'html.dark .t3-setup-pill{background:rgba(23,23,23,.9);color:#f5f5f5;border-color:rgba(255,255,255,.16);}',
     'html.dark .t3-setup-pill:hover{border-color:rgba(255,255,255,.36);color:#fff;}',
     '.t3-setup-pill svg{width:13px;height:13px;flex:none;}',
-    // The entry: its own list after T3's, set apart by a rule.
-    '.t3-setup-list{margin-top:2px;padding-top:var(--sidebar-content-inset,.5rem);',
-    'border-top:1px solid var(--sidebar-border,var(--border,rgba(0,0,0,.08)));}',
     '.t3-setup-badge{margin-left:auto;flex:none;min-width:18px;height:18px;padding:0 5px;border-radius:999px;',
     'display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;line-height:1;',
     'font-variant-numeric:tabular-nums;color:var(--warning-foreground,#b45309);',
     'background:var(--warning-surface,rgba(245,158,11,.12));}',
     '.t3-setup-badge[hidden]{display:none;}',
-    // The dialog: T3's own (a frosted backdrop over its background colour, a
-    // large rounded panel, scale and fade), full screen on a phone.
-    '.t3-setup-layer{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;}',
-    '.t3-setup-backdrop{position:absolute;inset:0;background:color-mix(in srgb,var(--background,#fff) 60%,transparent);',
-    '-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);transition:opacity .2s ease-in-out;}',
-    'html.dark .t3-setup-backdrop{background:color-mix(in srgb,var(--background,#0a0a0a) 64%,transparent);}',
-    '.t3-setup-panel{position:relative;display:flex;width:min(1200px,100%);height:min(880px,100%);overflow:hidden;',
-    'border-radius:var(--radius-2xl,18px);background:var(--background,#fff);outline:none;',
-    'border:1px solid color-mix(in srgb,var(--foreground,#000) 10%,transparent);box-shadow:0 24px 64px -24px #000000a6;',
-    'transition:scale .2s ease-in-out,opacity .2s ease-in-out,translate .2s ease-in-out;}',
-    'html.dark .t3-setup-panel{border-color:color-mix(in srgb,#fff 8%,transparent);',
-    'box-shadow:inset 0 1px #ffffff0a,0 24px 72px -20px #000000e6;}',
     '.t3-setup-frame{display:block;flex:1;min-width:0;height:100%;border:0;background:transparent;color-scheme:normal;',
     'opacity:0;transition:opacity .15s ease-out;}',
-    '.t3-setup-layer[data-ready] .t3-setup-frame{opacity:1;}',
     // A spinner, only if loading takes long enough to notice.
     '.t3-setup-loading{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;',
     'opacity:0;animation:t3-setup-show .2s .3s forwards;}',
     '.t3-setup-loading::after{content:"";width:18px;height:18px;border-radius:50%;',
     'border:2px solid color-mix(in srgb,var(--foreground,#262626) 14%,transparent);',
     'border-top-color:var(--muted-foreground,#71717a);animation:t3-setup-spin .8s linear infinite;}',
-    '.t3-setup-layer[data-ready] .t3-setup-loading{display:none;}',
-    '.t3-setup-layer:not([data-state=open]) .t3-setup-backdrop{opacity:0;}',
-    '.t3-setup-layer:not([data-state=open]) .t3-setup-panel{opacity:0;scale:.98;}',
-    '@keyframes t3-setup-spin{to{rotate:360deg}}',
     '@keyframes t3-setup-show{to{opacity:1}}',
-    '@media (max-width:639.98px){.t3-setup-layer{padding:0;}',
-    '.t3-setup-panel{width:100%;height:100%;border:0;border-radius:0;box-shadow:none;',
-    'padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);}',
-    '.t3-setup-layer:not([data-state=open]) .t3-setup-panel{scale:1;translate:0 16px;}}',
     // Setup's rows in T3's command palette, highlighted as T3 highlights its
     // own; while one of them is, T3's highlighted row is drawn plain.
     '.t3-setup-cmd-text{display:flex;flex-direction:column;min-width:0;flex:1;line-height:1.3;}',
@@ -255,9 +333,152 @@
     '[data-t3-setup-owns] [data-slot="command-item"]:not([data-t3-setup-item]){background-color:transparent!important;color:inherit!important;}',
     '@layer base{[data-t3-setup-owns] [data-slot="command-item"]:not([data-t3-setup-item]){background-color:transparent!important;color:inherit!important;}}',
     '[data-t3-setup-empty]>:not([data-t3-setup-host]){display:none!important;}',
-    '@media (prefers-reduced-motion:reduce){.t3-setup-backdrop,.t3-setup-panel,.t3-setup-frame{transition:none;}',
+    '@media (prefers-reduced-motion:reduce){.t3-setup-frame{transition:none;}',
     '.t3-setup-loading::after{animation-duration:2.4s;}}',
-  ].join('');
+  ].join('') + `
+/* Setup as a native Settings tab. Native custom properties keep the host
+   in step with built-in and custom themes. Row geometry is borrowed from
+   native page-row attributes; these rules style only Setup-owned elements. */
+
+/* ---------------------------------------------------------------- the pin */
+/* Pinned between T3's list (the ScrollArea holding [data-sidebar=content]) and
+   T3's footer, so it is in view however far the list scrolls. */
+.t3-setup-pin {
+  container: t3-setup-pin / inline-size;
+  flex: none;
+  padding: var(--sidebar-content-inset, 0.5rem);
+  border-top: 1px solid var(--sidebar-border, rgba(0, 0, 0, 0.08));
+  background: var(--sidebar, #fafafa);
+}
+.t3-setup-pin > ul { margin: 0; }
+.t3-setup-pin [data-sidebar="menu-button"] { position: relative; }
+.t3-setup-chev {
+  width: 14px; height: 14px; flex: none; margin-left: 2px;
+  color: color-mix(in srgb, var(--sidebar-muted-foreground, #71717a) 80%, transparent);
+}
+.t3-setup-badge:not([hidden]) + .t3-setup-chev { margin-left: 6px; }
+/* The rail (T3's nav is 56px below md): icon only, a dot for the count. */
+.t3-setup-dot {
+  display: none; position: absolute; top: 5px; right: 8px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--warning, #f59e0b); box-shadow: 0 0 0 2px var(--sidebar, #fafafa);
+}
+/* An element can't query its own container: these style the pin's children.
+   No safe-area padding here: T3's dialog already has max-sm:pb-safe. */
+@container t3-setup-pin (max-width: 80px) {
+  .t3-setup-pin > ul { display: flex; justify-content: center; }
+  .t3-setup-pin .t3-setup-badge, .t3-setup-pin .t3-setup-chev { display: none; }
+  .t3-setup-pin .t3-setup-dot[data-on] { display: block; }
+}
+
+/* A tooltip, drawn as T3 draws its own: after a 600ms hover, and on focus on
+   the rail, where it is the only visible label. */
+.t3-setup-tip {
+  position: fixed; z-index: 60; pointer-events: none; padding: 6px 10px; border-radius: calc(var(--radius, 0.625rem) - 4px);
+  background: var(--foreground, #18181b); color: var(--background, #fff); font-size: 12px; line-height: 16px; white-space: nowrap;
+  box-shadow: 0 16px 40px -18px rgb(0 0 0 / 0.55);
+}
+.t3-setup-tip small { display: block; font-size: 11px; opacity: 0.7; }
+
+/* ------------------------------------------------------ Setup's nav (wide) */
+/* Over T3's whole settings nav, which the bridge marks data-t3-setup-host so
+   it positions this. T3's own children are inert underneath. */
+nav[data-t3-setup-host] { position: relative; }
+.t3-setup-nav {
+  position: absolute; inset: 0; z-index: 40;
+  display: flex; flex-direction: column; gap: 0.5rem; padding: var(--sidebar-content-inset, 0.5rem); min-height: 0;
+  background: var(--sidebar, #fafafa); color: var(--sidebar-foreground, #18181b);
+  transition: opacity 0.15s ease-out, translate 0.15s ease-out;
+}
+.t3-setup-nav[data-state="opening"], .t3-setup-nav[data-state="closing"] { opacity: 0; translate: 8px 0; }
+.t3-setup-back { flex: none; color: var(--sidebar-muted-foreground, #71717a); }
+.t3-setup-back:hover { color: var(--sidebar-foreground, #18181b); }
+
+.t3-setup-title {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  margin: 0 -0.5rem 2px; padding: 6px 1rem 10px;
+  border-bottom: 1px solid var(--sidebar-border, rgba(0, 0, 0, 0.08));
+}
+.t3-setup-tile {
+  width: 32px; height: 32px; flex: none; display: grid; place-items: center;
+  border-radius: calc(var(--radius, 0.625rem) - 2px); border: 1px solid var(--border, #e4e4e7);
+  background: var(--card, #fff); color: var(--foreground, #18181b); box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+}
+.t3-setup-tile > svg { width: 16px; height: 16px; }
+.t3-setup-title > div { display: flex; flex-direction: column; min-width: 0; }
+.t3-setup-title strong { font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -0.005em; }
+.t3-setup-title span { font-size: 12px; line-height: 16px; color: var(--muted-foreground, #71717a); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Only the pages scroll; a fade says there is more below. */
+.t3-setup-groups { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 1rem; padding-top: 6px; }
+.t3-setup-groups[data-overflow] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+.t3-setup-group { display: flex; flex-direction: column; gap: 0.25rem; }
+.t3-setup-group > ul { margin: 0; }
+.t3-setup-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Badges: the warning count is the existing .t3-setup-badge. */
+.t3-setup-badge--info { color: var(--info-foreground, #1d4ed8); background: color-mix(in srgb, var(--info, #3b82f6) 12%, transparent); }
+.t3-setup-mark { margin-left: auto; flex: none; width: 1rem; height: 1rem; display: inline-grid; place-items: center; }
+.t3-setup-mark::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--info, #3b82f6); }
+.t3-setup-mark--live::before { box-shadow: 0 0 0 3px color-mix(in srgb, var(--info, #3b82f6) 18%, transparent); }
+.t3-setup-mark--running::before {
+  width: 10px; height: 10px; background: none; border: 1.5px solid var(--info, #3b82f6); border-right-color: transparent;
+  animation: t3-setup-spin 0.75s linear infinite;
+}
+
+.t3-setup-foot { flex: none; display: flex; flex-direction: column; gap: 0.25rem; }
+.t3-setup-server {
+  display: flex; flex-direction: column; gap: 2px; margin-bottom: 0.25rem; padding: 0.375rem 0.625rem;
+  border-radius: calc(var(--radius, 0.625rem)); border: 1px solid color-mix(in srgb, var(--border, #e4e4e7) 80%, transparent);
+  background: color-mix(in srgb, var(--card, #fff) 50%, transparent);
+  font-size: 12px; line-height: 16px; color: var(--sidebar-muted-foreground, #71717a);
+}
+.t3-setup-server-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.t3-setup-server-row strong { font-weight: 500; color: var(--foreground, #18181b); }
+.t3-setup-server-version { font-family: var(--font-mono, ui-monospace, monospace); overflow-wrap: anywhere; }
+.t3-setup-status { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--success, #16a34a); }
+.t3-setup-status[data-tone="danger"] { background: var(--destructive, #dc2626); }
+
+/* One scrim over the nav while the console has a dialog open over its frame;
+   the console draws the rest. */
+.t3-setup-scrim {
+  position: absolute; inset: 0; z-index: 3;
+  background: color-mix(in srgb, var(--background, #fff) 60%, transparent);
+  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+  transition: opacity 0.15s ease-out;
+}
+html.dark .t3-setup-scrim { background: color-mix(in srgb, var(--background, #0a0a0a) 64%, transparent); }
+.t3-setup-scrim[data-state="opening"], .t3-setup-scrim[data-state="closing"] { opacity: 0; }
+
+/* ------------------------------------------------------------- the pane */
+/* Mounted once in the settings body (the nav's parent, already relative) and
+   never moved: re-inserting an iframe reloads it. Wide: its inline start is the
+   nav's measured width, so it covers T3's content column (header and page).
+   Compact: over the whole body, rail included. z-index 40 keeps it above what
+   T3 positions inside its pages (z-20, z-30 on Appearance). */
+.t3-setup-pane {
+  position: absolute; inset: 0; z-index: 40; display: flex; min-width: 0; min-height: 0;
+  background: var(--background, #fff);
+}
+.t3-setup-pane[data-layout="wide"] { inset-inline-start: var(--t3-setup-nav-w, 15rem); }
+.t3-setup-pane > .t3-setup-frame { flex: 1; width: 100%; height: 100%; }
+.t3-setup-pane[data-ready] > .t3-setup-frame { opacity: 1; }
+.t3-setup-pane[data-ready] > .t3-setup-loading { display: none; }
+.t3-setup-load-error { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; color: var(--foreground); background: var(--background); font-size: 14px; }
+.t3-setup-load-error p { max-width: 32ch; color: var(--muted-foreground); }
+.t3-setup-load-error > div { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.t3-setup-load-error button, .t3-setup-load-error a { border: 1px solid var(--border); border-radius: var(--control-radius, 6px); padding: 8px 12px; color: inherit; background: var(--card); cursor: pointer; }
+
+@keyframes t3-setup-spin { to { rotate: 360deg; } }
+@media (prefers-reduced-motion: reduce) {
+  .t3-setup-nav, .t3-setup-scrim, .t3-setup-pane > .t3-setup-frame { transition: none; }
+  .t3-setup-nav[data-state] { opacity: 1; translate: none; }
+  .t3-setup-mark--running::before, .t3-setup-loading, .t3-setup-loading::after { animation: none; }
+  .t3-setup-loading { opacity: 1; }
+}
+`;
 
   const addStyles = () => {
     if (document.getElementById('t3-setup-style')) return;
@@ -321,7 +542,15 @@
 
   const refreshPaired = async () => {
     const paired = await pairedWithT3();
+    const previous = state.paired;
     if (paired !== null) state.paired = paired;
+    // Pairing can finish in the same document that received anonymous hello.
+    // Do not keep its missing registry until the attention cache expires.
+    if (paired === true && previous !== true) await refreshAttention(true);
+    if (paired === false) {
+      state.nav = null; state.icons = Object.create(null); state.paletteItems = PALETTE_ITEMS; state.attention = 0;
+      if (state.tab) closeTab(false);
+    }
     schedule();
     schedulePalette();
   };
@@ -333,6 +562,7 @@
     const answer = await hello();
     if (!answer) return;
     state.attention = answer.signedIn ? answer.attention : 0;
+    if(answer.nav&&!state.tab){state.nav=answer.nav;state.icons=answer.icons;state.paletteItems=answer.palette;}
     syncBadges();
   };
 
@@ -353,210 +583,308 @@
     document.body.appendChild(link);
   };
 
-  // ---------------------------------------------------------------- entry --
-  /** T3's settings list in each sidebar drawn now (a phone draws it in a sheet). */
-  const settingsMenus = () => [...document.querySelectorAll('[data-sidebar="content"]')]
-    .map((content) => content.querySelector('[data-sidebar="menu"]'))
-    .filter((menu) => menu && !menu.hasAttribute(ENTRY) && menu.querySelector('[data-sidebar="menu-button"]'));
-
-  /** A Setup row made from T3's own last row, so it is styled exactly as T3's are. */
-  const buildEntry = (menu) => {
-    const rows = menu.querySelectorAll(':scope > [data-sidebar="menu-item"]');
-    const model = rows[rows.length - 1];
-    const sourceButton = model && model.querySelector('[data-sidebar="menu-button"]');
-    if (!sourceButton) return null;
-
-    const list = document.createElement('ul');
-    list.className = menu.className + ' t3-setup-list';
-    list.setAttribute('data-sidebar', 'menu');
-    list.setAttribute(ENTRY, '');
-    const item = model.cloneNode(false);
-    const button = document.createElement('button');
-    for (const { name, value } of sourceButton.attributes) {
-      if (/^(class|data-sidebar|data-slot|data-size)$/.test(name)) button.setAttribute(name, value);
+  // ------------------------------------------------ native Settings host --
+  const theme = () => document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+  const appearance = () => appearanceFromStyles(getComputedStyle(document.documentElement));
+  const toConsole = (frame,message) => frame.contentWindow?.postMessage({source:'t3-code',...message},location.origin);
+  const node = (tag,attrs = {},text) => {
+    const result = document.createElement(tag);
+    for (const [key,value] of Object.entries(attrs)) if(value != null) result.setAttribute(key,String(value));
+    if(text != null) result.textContent = text;
+    return result;
+  };
+  const setAttr = (element,key,value) => {
+    if(value == null) {if(element.hasAttribute(key)) element.removeAttribute(key);}
+    else if(element.getAttribute(key) !== String(value)) element.setAttribute(key,String(value));
+  };
+  const svg = (name,classes = '') => {
+    const icon = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    for(const [key,value] of Object.entries({viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':'2','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true',class:classes,width:'16',height:'16'})) icon.setAttribute(key,value);
+    const nodes = readIconNodes(state.icons[name]);
+    if(nodes) for(const [tag,attrs] of nodes) {
+      const shape = document.createElementNS('http://www.w3.org/2000/svg',tag);
+      for(const [key,value] of Object.entries(attrs)) shape.setAttribute(key,value);
+      icon.appendChild(shape);
+    } else {
+      // Only this fixed, source-controlled fallback may be parsed as markup.
+      icon.innerHTML = name === 'chevron-left' ? '<path d="m15 18-6-6 6-6"/>' : name === 'chevron-right' ? '<path d="m9 18 6-6-6-6"/>' : name === 'external-link' ? '<path d="M15 3h6v6M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>' : SERVER_COG_ICON;
     }
-    button.type = 'button';
-    button.setAttribute('data-active', 'false');
-    button.setAttribute('aria-haspopup', 'dialog');
-
-    // T3's icon and label classes carry over by attribute, never through
-    // markup: a utility class may hold quotes or brackets.
-    const sourceIcon = sourceButton.querySelector('svg');
-    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    for (const [name, value] of [['width', '24'], ['height', '24'], ['viewBox', '0 0 24 24'], ['fill', 'none'], ['stroke', 'currentColor'],
-      ['stroke-width', '2'], ['stroke-linecap', 'round'], ['stroke-linejoin', 'round'], ['aria-hidden', 'true']]) icon.setAttribute(name, value);
-    const iconClass = sourceIcon ? (sourceIcon.getAttribute('class') || '').replace(/\blucide-[\w-]+/g, ' ').trim() : 'lucide';
-    icon.setAttribute('class', (iconClass + ' lucide-server-cog').trim());
-    icon.innerHTML = SERVER_COG_ICON;
-    const sourceLabel = sourceButton.querySelector('span');
-    const label = document.createElement('span');
-    if (sourceLabel && sourceLabel.className) label.className = sourceLabel.className;
-    label.textContent = 'Setup';
-    const badge = document.createElement('span');
-    badge.className = 't3-setup-badge';
-    badge.hidden = true;
-    button.append(icon, label, badge);
-    button.addEventListener('click', (event) => {
-      // T3's router listens at its root; this row is not one of its routes.
-      event.preventDefault();
-      event.stopPropagation();
-      openDialog(button);
-    });
-    item.appendChild(button);
-    list.appendChild(item);
-    return list;
+    return icon;
   };
-
-  const removeEntries = () => {
-    for (const list of document.querySelectorAll('[' + ENTRY + ']')) list.remove();
+  const rowTemplates = new WeakMap();
+  const settingsHost = () => {
+    const nav = document.querySelector('nav[data-workspace-area="settings-nav"]') || document.querySelector('nav[aria-label="Settings sections"]');
+    if(!nav) return null;
+    const content = nav.parentElement?.querySelector('[data-workspace-area="settings"]');
+    const found = nav.querySelector('[data-sidebar="content"] [data-settings-section]')
+      || nav.querySelector('[data-sidebar="content"] [role="tree"] [role="treeitem"]');
+    if(found)rowTemplates.set(nav,found);
+    const source = found || rowTemplates.get(nav);
+    const scroll = [...nav.children].find(child=>child.querySelector('[data-sidebar="content"]') || child.matches('[data-sidebar="content"]'));
+    if(!content || !source || !scroll || !nav.parentElement.contains(content)
+      || !content.querySelector('header button[aria-label="Close"]')) return null;
+    return {nav,content,source,scroll,body:nav.parentElement};
   };
-
-  /** One entry right after each settings list; strays from an earlier drawing go. */
+  const sourceAttrs = source => Object.fromEntries([...source.attributes].filter(a=>/^(class|data-sidebar|data-slot|data-size)$/.test(a.name)).map(a=>[a.name,a.value]));
+  const row = (host,tag,title,mark) => {
+    const result = node(tag,{...sourceAttrs(host.source),...(tag==='button'?{type:'button'}:{})});
+    const sourceIcon = host.source.querySelector('svg');
+    const iconClass = (sourceIcon?.getAttribute('class') || 'lucide').replace(/\blucide-[\w-]+/g,'').trim();
+    result.append(svg(mark,iconClass),node('span',{class:host.source.querySelector('span')?.getAttribute('class')||''},title));
+    return result;
+  };
+  const SESSION = 't3-setup-tab';
+  const remember = route => {try{sessionStorage.setItem(SESSION,JSON.stringify({open:true,route}));}catch{/* Storage is optional. */}};
+  const forget = () => {try{sessionStorage.removeItem(SESSION);}catch{/* Storage is optional. */}};
+  const remembered = () => {
+    try {const saved = JSON.parse(sessionStorage.getItem(SESSION)); return saved?.open===true && routeKey(saved.route)?saved.route:null;} catch{return null;}
+  };
+  let tooltip = null, tooltipTimer = null;
+  const hideTip = () => {clearTimeout(tooltipTimer);tooltipTimer=null;tooltip?.remove();tooltip=null;for(const button of document.querySelectorAll('[aria-describedby="t3-setup-tip"]'))button.removeAttribute('aria-describedby');};
+  const showTip = button => {
+    hideTip(); if(!button.isConnected || state.tab) return;
+    tooltip=node('div',{class:'t3-setup-tip',role:'tooltip',id:'t3-setup-tip'},'Setup');
+    tooltip.append(node('small',{},'Agents, devices, files and updates on this server'));
+    document.body.append(tooltip);
+    const b=button.getBoundingClientRect(),t=tooltip.getBoundingClientRect();
+    tooltip.style.left=Math.max(8,Math.min(b.right+8,innerWidth-t.width-8))+'px';
+    tooltip.style.top=Math.max(8,Math.min(b.top,innerHeight-t.height-8))+'px';
+    button.setAttribute('aria-describedby','t3-setup-tip');
+  };
+  const removeEntries = () => {hideTip();for(const pin of document.querySelectorAll('['+ENTRY+']'))pin.remove();};
   const ensureEntries = () => {
-    const menus = settingsMenus();
-    for (const list of document.querySelectorAll('[' + ENTRY + ']')) {
-      if (!menus.includes(list.previousElementSibling)) list.remove();
+    const host=settingsHost();
+    for(const pin of document.querySelectorAll('['+ENTRY+']')) if(pin.parentElement!==host?.nav) pin.remove();
+    if(!host) {if(state.tab) closeTab(false);return;}
+    if(state.tab && state.tab.host.nav !== host.nav)closeTab(false);
+    if(!host.nav.querySelector(':scope > ['+ENTRY+']')) {
+      const pin=node('div',{class:'t3-setup-pin',[ENTRY]:''});
+      const menu=node('ul',{'data-sidebar':'menu',class:host.source.closest('ul')?.className||''});
+      const item=node('li',{'data-sidebar':'menu-item',class:host.source.parentElement.className});
+      const button=row(host,'button','Setup','server-cog');
+      button.append(node('span',{class:'t3-setup-badge',hidden:''}),svg('chevron-right','t3-setup-chev'),node('span',{class:'t3-setup-dot','aria-hidden':'true'}));
+      button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();openTab(button);});
+      button.addEventListener('pointerenter',()=>{hideTip();tooltipTimer=setTimeout(()=>showTip(button),600);});
+      button.addEventListener('pointerleave',hideTip);
+      button.addEventListener('focus',()=>{if(host.nav.offsetWidth<=80)showTip(button);});
+      button.addEventListener('blur',()=>{hideTip();button.removeAttribute('aria-describedby');});
+      item.append(button);menu.append(item);pin.append(menu);host.scroll.after(pin);
     }
-    for (const menu of menus) {
-      const next = menu.nextElementSibling;
-      if (next && next.hasAttribute(ENTRY)) continue;
-      const entry = buildEntry(menu);
-      if (entry) menu.after(entry);
-    }
+    if(state.tab){for(const child of host.content.children)mask(state.tab.masks,child);for(const child of host.nav.children)if(child!==state.tab.nav)mask(state.tab.masks,child);}
     syncBadges();
+    if(!state.tab && (state.pendingRoute || isSettingsPath(location.pathname) && remembered())) {
+      const route=state.pendingRoute||remembered();state.pendingRoute=null;
+      openTab(host.nav.querySelector('['+ENTRY+'] button'),route);
+    }
   };
-
   const syncBadges = () => {
-    const text = badgeText(state.attention);
-    for (const badge of document.querySelectorAll('[' + ENTRY + '] .t3-setup-badge')) {
-      if (badge.textContent !== text) badge.textContent = text;
-      if (badge.hidden !== !text) badge.hidden = !text;
-    }
-    const label = entryLabel(state.attention);
-    const active = String(Boolean(state.dialog));
-    for (const button of document.querySelectorAll('[' + ENTRY + '] button')) {
-      if (button.getAttribute('aria-label') !== label) button.setAttribute('aria-label', label);
-      if (button.getAttribute('data-active') !== active) button.setAttribute('data-active', active);
+    for(const pin of document.querySelectorAll('['+ENTRY+']')) {
+      const badge=pin.querySelector('.t3-setup-badge'),text=badgeText(state.attention),button=pin.querySelector('button');
+      if(badge.textContent!==text)badge.textContent=text;
+      if(badge.hidden!==!text)badge.hidden=!text;
+      setAttr(button,'aria-label',entryLabel(state.attention));setAttr(button,'data-active',Boolean(state.tab));
+      setAttr(pin.querySelector('.t3-setup-dot'),'data-on',text?'':null);
     }
   };
-
-  // ----------------------------------------------------------- the dialog --
-  const theme = () => (document.documentElement.classList.contains('dark') ? 'dark' : 'light');
-  const toConsole = (frame, message) => {
-    if (frame.contentWindow) frame.contentWindow.postMessage(Object.assign({ source: 't3-code' }, message), location.origin);
+  // Exact attribute restoration, including native nodes that were already inert.
+  const mask = (map,element) => {
+    if(!map.has(element))map.set(element,{inert:element.getAttribute('inert'),hidden:element.getAttribute('aria-hidden')});
+    setAttr(element,'inert','');setAttr(element,'aria-hidden','true');
   };
-
-  /** Close T3's own phone sidebar first, as its rows do when chosen. */
-  const closeMobileSidebar = (trigger) => {
-    const sheet = trigger.closest('[data-mobile="true"]');
-    if (!sheet) return false;
-    trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-    return true;
+  const unmask = map => {for(const [element,saved] of map){setAttr(element,'inert',saved.inert);setAttr(element,'aria-hidden',saved.hidden);}map.clear();};
+  const updateOverflow = tab => {
+    if(!tab.groups)return;
+    const overflow=tab.groups.scrollHeight-tab.groups.clientHeight-tab.groups.scrollTop>2;
+    setAttr(tab.groups,'data-overflow',overflow?'':null);
   };
-
-  /** Open the console over T3, on one of its pages (`route`, such as 'agents') or its Overview. */
-  const openDialog = (trigger, route) => {
-    if (state.dialog || !state.base) return;
-    if (closeMobileSidebar(trigger)) {
-      // Give the sheet a frame to let go of focus before the dialog takes it.
-      requestAnimationFrame(() => requestAnimationFrame(() => openDialog(document.body, route)));
-      return;
-    }
-
-    const layer = document.createElement('div');
-    layer.className = 't3-setup-layer';
-    layer.setAttribute('data-state', 'opening');
-    const backdrop = document.createElement('div');
-    backdrop.className = 't3-setup-backdrop';
-    const panel = document.createElement('div');
-    panel.className = 't3-setup-panel';
-    panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-modal', 'true');
-    panel.setAttribute('aria-label', 'Setup');
-    panel.tabIndex = -1;
-    const loading = document.createElement('div');
-    loading.className = 't3-setup-loading';
-    loading.setAttribute('aria-hidden', 'true');
-    const frame = document.createElement('iframe');
-    frame.className = 't3-setup-frame';
-    frame.title = 'T3 Code setup';
-    frame.setAttribute('allow', 'clipboard-read; clipboard-write');
-    frame.src = embedUrl(state.base, theme(), route || null);
-    panel.append(loading, frame);
-    layer.append(backdrop, panel);
-
-    // Everything else on the page is out of reach while the dialog is open,
-    // which also keeps Tab inside it; so is any layer T3 or a library it uses
-    // adds to the page meanwhile (a portal, a sign-in widget's container).
-    const reachable = (node) => node.nodeType === 1 && node !== layer && !node.inert && !/^(SCRIPT|STYLE|LINK)$/.test(node.tagName);
-    const inerted = [...document.body.children].filter(reachable);
-    document.body.appendChild(layer);
-    for (const node of inerted) node.inert = true;
-    const bodyWatch = new MutationObserver((records) => {
-      for (const record of records) {
-        for (const node of record.addedNodes) {
-          if (!reachable(node)) continue;
-          node.inert = true;
-          inerted.push(node);
-        }
+  const paintBadge = (element,badge) => {
+    const signature=JSON.stringify(badge);
+    if(element.dataset.signature===signature)return;
+    element.dataset.signature=signature;
+    element.hidden=!badge;
+    element.className=!badge?'t3-setup-badge':badge.kind==='warn'||badge.kind==='count'?'t3-setup-badge'+(badge.kind==='count'?' t3-setup-badge--info':''):'t3-setup-mark t3-setup-mark--'+badge.kind;
+    element.textContent=badge&&(badge.kind==='warn'||badge.kind==='count')?badgeText(badge.count):'';
+    setAttr(element,'aria-label',badge?.label);setAttr(element,'title',badge?.label);
+  };
+  const ordered = (parent,child,index) => {if(parent.children[index]!==child)parent.insertBefore(child,parent.children[index]||null);};
+  const roving = (tab,active) => {for(const element of [tab.back,...tab.groups.querySelectorAll('a[data-route]'),tab.external])element.tabIndex=element===active?0:-1;};
+  const paintNav = () => {
+    const tab=state.tab,model=state.nav;
+    if(!tab?.nav || !model)return;
+    const focused=document.activeElement,wasFocused=tab.nav.contains(focused);
+    const wanted=new Set();
+    model.groups.forEach((group,index)=>{
+      let entry=tab.groupNodes.get(group.id);
+      if(!entry){
+        const outer=node('div',{class:'t3-setup-group',role:'group'}),list=node('ul',{'data-sidebar':'menu',class:tab.host.source.closest('ul')?.className||''});
+        const heading=node('h3',{class:tab.host.nav.querySelector('[role="group"] > h3')?.className||'text-xs text-muted-foreground px-2'});
+        outer.append(heading,list);entry={outer,list,heading};tab.groupNodes.set(group.id,entry);
       }
+      entry.heading.hidden=!group.label;
+      if(entry.heading.textContent!==group.label)entry.heading.textContent=group.label;
+      setAttr(entry.outer,'aria-label',group.label||null);ordered(tab.groups,entry.outer,index);
+      group.pages.forEach((page,at)=>{
+        wanted.add(page.route);
+        let link=tab.rows.get(page.route);
+        if(!link){
+          link=row(tab.host,'a',page.title,page.icon);link.dataset.route=page.route;
+          link.children[1].className='t3-setup-row-text';link.append(node('span',{class:'t3-setup-badge',hidden:''}));
+          link.addEventListener('click',event=>{if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||event.button!==0)return;event.preventDefault();event.stopPropagation();toConsole(tab.frame,{type:'navigate',route:page.route});});
+          link.addEventListener('focus',()=>roving(tab,link));tab.rows.set(page.route,link);
+        }
+        const iconSignature=page.icon+JSON.stringify(state.icons[page.icon]);
+        if(link.dataset.icon!==iconSignature){link.replaceChild(svg(page.icon,tab.host.source.querySelector('svg')?.getAttribute('class')||''),link.firstElementChild);link.dataset.icon=iconSignature;}
+        if(link.children[1].textContent!==page.title)link.children[1].textContent=page.title;
+        setAttr(link,'title',page.title);setAttr(link,'href',state.base+'#'+page.route);
+        setAttr(link,'aria-current',page.route===model.current?'page':null);setAttr(link,'data-active',page.route===model.current);
+        paintBadge(link.lastElementChild,page.badge);
+        let item=link.parentElement;
+        if(!item){item=node('li',{'data-sidebar':'menu-item',class:tab.host.source.parentElement.className});item.append(link);}
+        ordered(entry.list,item,at);
+      });
     });
-    bodyWatch.observe(document.body, { childList: true });
-
-    const onKey = (event) => {
-      if (event.key !== 'Escape' || event.isComposing) return;
-      event.preventDefault();
-      event.stopPropagation();
-      closeDialog();
-    };
-    document.addEventListener('keydown', onKey, true);
-    backdrop.addEventListener('click', () => closeDialog());
-    // The console keeps T3's theme as T3 switches it.
-    const themeWatch = new MutationObserver(() => toConsole(frame, { type: 'theme', theme: theme() }));
-    themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-
-    state.dialog = { layer, frame, trigger, inerted, onKey, themeWatch, bodyWatch };
-    syncBadges();
-    panel.focus({ preventScroll: true });
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (state.dialog && state.dialog.layer === layer) layer.setAttribute('data-state', 'open');
-    }));
+    for(const [route,link]of tab.rows)if(!wanted.has(route)){link.parentElement.remove();tab.rows.delete(route);}
+    for(const [id,entry]of tab.groupNodes)if(!model.groups.some(g=>g.id===id)){entry.outer.remove();tab.groupNodes.delete(id);}
+    setAttr(tab.external,'href',state.base+'#'+(model.current||tab.route));
+    setAttr(tab.statusDot,'data-tone',model.status.ok?null:'danger');
+    if(tab.statusText.textContent!==model.status.text)tab.statusText.textContent=model.status.text;
+    if(tab.version.textContent!==model.status.version)tab.version.textContent=model.status.version;
+    const active=tab.rows.get(model.current)||tab.groups.querySelector('a[data-route]')||tab.back;
+    roving(tab,wasFocused&&focused.isConnected?focused:active);
+    if(wasFocused&&!focused.isConnected)active.focus({preventScroll:true});
+    updateOverflow(tab);
   };
-
-  const closeDialog = () => {
-    const dialog = state.dialog;
-    if (!dialog) return;
-    state.dialog = null;
-    document.removeEventListener('keydown', dialog.onKey, true);
-    dialog.themeWatch.disconnect();
-    dialog.bodyWatch.disconnect();
-    for (const node of dialog.inerted) node.inert = false;
-    dialog.layer.setAttribute('data-state', 'closing');
-    setTimeout(() => dialog.layer.remove(), REDUCED.matches ? 0 : 200);
-    syncBadges();
-    // Back where the person was: the entry, or the one T3 has drawn since,
-    // or, on a phone, the button that opens T3's sidebar.
-    const back = [dialog.trigger, ...document.querySelectorAll('[' + ENTRY + '] button'), document.querySelector('[data-sidebar="trigger"]')]
-      .find((node) => node && node !== document.body && node.isConnected && node.getClientRects().length);
-    if (back) back.focus({ preventScroll: true });
+  const drawNav = tab => {
+    const nav=node('nav',{class:'t3-setup-nav','aria-label':'Setup pages','data-state':'opening'});
+    tab.nav=nav;tab.rows=new Map();tab.groupNodes=new Map();
+    tab.back=row(tab.host,'button','Settings','chevron-left');tab.back.classList.add('t3-setup-back');tab.back.setAttribute('aria-label','Back to Settings');
+    tab.back.addEventListener('click',()=>closeTab(true));
+    const title=node('div',{class:'t3-setup-title'}),tile=node('span',{class:'t3-setup-tile'}),text=node('div');
+    tile.append(svg('server-cog'));text.append(node('strong',{},'Setup'),node('span',{title:location.host},location.host));title.append(tile,text);
+    tab.groups=node('div',{class:'t3-setup-groups'});tab.groups.addEventListener('scroll',()=>updateOverflow(tab));
+    tab.external=row(tab.host,'a','Open in a new tab','external-link');setAttr(tab.external,'target','_blank');setAttr(tab.external,'rel','noopener');
+    const footer=node('div',{class:'t3-setup-foot'}),status=node('div',{class:'t3-setup-server'}),line=node('div',{class:'t3-setup-server-row'});
+    tab.statusDot=node('span',{class:'t3-setup-status','aria-hidden':'true'});tab.statusText=node('strong');tab.version=node('div',{class:'t3-setup-server-version'});
+    line.append(tab.statusDot,tab.statusText);status.append(line,tab.version);footer.append(status,tab.external);
+    nav.append(tab.back,title,tab.groups,footer);tab.host.nav.append(nav);paintNav();
+    tab.back.addEventListener('focus',()=>roving(tab,tab.back));tab.external.addEventListener('focus',()=>roving(tab,tab.external));
+    nav.addEventListener('keydown',event=>{
+      if(event.isComposing)return;
+      const items=[tab.back,...tab.groups.querySelectorAll('a[data-route]'),tab.external],at=items.indexOf(document.activeElement);
+      const next=event.key==='ArrowDown'?items[(at+1)%items.length]:event.key==='ArrowUp'?items[(at-1+items.length)%items.length]:event.key==='Home'?items[0]:event.key==='End'?items.at(-1):null;
+      if(next){event.preventDefault();roving(tab,next);next.focus();}
+    });
+    requestAnimationFrame(()=>{if(state.tab===tab)setAttr(nav,'data-state',null);});
+    tab.resize.observe(tab.groups);
   };
-
-  window.addEventListener('message', (event) => {
-    const dialog = state.dialog;
-    if (!dialog || !fromConsole(event, dialog.frame, location.origin)) return;
-    const { type } = event.data;
-    if (type === 'ready') {
-      dialog.layer.setAttribute('data-ready', '');
-      // Keys go to the console from here on, Escape included.
-      dialog.frame.focus();
-      toConsole(dialog.frame, { type: 'theme', theme: theme() });
-    } else if (type === 'close') {
-      closeDialog();
-    } else if (type === 'attention' && Number.isInteger(event.data.count) && event.data.count >= 0) {
-      state.attention = event.data.count;
-      state.checkedAt = Date.now();
-      syncBadges();
+  const paintLayer = () => {
+    const tab=state.tab;if(!tab)return;
+    unmask(tab.modalMasks);tab.scrim?.remove();tab.scrim=null;
+    if(tab.modal && tab.nav){
+      for(const child of tab.nav.children)mask(tab.modalMasks,child);
+      tab.scrim=node('div',{class:'t3-setup-scrim','aria-hidden':'true'});tab.nav.append(tab.scrim);
     }
+  };
+  const paintLayout = () => {
+    const tab=state.tab;if(!tab)return;
+    const layout=tab.media.matches?'wide':'compact',focused=document.activeElement;
+    tab.layout=layout;setAttr(tab.pane,'data-layout',layout);
+    unmask(tab.modalMasks);unmask(tab.masks);
+    if(layout==='wide'){
+      setAttr(tab.host.nav,'data-t3-setup-host','');
+      if(!tab.nav)drawNav(tab);
+    }else if(tab.nav){
+      tab.resize.unobserve(tab.groups);tab.nav.remove();tab.nav=null;tab.groups=null;
+      if(focused?.closest('.t3-setup-nav'))tab.frame.focus();
+    }
+    for(const child of tab.host.content.children)mask(tab.masks,child);
+    for(const child of tab.host.nav.children)if(child!==tab.nav)mask(tab.masks,child);
+    tab.pane.style.setProperty('--t3-setup-nav-w',tab.host.nav.offsetWidth+'px');
+    paintLayer();toConsole(tab.frame,{type:'host',layout});
+  };
+  const openTab = (trigger,route = 'overview') => {
+    if(state.tab){toConsole(state.tab.frame,{type:'navigate',route});return;}
+    if(!state.nav){window.open(state.base+'#'+route,'_blank','noopener');return;}
+    const host=settingsHost();if(!host || !state.base)return;
+    hideTip();
+    const pane=node('div',{class:'t3-setup-pane',role:'region','aria-label':'Setup'}),frame=node('iframe',{class:'t3-setup-frame',title:'T3 Code setup',allow:'clipboard-read; clipboard-write'});
+    const loading=node('div',{class:'t3-setup-loading','aria-hidden':'true'});
+    const tab={host,pane,frame,trigger,route,nav:null,masks:new Map(),modalMasks:new Map(),modal:false,priorHost:host.nav.getAttribute('data-t3-setup-host'),media:matchMedia('(min-width: 768px)')};
+    state.tab=tab;
+    tab.loadTimer=setTimeout(()=>{
+      if(state.tab!==tab||pane.hasAttribute('data-ready'))return;
+      const failure=node('div',{class:'t3-setup-load-error',role:'status'});
+      failure.append(node('strong',{},'Setup is taking longer than expected'),node('p',{},'You can try again or open the console in a new tab.'));
+      const actions=node('div'),retry=node('button',{type:'button'},'Try again'),back=node('button',{type:'button'},'Back to Settings'),external=node('a',{href:state.base,target:'_blank',rel:'noopener'},'Open in a new tab');
+      retry.addEventListener('click',()=>{const route=tab.route;closeTab(false);openTab(trigger,route);});back.addEventListener('click',()=>closeTab(true));
+      actions.append(retry,back,external);failure.append(actions);pane.append(failure);loading.hidden=true;
+    },12000);
+    tab.resize=new ResizeObserver(()=>{if(state.tab===tab){const width=host.nav.offsetWidth+'px';if(pane.style.getPropertyValue('--t3-setup-nav-w')!==width)pane.style.setProperty('--t3-setup-nav-w',width);updateOverflow(tab);}});
+    tab.resize.observe(host.nav);
+    frame.src=embedUrl(state.base,theme(),route,tab.media.matches?'wide':'compact');
+    pane.append(loading,frame);host.body.append(pane); // The iframe is mounted exactly once.
+    tab.media.addEventListener('change',paintLayout);paintLayout();syncBadges();remember(route);
+    const sendAppearance = () => {
+      if(state.tab!==tab)return;
+      const message={type:'theme',theme:theme(),appearance:appearance()},signature=JSON.stringify(message);
+      if(signature!==tab.appearanceSignature){tab.appearanceSignature=signature;toConsole(frame,message);}
+    };
+    tab.themeWatch=new MutationObserver(sendAppearance);
+    tab.themeWatch.observe(document.documentElement,{attributes:true,attributeFilter:['class','style','data-theme-id']});
+  };
+  const closeTab = (focus = false) => {
+    const tab=state.tab;if(!tab)return;
+    state.tab=null;state.pendingRoute=null;forget();hideTip();
+    clearTimeout(tab.loadTimer);tab.resize.disconnect();tab.themeWatch.disconnect();tab.media.removeEventListener('change',paintLayout);
+    unmask(tab.modalMasks);unmask(tab.masks);setAttr(tab.host.nav,'data-t3-setup-host',tab.priorHost);
+    tab.pane.remove();tab.nav?.remove();syncBadges();
+    if(focus){const button=document.querySelector('['+ENTRY+'] button');button?.focus({preventScroll:true});}
+  };
+  const nativeClose = () => {
+    const button=state.tab?.host.content.querySelector('header button[aria-label="Close"]');
+    if(button)button.click();else closeTab(true);
+  };
+  const navigateNative = (path,route) => {
+    if(!isSettingsPath(path))return;
+    if(route){state.pendingRoute=route;remember(route);}
+    history.pushState(null,'',path);window.dispatchEvent(new PopStateEvent('popstate'));
+    // TanStack's listener normally mounts this in the next frame. A changed
+    // native client that ignores popstate still has a usable, reload-safe path.
+    setTimeout(()=>{
+      if(!route || state.tab || settingsHost() || location.pathname!==path)return;
+      if(document.querySelector('[data-app-modal][aria-label="Settings"]')) {
+        state.pendingRoute=null;forget();location.assign(state.base+'#'+route);
+      }else location.assign(path);
+    },1500);
+    schedule();
+  };
+  const acceptNavigation = (model,icons) => {
+    // Preserve the authenticated hello snapshot while the child is connecting.
+    // Its current page is authoritative even before the first status read.
+    if(state.nav && !model.status.version && !model.status.ok)model={...state.nav,current:model.current};
+    state.nav=model;state.icons=icons;state.attention=model.attention;state.checkedAt=Date.now();
+    if(state.tab && model.current){state.tab.route=model.current;remember(model.current);}
+    syncBadges();paintNav();
+  };
+  window.addEventListener('message',event=>{
+    const tab=state.tab;if(!tab||!fromConsole(event,tab.frame,location.origin))return;
+    const message=event.data;
+    if(message.type==='ready'){
+      clearTimeout(tab.loadTimer);tab.pane.querySelector('.t3-setup-load-error')?.remove();
+      setAttr(tab.pane,'data-ready','');
+      const appearanceMessage={type:'theme',theme:theme(),appearance:appearance()};tab.appearanceSignature=JSON.stringify(appearanceMessage);toConsole(tab.frame,appearanceMessage);
+      toConsole(tab.frame,{type:'host',layout:tab.layout});
+      if(tab.layout==='wide'&&tab.rows?.size)(tab.rows.get(tab.route)||tab.groups.querySelector('a[data-route]')).focus({preventScroll:true});else tab.frame.focus();
+    }else if(message.type==='nav'){
+      const model=readNav(message),icons=readIcons(message.icons);
+      if(model&&icons&&model.groups.every(g=>g.pages.every(p=>Object.hasOwn(icons,p.icon))))acceptNavigation(model,icons);
+    }else if(message.type==='attention'&&safeCount(message.count)){
+      state.attention=message.count;syncBadges();
+    }else if(message.type==='layer'&&typeof message.open==='boolean'){
+      if(tab.modal!==message.open){tab.modal=message.open;paintLayer();}
+    }else if(message.type==='back')closeTab(true);
+    else if(message.type==='settings'&&settingsPath(message.path)){closeTab(false);navigateNative(message.path);}
+    else if(message.type==='close')nativeClose();
   });
 
   // ------------------------------------------------------ command palette --
@@ -578,23 +906,13 @@
   // changed, so where it is is theirs, not a default to keep recomputing.
   const palette = { dialog: null, input: null, items: [], own: -1, chosen: false, query: null, watch: null };
 
-  const PALETTE_ICONS = {
-    setup: SERVER_COG_ICON,
-    agents: '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
-    pair: '<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>',
-    toolchains: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
-    ports: '<path d="m15 20 3-3h2a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2l3 3z"/><path d="M6 8v1"/><path d="M10 8v1"/><path d="M14 8v1"/><path d="M18 8v1"/>',
-  };
 
   const theirRows = () => (palette.dialog
     ? [...palette.dialog.querySelectorAll('[data-slot="command-item"]:not([' + OWN_ROW + '])')] : []);
   // T3's active row, as T3 draws it: with a forced background class (bg-accent!).
   // Before its first arrow key after a search it has none, though Enter would
   // still take its first row.
-  const theirActive = (rows) => {
-    const active = rows.findIndex((row) => row.hasAttribute('data-active'));
-    return active >= 0 ? active : rows.findIndex((row) => /(^|\s)bg-\S+!(\s|$)/.test(row.className));
-  };
+  const theirActive = (rows) => paletteActiveIndex(rows);
   const ourGroup = () => palette.dialog && palette.dialog.querySelector('[data-t3-setup-palette]');
   const subPage = () => {
     const footer = palette.dialog.querySelector('[data-slot="command-footer"]');
@@ -654,7 +972,8 @@
       for (const [name, value] of [['viewBox', '0 0 24 24'], ['fill', 'none'], ['stroke', 'currentColor'], ['stroke-width', '2'],
         ['stroke-linecap', 'round'], ['stroke-linejoin', 'round'], ['aria-hidden', 'true'], ['width', '16'], ['height', '16']]) icon.setAttribute(name, value);
       icon.setAttribute('class', 't3-setup-cmd-icon');
-      icon.innerHTML = PALETTE_ICONS[item.id] || SERVER_COG_ICON;
+      const supplied = svg(item.icon,'t3-setup-cmd-icon');
+      icon.replaceChildren(...supplied.childNodes);
       const text = document.createElement('span');
       text.className = 't3-setup-cmd-text' + (twoLine ? ' ' + twoLine.text : '');
       const title = document.createElement('span');
@@ -753,8 +1072,7 @@
     palette.dialog.toggleAttribute('data-t3-setup-owns', palette.own >= 0);
     const mine = rows[palette.own];
     const theirRowList = theirRows();
-    const theirs = theirRowList.find((row) => row.hasAttribute('data-active'))
-      || theirRowList.find((row) => row.hasAttribute('data-highlighted'));
+    const theirs = theirRowList[theirActive(theirRowList)];
     const active = mine ? mine.id : theirs ? theirs.id : '';
     if (active && palette.input.getAttribute('aria-activedescendant') !== active) palette.input.setAttribute('aria-activedescendant', active);
     if (mine) mine.scrollIntoView({ block: 'nearest' });
@@ -762,9 +1080,17 @@
 
   const syncPalette = () => {
     if (!palette.dialog) return;
-    if (!palette.dialog.isConnected || !palette.input.isConnected) return detachPalette();
+    if (!palette.dialog.isConnected) return detachPalette();
+    if (!palette.input.isConnected) {
+      // T3 can remount its input while asynchronous search state arrives. Its
+      // focus event may precede the combobox role, so recover through the DOM.
+      const replacement = palette.dialog.querySelector('input[role="combobox"]');
+      if (replacement) attachPalette(replacement);
+      else removeGroup();
+      return;
+    }
     const query = palette.input.value;
-    const items = state.base && state.paired === true && !subPage() ? paletteMatches(query) : [];
+    const items = state.base && state.paired === true && !subPage() ? paletteMatches(query,state.paletteItems) : [];
     if (!items.length) {
       removeGroup();
       palette.items = [];
@@ -813,7 +1139,7 @@
     Object.assign(palette, { dialog, input, items: [], own: -1, chosen: false, query: null });
     // T3 redraws its list as results arrive; put Setup's group back each time.
     palette.watch = new MutationObserver(schedulePalette);
-    palette.watch.observe(dialog, { childList: true, subtree: true });
+    palette.watch.observe(dialog, { childList: true, subtree: true, attributes: true, attributeFilter: ['role'] });
     schedulePalette();
   };
 
@@ -845,7 +1171,10 @@
         requestAnimationFrame(step);
         return;
       }
-      openDialog(document.activeElement || document.body, item.route);
+      if(!state.nav){window.open(state.base+'#'+(item.route||'overview'),'_blank','noopener');return;}
+      if(state.tab)toConsole(state.tab.frame,{type:'navigate',route:item.route||'overview'});
+      else if(settingsHost())openTab(document.activeElement,item.route||'overview');
+      else navigateNative('/settings',item.route||'overview');
     };
     step();
   };
@@ -953,12 +1282,13 @@
     if (location.pathname === state.path) return;
     const wasSettings = isSettingsPath(state.path);
     state.path = location.pathname;
-    // Going somewhere else (Back, say) leaves the dialog behind.
-    if (state.dialog) closeDialog();
+    // Leaving Settings tears down its Setup pane too.
+    if (state.tab && !isSettingsPath(state.path)) closeTab(false);
+    if (!isSettingsPath(state.path) && !state.pendingRoute) forget();
     if (!state.base) return;
     // Pairing finishes without a reload, and a revoked session lands back on
     // the pairing screen, so ask T3 again until it says paired.
-    if (state.paired !== true) refreshPaired();
+    if (state.paired !== true || /^\/pair\/?$/.test(state.path)) refreshPaired();
     if (isSettingsPath(state.path) && !wasSettings) refreshAttention(false);
     schedule();
   };
@@ -983,6 +1313,8 @@
     state.paired = paired;
     state.attention = answer.signedIn ? answer.attention : 0;
     state.checkedAt = Date.now();
+    if(answer.nav){state.nav=answer.nav;state.icons=answer.icons;state.paletteItems=answer.palette;}
+    if(!isSettingsPath(location.pathname))forget();
     addStyles();
     sync();
     // A palette opened while the console was still being asked.

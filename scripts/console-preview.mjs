@@ -22,7 +22,7 @@ http.createServer(async (req, res) => {
   if (url.pathname === '/__setup/' || url.pathname === '/') {
     res.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store', 'content-security-policy': contentSecurityPolicy('fixture') });
     // Match both real Setup entry points, including direct-port image smoke tests.
-    res.end(renderConsole({ assets: loadAssets(), nonce: 'fixture', mount: url.pathname === '/' ? '' : '/__setup', embed: url.searchParams.get('embed') === 't3' }));
+    res.end(renderConsole({ assets: loadAssets(), nonce: 'fixture', mount: url.pathname === '/' ? '' : '/__setup', embed: url.searchParams.get('embed') === 't3', host: url.searchParams.get('host'), layout: url.searchParams.get('layout') }));
     return;
   }
   const chunks = []; let bytes = 0;

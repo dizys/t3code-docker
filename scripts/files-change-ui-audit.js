@@ -9,6 +9,10 @@ const variants=[['desktop',1440,1000],['compact',1280,800],['small-desktop',1100
 (async()=>{const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/chromium',args:['--no-sandbox']});let checks=0;
  try{for(const theme of (process.env.T3_FILES_UI_THEMES?.split(',')||['light','dark']))for(const [variant,width,height]of variants){if(subset&&!subset.includes(variant))continue;
   const context=await browser.newContext({viewport:{width,height},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),fixture=createFilesFixtures(),errors=[],mutations=[];let hold=null,lostFinish=false,extraJobs=[];
+  await context.addInitScript(()=>{
+   const moved=event=>{const el=event.target===document?window:event.target;window.__fileMenuMove={type:event.type,target:el===window?'window':el.id||el.className||el.tagName,offset:el===window?[scrollX,scrollY]:[el.scrollLeft,el.scrollTop]};};
+   addEventListener('scroll',moved,true);addEventListener('resize',moved);
+  });
   page.setDefaultTimeout(10000);page.on('pageerror',error=>errors.push(error.stack));await routeConsole(page,{status:()=>statusFor('skills'),ports:()=>portsFor('ready')});
   await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(!url.pathname.includes('/files/'))return route.fallback();const input=req.method()==='POST'?(url.pathname.endsWith('/chunk')?req.postDataBuffer():req.postDataJSON()):{};
    if(req.method()==='POST')mutations.push(url.pathname);
@@ -16,12 +20,12 @@ const variants=[['desktop',1440,1000],['compact',1280,800],['small-desktop',1100
    const result=await fixture.respond(req.method(),url,input);if(url.pathname.endsWith('/files/jobs'))result.body.jobs.push(...extraJobs);if(lostFinish&&url.pathname.endsWith('/upload/finish')){lostFinish=false;return route.abort('failed');}if(result.raw)return route.fulfill({body:result.raw,headers:result.headers});
    if(result.body.etag&&result.body.etag===req.headers()['if-none-match'])return route.fulfill({status:304,headers:{etag:result.body.etag}});
    return route.fulfill({status:result.status||200,json:result.body});});
-  const target=variant.startsWith('embedded')?await framed(page,base+'?embed=t3&theme='+theme):page;if(target===page)await page.goto(base);await unlock(target,key);
+  const target=variant.startsWith('embedded')?await framed(page,base+'?embed=t3&theme='+theme):page;if(target===page)await page.goto(base);await unlock(target,key);await target.evaluate(()=>document.fonts.ready);
   const settle=()=>target.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   const shot=async name=>{await settle();await page.screenshot({path:path.join(out,variant+'-'+theme+'-'+name+'.png')});};
   const fits=async()=>{const bad=await target.evaluate(()=>[...document.querySelectorAll('.tc-layer:not([hidden]) .tc-fdlg,.tc-layer:not([hidden]) .tc-files-editor,#files-browser .tc-ftb')].filter(el=>{const r=el.getBoundingClientRect();return r.left<-.5||r.right>innerWidth+.5||r.bottom>innerHeight+.5&&el.closest('.tc-layer');}).map(el=>el.className));assert.deepEqual(bad,[],variant+' '+theme+' layers fit');assert.equal(await target.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);assert.deepEqual(await target.locator('#files-browser .tc-fl--projects .tc-fcell').evaluateAll(cells=>cells.filter(cell=>cell.clientWidth&&cell.scrollWidth>cell.clientWidth+1).map(cell=>cell.textContent)),[],'project names and badges stay inside their column');checks++;};
-  await target.evaluate(()=>{window.__fileMenuCloses=[];const menu=Kit.menu;Kit.menu=(...args)=>{const layer=menu(...args);if(layer){const close=layer.close;layer.close=reason=>{window.__fileMenuCloses.push({reason,y:scrollY,triggerConnected:!!layer.returnTo?.isConnected});return close(reason);};}return layer;};});
-  const visit=async hash=>{await target.evaluate(value=>{location.hash=value;},hash);await target.locator('#files-search').waitFor();await target.locator('#files-browser .tc-skel-row').first().waitFor({state:'detached'});};
+  await target.evaluate(()=>{window.__fileMenuCloses=[];const menu=Kit.menu;Kit.menu=(...args)=>{const layer=menu(...args);if(layer){const close=layer.close,openedAt=[scrollX,scrollY];layer.close=reason=>{window.__fileMenuCloses.push({reason,y:scrollY,triggerConnected:!!layer.returnTo?.isConnected,...(reason==='moved'?{openedAt,move:window.__fileMenuMove}:{})});return close(reason);};}return layer;};});
+  const visit=async hash=>{await target.evaluate(value=>{location.hash=value;},hash);await target.locator('#files-search').waitFor();await target.locator('#files-browser .tc-skel-row').first().waitFor({state:'detached'});await settle();};
   // Reduced motion must not create a new visibility transition on
   // the notification host. Hiding and restoration both happen in this task.
   const ownership=await target.evaluate(()=>{
@@ -54,6 +58,30 @@ const variants=[['desktop',1440,1000],['compact',1280,800],['small-desktop',1100
   }
   await page.keyboard.press('ArrowDown');assert.equal(await target.evaluate(()=>document.activeElement.textContent.trim()),'Another action','keyboard skips disabled items');
   await page.keyboard.press('Escape');
+
+  if(width>=1024){
+   // Breadcrumbs and inspectors scroll independently of a row menu. Only a
+   // scroll that moves its anchor should dismiss it, including delayed events.
+   const menuScroll=await target.evaluate(async()=>{
+    const probe=document.createElement('div');
+    probe.style.cssText='position:fixed;top:80px;left:20px;display:flex;gap:8px;z-index:10';
+    const scroller=()=>{const el=document.createElement('div');el.style.cssText='width:100px;height:60px;overflow:auto';const content=document.createElement('div');content.style.height='200px';el.append(content);probe.append(el);return el;};
+    const ancestor=scroller(),sibling=scroller(),trigger=document.createElement('button');trigger.textContent='Menu anchor';ancestor.firstChild.append(trigger);document.body.append(probe);
+    let layer;
+    const open=()=>layer=Kit.menu(trigger,{label:'Scroll behavior',items:Array.from({length:8},(_,i)=>({label:'Action '+i,run:()=>{}}))});
+    const moved=(el,top)=>new Promise(resolve=>{el.addEventListener('scroll',resolve,{once:true});el.scrollTop=top;});
+    try{
+     open();await moved(sibling,20);const siblingStayed=Kit.top()===layer;
+     if(layer.closed)open();
+     layer.panel.style.cssText+='max-height:64px;overflow:auto';
+     await moved(layer.panel,20);const internalStayed=Kit.top()===layer;
+     await moved(ancestor,20);const ancestorClosed=layer.closed;
+     const queued=moved(ancestor,0);open();await queued;const queuedStayed=Kit.top()===layer;
+     return {siblingStayed,internalStayed,ancestorClosed,queuedStayed};
+    }finally{layer?.close('probe');probe.remove();}
+   });
+   assert.deepEqual(menuScroll,{siblingStayed:true,internalStayed:true,ancestorClosed:true,queuedStayed:true},'menus ignore unrelated and already-applied scrolls, but close when their anchor moves');
+  }
 
   try{await visit('files/projects/acme-web/apps/web');await target.locator('[data-path$="next.config.mjs"][data-files-row]').waitFor();await fits();
   // Only a real file drag exposes the upload target, and leaving clears it.

@@ -607,6 +607,27 @@ test("OpenCode v2 keeps the native key API floor for installs and existing selec
   assert.equal(result.harness.runnable, true);
 });
 
+test("OpenCode v2 installs a reviewed low-download package without changing other tool policy", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs), run = world.run;
+  world.run = async (argv, options) => {
+    const spec = argv.at(-1);
+    if (argv[0] === "mise" && argv.includes("use") && spec.startsWith("npm:@opencode/cli") && !spec.includes("allow_low_downloads=true")) {
+      return world.fail("aube install failed: refusing to add @opencode/cli: only 0 weekly downloads (threshold: 1000)");
+    }
+    return run(argv, options);
+  };
+  const manager = managerFor(world);
+  const installed = await manager.install("opencode", { version: "2.0.18" });
+  assert.equal(installed.ok, true, installed.error);
+  assert.equal(installed.harness.verifiedVersion, "2.0.18");
+  assert.equal(await manager.latest("opencode"), "2.0.27");
+  assert.equal((await manager.update("opencode")).ok, true);
+  assert.ok(world.useSpecs.every(spec => spec.includes("allow_builds=@opencode/cli") && spec.includes("allow_low_downloads=true")));
+  assert.equal((await manager.install("codex")).ok, true);
+  assert.equal(world.useSpecs.at(-1), "codex@0.154.1", "other curated tools do not inherit this approval");
+});
+
 test("OpenCode v2 is an explicit distribution switch with scoped postinstall and one active selection", async () => {
   const fs = new MemoryFs();
   const world = createWorld(fs);
@@ -622,8 +643,8 @@ test("OpenCode v2 is an explicit distribution switch with scoped postinstall and
   assert.equal(switched.harness.verifiedVersion, "2.0.27");
   assert.equal(switched.harness.minimumVersion, "2.0.18");
   assert.equal(switched.harness.executable, world.execPath("npm:@opencode/cli", "2.0.27"));
-  assert.equal(world.useSpecs[1], "npm:@opencode/cli[allow_builds=@opencode/cli]@2.0.27");
-  assert.ok(world.calls.some(call => call.includes("which --tool npm:@opencode/cli[allow_builds=@opencode/cli]@2.0.27 opencode")));
+  assert.equal(world.useSpecs[1], "npm:@opencode/cli[allow_builds=@opencode/cli,allow_low_downloads=true]@2.0.27");
+  assert.ok(world.calls.some(call => call.includes("which --tool npm:@opencode/cli[allow_builds=@opencode/cli,allow_low_downloads=true]@2.0.27 opencode")));
   assert.equal(world.tools.opencode.some(item => item.source), false, "v1 no longer owns the command");
   assert.equal(await fs.readFile(credential), '{"anthropic":{"type":"api","key":"test-key"}}');
   assert.deepEqual(switched.harness.managedVersions, ["1.18.31", "2.0.27"]);
@@ -643,7 +664,7 @@ test("OpenCode floating installs, updates and latest checks stay within the sele
   assert.equal(await manager.latest("opencode"), "2.0.28");
   assert.equal((await manager.update("opencode")).harness.installedVersion, "2.0.28");
   assert.equal((await manager.install("opencode")).harness.installedVersion, "2.0.28");
-  assert.ok(world.useSpecs.at(-1).includes("[allow_builds=@opencode/cli]@2.0.28"), "updates retain the vendor's required postinstall");
+  assert.ok(world.useSpecs.at(-1).includes("[allow_builds=@opencode/cli,allow_low_downloads=true]@2.0.28"), "updates retain the vendor's required postinstall");
 });
 
 test("OpenCode v1 remains installable and discoverable when the short-name feed only lists v2", async () => {
@@ -669,7 +690,7 @@ test("OpenCode v1 remains installable and discoverable when the short-name feed 
   const choices = await manager.versions("opencode");
   assert.equal(choices.latest, "1.18.32");
   assert.ok(choices.releases.some(release => release.version === "1.18.32" && !release.requiresNightly));
-  assert.ok(choices.releases.some(release => release.version === "2.0.27" && release.requiresNightly));
+  assert.ok(choices.releases.some(release => release.version === "2.0.27" && !release.requiresNightly && release.minimumT3Version === "0.1.2"));
 });
 
 test("an explicit switch back to OpenCode v1 verifies that distribution even when v2 shadows its command", async () => {
@@ -730,7 +751,7 @@ test("a failed v2 verification leaves the v1 selection and record usable", async
   const world = createWorld(fs);
   const manager = managerFor(world);
   await manager.install("opencode");
-  world.runVersionOverride["npm:@opencode/cli[allow_builds=@opencode/cli]@2.0.27"] = "1.18.31";
+  world.runVersionOverride["npm:@opencode/cli[allow_builds=@opencode/cli,allow_low_downloads=true]@2.0.27"] = "1.18.31";
   const failed = await manager.install("opencode", { version: "2.0.27" });
   assert.equal(failed.code, "version-mismatch");
   const retained = await manager.resolve("opencode");
@@ -759,7 +780,7 @@ test("OpenCode uninstall removes managed versions of both distributions and pres
 test("OpenCode adopts an existing v2 mise selection without defaulting back to v1", async () => {
   const fs = new MemoryFs();
   const world = createWorld(fs);
-  await world.run(["mise", "-C", HOME, "use", "-g", "npm:@opencode/cli[allow_builds=@opencode/cli]@2.0.27"]);
+  await world.run(["mise", "-C", HOME, "use", "-g", "npm:@opencode/cli[allow_builds=@opencode/cli,allow_low_downloads=true]@2.0.27"]);
   const manager = managerFor(world);
   assert.equal((await manager.resolve("opencode")).installedVersion, "2.0.27");
   assert.equal(await manager.latest("opencode"), "2.0.27");
@@ -2145,7 +2166,8 @@ test("an agent's releases list newest first, marking the ones mise still holds b
   const opencode = await manager.versions("opencode");
   assert.deepEqual(opencode.releases.map((r) => [r.version, r.supported]), [["2.0.27", true], ["2.0.20", true], ["2.0.19", true], ["2.0.18", true], ["2.0.17", false], ["1.18.31", true], ["1.14.0", false]]);
   assert.equal(opencode.latest, "1.18.31", "the default stays on v1");
-  assert.equal(opencode.releases[0].requiresNightly, true);
+  assert.ok(opencode.releases.filter(r => r.version.startsWith("2.")).every(r => !r.requiresNightly && r.minimumT3Version === "0.1.2"), "OpenCode v2 is supported on Stable 0.1.2 and newer");
+  assert.ok(opencode.releases.filter(r => r.version.startsWith("1.")).every(r => !r.requiresNightly && r.minimumT3Version === undefined), "the v2 runtime minimum does not apply to v1");
   await assert.rejects(manager.versions("nope"), /unknown harness/);
 });
 

@@ -64,6 +64,7 @@
   // which also keeps the theme in step.
   if (document.documentElement.getAttribute('data-embed') === 't3' && window.parent !== window) {
     const close = () => window.parent.postMessage({ source: 't3-setup', type: 'close' }, location.origin);
+    for (const button of document.querySelectorAll('[data-cmd="embed.back"]')) button.addEventListener('click', () => window.parent.postMessage({ source: 't3-setup', type: 'back' }, location.origin));
     for (const button of document.querySelectorAll('[data-cmd="embed.close"]')) button.addEventListener('click', close);
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !e.isComposing) close(); });
     window.addEventListener('message', (e) => {
@@ -72,9 +73,16 @@
       if (m.type === 'theme' && (m.theme === 'light' || m.theme === 'dark')) {
         document.documentElement.setAttribute('data-theme', m.theme);
         document.documentElement.setAttribute('data-theme-mode', m.theme);
+        if (!T3Appearance.apply(document.documentElement, m.appearance)) T3Appearance.clear(document.documentElement);
+      }
+      if (document.documentElement.dataset.host === 'tab' && m.type === 'host' && (m.layout === 'wide' || m.layout === 'compact')) {
+        document.documentElement.dataset.hostLayout = m.layout;
+        form.elements.layout.value = m.layout;
+        const params = new URLSearchParams(location.search); params.set('layout', m.layout);
+        history.replaceState(null, '', location.pathname + '?' + params + location.hash);
       }
     });
-    window.parent.postMessage({ source: 't3-setup', type: 'ready' }, location.origin);
+    window.parent.postMessage({ source: 't3-setup', type: 'ready', protocol: 2 }, location.origin);
   }
 
   form.addEventListener('submit', async (event) => {

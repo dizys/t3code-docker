@@ -13,6 +13,8 @@
 // `t3 auth` CLI for a few hours and renewed before it lapses. A sign-in belongs
 // to the session that started it, so renewal only ever happens on a fresh
 // connection, never under one in use.
+// Native HTTP endpoints use a separate cached credential. Connect settings
+// reads and renewals cannot retire the owner of a running RPC stream.
 //
 //   const api = createT3Api({ url, issueSession });
 //   const config = await api.call("server.getConfig", {});
@@ -63,7 +65,9 @@ export function createT3Api({
   idleMs = 60_000,
   renewWithinMs = 60 * 60 * 1000,
 }) {
-  let session = null;          // { token, sessionId, expiresAt (ms) }
+  // A Connect read must never renew/revoke the session that owns a live RPC
+  // sign-in or installation stream. Each transport caches its own credential.
+  const credentials = { rpc: { value: null, pending: null }, http: { value: null, pending: null } };
   let socket = null;           // the open socket, or null
   let opening = null;          // a connection on its way, shared
   let nextId = 0;
@@ -136,19 +140,36 @@ export function createT3Api({
     }
   };
 
-  /** A session good for a while yet: issued now, or renewed when its end is near. */
-  const ensureSession = async (force = false) => {
-    if (!force && session && session.expiresAt - now() > renewWithinMs) return session;
-    const previous = session;
+  const retireSession = (value) => {
+    if (value?.sessionId) void Promise.resolve().then(() => revokeSession(value.sessionId)).catch(() => {});
+  };
+  const assertGeneration = (generation) => {
+    if (generation !== sessionGeneration) throw new T3ApiError("T3 Code restarted during this request. Retry when it is ready.");
+  };
+
+  /** Cache and serialize issuance separately for HTTP and RPC. */
+  const ensureSession = async (cache, force = false, refused = null) => {
+    if (cache.pending) return cache.pending;
+    // Another request may already have replaced the credential that got a
+    // delayed 401. Reuse its replacement rather than revoking it again.
+    if (force && refused && cache.value && cache.value !== refused) return cache.value;
+    if (!force && cache.value && cache.value.expiresAt - now() > renewWithinMs) return cache.value;
+    const previous = cache.value;
     const generation = sessionGeneration;
-    const issued = await issueSession();
-    if (generation !== sessionGeneration) throw new T3ApiError("T3 Code restarted while the console was signing in. Retry when it is ready.");
-    if (!issued?.token) throw new T3ApiError("T3 Code did not issue a session for the console");
-    session = { token: issued.token, sessionId: issued.sessionId ?? null, expiresAt: expiresAtMs(issued.expiresAt) };
-    if (previous?.sessionId && previous.sessionId !== session.sessionId) {
-      void Promise.resolve(revokeSession(previous.sessionId)).catch(() => {});
-    }
-    return session;
+    const issuing = (async () => {
+      const issued = await issueSession();
+      if (generation !== sessionGeneration) {
+        retireSession(issued);
+        assertGeneration(generation);
+      }
+      if (!issued?.token) throw new T3ApiError("T3 Code did not issue a session for the console");
+      cache.value = { token: issued.token, sessionId: issued.sessionId ?? null, expiresAt: expiresAtMs(issued.expiresAt) };
+      if (previous?.sessionId !== cache.value.sessionId) retireSession(previous);
+      return cache.value;
+    })();
+    cache.pending = issuing;
+    try { return await issuing; }
+    finally { if (cache.pending === issuing) cache.pending = null; }
   };
 
   const settleAll = (error) => {
@@ -211,7 +232,7 @@ export function createT3Api({
     opening ??= (async () => {
       let lastError = null;
       for (const fresh of [false, true]) {
-        const { token } = await ensureSession(fresh);
+        const { token } = await ensureSession(credentials.rpc, fresh);
         const targetUrl = await socketUrl(sessionGeneration);
         try {
           return await new Promise((resolve, reject) => {
@@ -312,6 +333,55 @@ export function createT3Api({
     settleAll(new T3ApiError("The console closed its connection to T3 Code"));
   };
 
-  const reset = () => { sessionGeneration += 1; protocolVersion = null; protocolDiscovery = null; close(); session = null; };
-  return { call, subscribe, first, close, reset, sessionId: () => session?.sessionId ?? null };
+  /** Native HTTP endpoints, independent of an active RPC session. */
+  const http = async (path, body) => {
+    const generation = sessionGeneration;
+    const target = new URL(url);
+    target.protocol = target.protocol === "wss:" ? "https:" : "http:";
+    target.pathname = path;
+    target.search = "";
+    target.hash = "";
+    let refused = null;
+    for (const fresh of [false, true]) {
+      const credential = await ensureSession(credentials.http, fresh, refused);
+      assertGeneration(generation);
+      const { token } = credential;
+      const response = await fetchImpl(target.toString(), {
+        method: body === undefined ? "GET" : "POST",
+        headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(callTimeoutMs),
+        redirect: "error",
+      });
+      if (generation !== sessionGeneration) {
+        await response.body?.cancel();
+        assertGeneration(generation);
+      }
+      if (response.status === 401 && !fresh) {
+        await response.body?.cancel();
+        refused = credential;
+        continue;
+      }
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new T3ApiError(`T3 Code could not ${body === undefined ? "read" : "save"} connection settings (HTTP ${response.status}).`);
+      }
+      const data = await response.json();
+      assertGeneration(generation);
+      return data;
+    }
+  };
+
+  const reset = () => {
+    sessionGeneration += 1;
+    protocolVersion = null;
+    protocolDiscovery = null;
+    close();
+    for (const cache of Object.values(credentials)) {
+      retireSession(cache.value);
+      cache.value = null;
+      cache.pending = null;
+    }
+  };
+  return { call, http, subscribe, first, close, reset, sessionId: () => credentials.rpc.value?.sessionId ?? null };
 }

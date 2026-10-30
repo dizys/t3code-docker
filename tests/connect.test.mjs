@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { connectState, jsonFrom, parseLinkOutput } from "../docker/setup/connect.mjs";
+import { connectState, createConnectPreferences, jsonFrom, parseLinkOutput } from "../docker/setup/connect.mjs";
 
 const PROMPT = [
   "T3 Connect",
@@ -57,7 +57,7 @@ test("the saved state reads as off, signed out, waiting on a start, or on", () =
   const relayClient = { status: "available", executablePath: "/usr/local/bin/cloudflared", source: "override", version: "2026.5.2" };
   const base = { desired: false, authenticated: false, linked: false, cloudUserId: null, relayUrl: null, publishAgentActivity: false, relayClient };
   assert.deepEqual(connectState(base), {
-    state: "off", desired: false, authenticated: false, linked: false, relayHost: null, publishAgentActivity: false,
+    state: "off", desired: false, authenticated: false, linked: false, revoked: false, linkMode: "managed", relayHost: null, publishAgentActivity: false,
     relayClient: { status: "available", version: "2026.5.2" },
   });
   assert.equal(connectState({ ...base, desired: true, authenticated: true }).state, "pending");
@@ -81,4 +81,94 @@ test("the JSON is found after any lines the CLI prints first", () => {
   assert.equal(jsonFrom("no json here"), null);
   assert.equal(jsonFrom("{ broken"), null);
   assert.equal(jsonFrom(undefined), null);
+});
+
+test("native preference updates preserve activity publishing when changing webhook holding", async () => {
+  const state = { linked: true, managedTunnelActive: true, publishAgentActivity: true, holdWebhooksWhileOffline: false };
+  const writes = [];
+  const prefs = createConnectPreferences({ request: async (path, input) => {
+    if (input) { assert.equal(path, "/api/connect/preferences"); writes.push(input); Object.assign(state, input); }
+    else assert.equal(path, "/api/connect/link-state");
+    return { ...state };
+  } });
+  assert.equal((await prefs.save({ holdWebhooksWhileOffline: true })).http, 200);
+  assert.deepEqual(writes[0], { publishAgentActivity: true, holdWebhooksWhileOffline: true });
+  assert.equal((await prefs.save({ publishAgentActivity: false })).body.preferences.holdWebhooksWhileOffline, true);
+  assert.deepEqual(writes[1], { publishAgentActivity: false }, "omitting webhook holding preserves it on T3");
+});
+
+test("notification-only links can publish; offline holding needs a tunnel and version support", async () => {
+  const state = { linked: true, managedTunnelActive: false, publishAgentActivity: false };
+  let writes = 0;
+  const prefs = createConnectPreferences({ request: async (_path, input) => { if (input) writes++; return state; } });
+  assert.equal((await prefs.read()).holdWebhooksWhileOffline, null);
+  assert.equal((await prefs.save({ holdWebhooksWhileOffline: true })).http, 409);
+  assert.equal(writes, 0);
+  assert.equal((await prefs.save({ publishAgentActivity: true })).http, 200);
+  state.linked = false;
+  assert.equal((await prefs.save({ publishAgentActivity: true })).http, 409);
+  assert.equal(writes, 1);
+});
+
+test("malformed preferences cannot reach T3 and a failed save remains retryable", async () => {
+  let calls = 0, fail = true;
+  const prefs = createConnectPreferences({ request: async (_path, input) => {
+    calls++;
+    if (input && fail) throw new Error("T3 Code is unavailable");
+    return { linked: true, publishAgentActivity: false };
+  } });
+  for (const input of [null, [], {}, { publishAgentActivity: "true" }, { other: true }, { publishAgentActivity: true, holdWebhooksWhileOffline: true }]) {
+    assert.equal((await prefs.save(input)).http, 400);
+  }
+  assert.equal(calls, 0);
+  assert.equal((await prefs.save({ publishAgentActivity: true })).http, 502);
+  fail = false;
+  assert.equal((await prefs.save({ publishAgentActivity: true })).http, 200);
+});
+
+test("overlapping connection writes cannot overwrite each other", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const prefs = createConnectPreferences({ request: async () => { await gate; return { linked: true, publishAgentActivity: true }; } });
+  const first = prefs.save({ publishAgentActivity: false });
+  assert.equal((await prefs.save({ publishAgentActivity: true })).http, 409);
+  release();
+  assert.equal((await first).http, 200);
+});
+
+test("revoked links need relinking and cannot save preferences", async () => {
+  const cli = connectState({ desired: true, authenticated: true, linked: true, revoked: true, linkMode: "publish_only" });
+  assert.equal(cli.state, "signin");
+  assert.equal(cli.linked, false);
+  assert.equal(cli.revoked, true);
+  assert.equal(cli.linkMode, "publish_only");
+  let writes = 0;
+  const prefs = createConnectPreferences({ request: async (_path, input) => {
+    if (input) writes++;
+    return { linked: true, linkRevoked: true, managedTunnelActive: true, publishAgentActivity: true, holdWebhooksWhileOffline: false };
+  } });
+  assert.equal((await prefs.read()).linked, false);
+  assert.equal((await prefs.read()).managedTunnelActive, false);
+  assert.equal((await prefs.save({ publishAgentActivity: false })).http, 409);
+  assert.equal(writes, 0);
+});
+
+test("older linked servers imply a managed tunnel when its optional flag is absent", async () => {
+  const prefs = createConnectPreferences({ request: async () => ({ linked: true, publishAgentActivity: false }) });
+  assert.equal((await prefs.read()).managedTunnelActive, true);
+});
+
+test("the native save response is authoritative without a fallible follow-up read", async () => {
+  let reads = 0;
+  const state = { linked: true, managedTunnelActive: true, publishAgentActivity: false, holdWebhooksWhileOffline: true };
+  const prefs = createConnectPreferences({ request: async (_path, input) => {
+    if (input) { Object.assign(state, input); return { ...state }; }
+    if (++reads > 1) throw new Error("A second read would fail after the setting was saved");
+    return { ...state };
+  } });
+  const saved = await prefs.save({ publishAgentActivity: true });
+  assert.equal(saved.http, 200);
+  assert.equal(saved.body.preferences.publishAgentActivity, true);
+  assert.equal(saved.body.preferences.holdWebhooksWhileOffline, true);
+  assert.equal(reads, 1);
 });

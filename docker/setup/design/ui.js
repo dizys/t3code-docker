@@ -97,6 +97,12 @@
   "upload": "<path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><polyline points=\"17 8 12 3 7 8\"/><line x1=\"12\" x2=\"12\" y1=\"3\" y2=\"15\"/>"
 });
 
+  // Native Setup entry icon, reused by the tab page menu.
+  ICONS["server-cog"] = "<path d=\"m10.852 14.772-.383.923\"/><path d=\"M13.148 14.772a3 3 0 1 0-2.296-5.544l-.383-.923\"/><path d=\"m13.148 9.228.383-.923\"/><path d=\"m13.53 15.696-.382-.924a3 3 0 1 1-2.296-5.544\"/><path d=\"m14.772 10.852.923-.383\"/><path d=\"m14.772 13.148.923.383\"/><path d=\"M4.5 10H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-.5\"/><path d=\"M4.5 14H4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2h-.5\"/><path d=\"M6 18h.01\"/><path d=\"M6 6h.01\"/><path d=\"m9.228 10.852-.923-.383\"/><path d=\"m9.228 13.148-.923.383\"/>";
+
+  // Page-switcher geometry from the supplied Setup-tab handoff.
+  ICONS["chevrons-up-down"] = '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>';
+
   function icon(name, cls) {
     var body = ICONS[name];
     if (!body) return '';

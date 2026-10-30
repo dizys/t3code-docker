@@ -128,16 +128,19 @@ const Kit = (() => {
   };
 
   // ---------------------------------------------------------- environment --
-  const PHONE = window.matchMedia('(max-width: 1023.98px)');
+  const COMPACT = window.matchMedia(document.documentElement.dataset.host === 'tab' ? '(max-width: 639.98px)' : '(max-width: 1023.98px)');
+  const PHONE = COMPACT; // Compatibility for existing components; one density source.
   const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)');
   const isPhone = () => PHONE.matches;
   // Touch density follows the layout. The inline script in <body> set it for
   // the first paint; this keeps it current across a rotation or a resize.
   const syncDensity = () => {
-    if (PHONE.matches) document.body.setAttribute('data-density', 'touch');
+    document.documentElement.toggleAttribute('data-compact', COMPACT.matches);
+    if (COMPACT.matches) document.body.setAttribute('data-density', 'touch');
     else document.body.removeAttribute('data-density');
   };
-  PHONE.addEventListener('change', syncDensity);
+  COMPACT.addEventListener('change', syncDensity);
+  syncDensity();
 
   // Native Tab focus can leave a partially visible filter clipped. Reveal the
   // whole chip using its scrollport's focus-ring padding, without centering it.
@@ -169,12 +172,16 @@ const Kit = (() => {
   const stack = [];
   const top = () => stack[stack.length - 1] || null;
   const appRoot = () => document.getElementById('app');
+  const modalListeners = new Set();
+  let lastModal = false;
+  const onModalChange = listener => { modalListeners.add(listener); return () => modalListeners.delete(listener); };
 
   const syncInert = () => {
     const modal = stack.some((l) => l.modal);
     const app = appRoot();
     if (app) app.inert = modal;
     document.documentElement.classList.toggle('tc-locked', modal);
+    if (modal !== lastModal) { lastModal = modal; for (const listener of modalListeners) listener(modal); }
   };
 
   const restoreFocus = (layer) => {
@@ -305,8 +312,9 @@ const Kit = (() => {
     if(event.type==='scroll'){
       if(layer.panel.contains(event.target))return;
       const target=event.target===document?window:event.target,prior=layer.scrollOffsets?.get(target),current=target===window?[window.scrollX,window.scrollY]:[target.scrollLeft,target.scrollTop];
-      // A scroll queued before a pointer opened the menu is not a new move.
-      if(prior&&prior[0]===current[0]&&prior[1]===current[1])return;
+      // Independent scrollers cannot move this anchor. An ancestor's scroll
+      // queued before the menu opened is not a new move either.
+      if(!prior||prior[0]===current[0]&&prior[1]===current[1])return;
     }
     layer.close('moved');
   };
@@ -314,9 +322,18 @@ const Kit = (() => {
   window.addEventListener('scroll', closeMenusOnMove, true);
 
   // ---------------------------------------------------------------- menus --
-  const menuItems = (items) => items.map((item, i) => item.sep
+  const menuItems = (items, { offset = 0, radioIcons = false } = {}) => items.map((item, i) => item.sep
     ? html`<hr class="tc-menu-sep">`
-    : html`<button class="${cx('tc-menu-item', item.danger && 'tc-menu-item--danger')}" role="${item.radio ? 'menuitemradio' : item.checkbox ? 'menuitemcheckbox' : 'menuitem'}"${item.radio || item.checkbox ? html` aria-checked="${String(Boolean(item.checked))}"` : ''} type="button" data-menu-index="${i}"${item.disabled ? raw(' disabled aria-disabled="true"') : ''}>${item.radio || item.checkbox ? icon('check', 'tc-menu-check') : icon(item.icon)}<span class="tc-menu-item-text">${item.description ? html`<strong>${item.label}</strong><span class="tc-menu-item-description">${item.description}</span>` : item.label}</span>${item.shortcut ? html`<span class="tc-menu-item-shortcut">${item.shortcut}</span>` : ''}</button>`);
+    : html`<button class="${cx('tc-menu-item', item.danger && 'tc-menu-item--danger')}" role="${item.radio ? 'menuitemradio' : item.checkbox ? 'menuitemcheckbox' : 'menuitem'}"${item.radio || item.checkbox ? html` aria-checked="${String(Boolean(item.checked))}"` : ''}${item.current ? raw(' aria-current="page"') : ''} type="button" data-menu-index="${i + offset}"${item.disabled ? raw(' disabled aria-disabled="true"') : ''}>${item.radio && radioIcons ? icon(item.icon) : item.radio || item.checkbox ? icon('check', 'tc-menu-check') : icon(item.icon)}<span class="tc-menu-item-text">${item.description ? html`<strong>${item.label}</strong><span class="tc-menu-item-description">${item.description}</span>` : item.label}</span>${item.trailing || ''}${item.radio && radioIcons && item.checked ? icon('check', 'tc-menu-check--end') : ''}${item.shortcut ? html`<span class="tc-menu-item-shortcut">${item.shortcut}</span>` : ''}</button>`);
+
+  const menuGroups = (groups, options) => {
+    let offset = 0;
+    return html`<div class="tc-menu-groups">${groups.map(group => {
+      const content = menuItems(group.items, { ...options, offset });
+      offset += group.items.length;
+      return html`<div class="tc-menu-group" role="group"${group.label ? html` aria-label="${group.label}"` : ''}>${group.label ? html`<div class="tc-menu-group-label" aria-hidden="true">${group.label}</div>` : ''}${content}</div>`;
+    })}</div>`;
+  };
 
   const wireMenu = (layer, items) => {
     const buttons = () => [...layer.panel.querySelectorAll('.tc-menu-item:not([disabled]):not([aria-disabled="true"])')];
@@ -339,7 +356,18 @@ const Kit = (() => {
       else if (e.key === 'ArrowUp') next = list[(at - 1 + list.length) % list.length];
       else if (e.key === 'Home') next = list[0];
       else if (e.key === 'End') next = list[list.length - 1];
-      else if (e.key === 'Tab' && layer.kind === 'menu') { layer.close('tab'); return; }
+      else if (e.key === 'Tab' && layer.kind === 'menu') {
+        const links = [...layer.panel.querySelectorAll('.tc-menu-foot a[href], .tc-menu-foot button:not([disabled])')];
+        const footAt = links.indexOf(document.activeElement);
+        if (links.length && footAt === -1 && !e.shiftKey) {
+          e.preventDefault(); links[0].focus(); return;
+        }
+        if (footAt === 0 && e.shiftKey) {
+          e.preventDefault(); (list.find(button => button.hasAttribute('aria-current')) || list[0])?.focus(); return;
+        }
+        if (footAt >= 0 && (e.shiftKey || footAt < links.length - 1)) return;
+        layer.close('tab'); return;
+      }
       if (next) { e.preventDefault(); next.focus(); }
     });
   };
@@ -352,54 +380,71 @@ const Kit = (() => {
    *   items  [{label, icon, danger, run, radio?, checkbox?, checked?, description?} | {sep: true}]
    *   footer escaped Kit markup for settings paths or other contextual help
    */
-  const menu = (trigger, { label, head, items, footer, status, at, className = '' }) => {
+  const menu = (trigger, { label, head, header, items = [], groups, footer, status, at, className = '', cancel = true, radioIcons = false, swipeDismiss = false, onClose }) => {
     const current = top();
-    if (current && current.kind === 'menu' && current.returnTo === trigger) { current.close('toggle'); return null; }
+    if (current && (current.kind === 'menu' || current.kind === 'bottom') && current.returnTo === trigger) { current.close('toggle'); return null; }
+    const entries = groups ? groups.flatMap(group => group.items) : items;
+    const content = () => groups ? menuGroups(groups, { radioIcons }) : menuItems(items, { radioIcons });
+    const closed = reason => { trigger.setAttribute('aria-expanded', 'false'); if (onClose) onClose(reason); };
+    trigger.setAttribute('aria-expanded', 'true');
     if (isPhone()) {
       const titleId = 'menu-title-' + Math.random().toString(36).slice(2, 8);
       const layer = open({
         kind: 'bottom',
-        panel: { tag: 'aside', class: 'tc-sheet tc-sheet--bottom tc-sheet--menu', role: 'menu', 'aria-labelledby': titleId },
+        panel: { tag: 'aside', class: 'tc-sheet tc-sheet--bottom tc-sheet--menu' + (className ? ' ' + className : ''), role: 'menu', 'aria-labelledby': header ? null : titleId, 'aria-label': header ? label : null },
         returnTo: trigger,
         render: () => html`
-          <div class="tc-sheet-head tc-menu-head">${head && head.tile ? head.tile : ''}<div class="tc-menu-head-text"><h2 class="tc-sheet-title" id="${titleId}">${(head && head.title) || label}</h2>${head && head.sub ? html`<span class="tc-small tc-muted">${head.sub}</span>` : ''}</div></div>
-          <div class="tc-sheet-actions">${status || ''}${menuItems(items)}</div>
+          ${header || html`<div class="tc-sheet-head tc-menu-head">${head && head.tile ? head.tile : ''}<div class="tc-menu-head-text"><h2 class="tc-sheet-title" id="${titleId}">${(head && head.title) || label}</h2>${head && head.sub ? html`<span class="tc-small tc-muted">${head.sub}</span>` : ''}</div></div>`}
+          ${groups ? content() : html`<div class="tc-sheet-actions">${status || ''}${content()}</div>`}
           ${footer ? html`<div class="tc-menu-foot">${footer}</div>` : ''}
-          <div class="tc-sheet-cancel"><button class="tc-btn tc-btn--block tc-btn--lg" type="button" data-menu-cancel>Cancel</button></div>`,
-        backdrop: 'close',
+          ${cancel ? html`<div class="tc-sheet-cancel"><button class="tc-btn tc-btn--block tc-btn--lg" type="button" data-menu-cancel>Cancel</button></div>` : ''}`,
+        backdrop: 'close', onClose: closed,
       });
-      wireMenu(layer, items);
-      const first = layer.panel.querySelector('.tc-menu-item:not([disabled]):not([aria-disabled="true"])');
+      wireMenu(layer, entries);
+      if (swipeDismiss) {
+        let drag = null;
+        layer.panel.addEventListener('pointerdown', event => {
+          if (event.pointerType === 'mouse' || !event.isPrimary || event.target !== layer.panel && !event.target.closest('[data-menu-drag]')) return;
+          drag = { id: event.pointerId, y: event.clientY };
+          try { layer.panel.setPointerCapture(event.pointerId); } catch { /* Synthetic pointer events cannot capture. */ }
+        });
+        const finishDrag = event => {
+          if (!drag || event.pointerId !== drag.id) return;
+          const distance = event.clientY - drag.y; drag = null;
+          layer.panel.style.removeProperty('transform');
+          if (event.type !== 'pointercancel' && distance >= 60) layer.close('swipe');
+        };
+        layer.panel.addEventListener('pointermove', event => {
+          if (!drag || event.pointerId !== drag.id) return;
+          const distance = Math.max(0, event.clientY - drag.y);
+          if (distance > 4) { event.preventDefault(); layer.panel.style.transform = 'translateY(' + distance + 'px)'; }
+        });
+        layer.panel.addEventListener('pointerup', finishDrag);
+        layer.panel.addEventListener('pointercancel', finishDrag);
+      }
+      const first = layer.panel.querySelector('.tc-menu-item[aria-current="page"]:not([disabled])') || layer.panel.querySelector('.tc-menu-item:not([disabled]):not([aria-disabled="true"])');
       if (first) first.focus({ preventScroll: true });
       return layer;
     }
     if (current && current.kind === 'menu') current.close('replaced');
-    trigger.setAttribute('aria-expanded', 'true');
     const layer = open({
-      kind: 'menu',
-      modal: false,
-      backdrop: false,
-      returnTo: trigger,
+      kind: 'menu', modal: false, backdrop: false, returnTo: trigger,
       panel: { class: 'tc-menu' + (className ? ' ' + className : ''), role: 'menu', 'aria-label': label },
-      render: () => html`${head && head.title ? html`<div class="tc-menu-label">${head.title}${head.sub ? ' · ' + head.sub : ''}</div>` : ''}${status || ''}${menuItems(items)}${footer ? html`<div class="tc-menu-foot">${footer}</div>` : ''}`,
-      onClose: () => trigger.setAttribute('aria-expanded', 'false'),
+      render: () => html`${header || (head && head.title ? html`<div class="tc-menu-label">${head.title}${head.sub ? ' · ' + head.sub : ''}</div>` : '')}${status || ''}${content()}${footer ? html`<div class="tc-menu-foot">${footer}</div>` : ''}`,
+      onClose: closed,
     });
     // 4px under the trigger, right edges aligned; above it if there is no room.
-    const r = trigger.getBoundingClientRect();
-    const m = layer.panel.getBoundingClientRect();
-    const margin = 8;
+    const r = trigger.getBoundingClientRect(), m = layer.panel.getBoundingClientRect(), margin = 8;
     let left = Math.max(margin, Math.min(at ? (at.x + m.width > window.innerWidth - margin ? at.x - m.width : at.x) : r.right - m.width, window.innerWidth - m.width - margin));
     let topPx = at ? at.y : r.bottom + 4;
     if (topPx + m.height > window.innerHeight - margin && r.top - 4 - m.height > margin) {
-      topPx = r.top - 4 - m.height;
-      layer.panel.style.transformOrigin = 'bottom right';
+      topPx = r.top - 4 - m.height; layer.panel.style.transformOrigin = 'bottom right';
     }
     if (at && topPx + m.height > window.innerHeight - margin) topPx = at.y - m.height;
     topPx = Math.max(margin, Math.min(topPx, window.innerHeight - m.height - margin));
-    layer.panel.style.left = left + 'px';
-    layer.panel.style.top = topPx + 'px';
-    wireMenu(layer, items);
-    const first = layer.panel.querySelector('.tc-menu-item:not([disabled]):not([aria-disabled="true"])');
+    layer.panel.style.left = left + 'px'; layer.panel.style.top = topPx + 'px';
+    wireMenu(layer, entries);
+    const first = layer.panel.querySelector('.tc-menu-item[aria-current="page"]:not([disabled])') || layer.panel.querySelector('.tc-menu-item:not([disabled]):not([aria-disabled="true"])');
     if (first) first.focus({ preventScroll: true });
     return layer;
   };
@@ -689,7 +734,7 @@ const Kit = (() => {
 
   return {
     Raw, html, raw, esc, icon, cx, patch,
-    isPhone, isTyping, PHONE, REDUCED, syncDensity, announce,
+    isPhone, isTyping, PHONE, COMPACT, REDUCED, syncDensity, onModalChange, announce,
     open, closeAll, top: () => top(), menuOpenFor,
     menu, confirm, toast, copy, bind, palette,
   };

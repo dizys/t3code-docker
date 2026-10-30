@@ -40,7 +40,7 @@ import { clientAddress } from "./client-address.mjs";
 import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
 import { createCredentialStore, credentialFailure, CredentialError } from "./credentials.mjs";
 import { testCredential } from "./credentials/run.mjs";
-import { connectState, jsonFrom, parseLinkOutput } from "./connect.mjs";
+import { connectState, createConnectPreferences, jsonFrom, parseLinkOutput } from "./connect.mjs";
 import {
   checkReaches, clearSaved, parsePublicUrl, platformUrl, readSaved, resolvePublicUrl, writeSaved,
 } from "./public-url.mjs";
@@ -179,6 +179,7 @@ const t3Api = createT3Api({
   revokeSession: (sessionId) => t3(["auth", "session", "revoke", String(sessionId)]),
 });
 const antigravity = createAntigravity({ api: t3Api });
+const connectPreferences = createConnectPreferences({ request: (path, body) => t3Api.http(path, body) });
 const T3_AGENT_IDS = new Set(["antigravity"]);
 const isConsoleSession = (session) => session?.subject === CONSOLE_SUBJECT;
 const deviceLabels = createDeviceLabels({
@@ -195,14 +196,19 @@ const t3Sessions = createT3Sessions({ baseUrl: `http://127.0.0.1:${T3_PORT}` });
 
 // The page's own view model, run here once so that the count T3 Code's
 // settings show beside Setup is the one the console's own badges add up to.
-const Model = (() => {
-  const context = vm.createContext({ URL });
-  for (const path of ["client/routes.js", "client/model.js"]) {
+const Presentation = (() => {
+  // ui.js registers DOM behavior only after loading. The server evaluates its
+  // source icon table once, without creating a DOM or running those handlers.
+  const context = vm.createContext({ URL, window: {}, document: { readyState: "loading", addEventListener() {} }, navigator: {} });
+  for (const path of ["client/routes.js", "client/model.js", "design/ui.js"]) {
     const { code } = ASSETS.console.find((script) => script.path === path);
     vm.runInContext(code, context, { filename: path });
   }
-  return vm.runInContext("T3Model", context);
+  return vm.runInContext("({ model: T3Model, routes: T3Routes, icons: window.T3C.icons })", context);
 })();
+const Model = Presentation.model;
+const NAV_ICONS = Model.navIcons(Presentation.icons);
+const PALETTE = Presentation.routes.paletteEntries();
 
 const health = async () => {
   try {
@@ -1090,24 +1096,35 @@ const filesHold=createHoldControl({runDir:RUN_DIR,runtimeBusy:()=>runtimeModule.
 // the page sees it come on). Anything this page does to Connect drops it.
 const CONNECT_FRESH_MS = { idle: 5 * 60_000, pending: 10_000 };
 let connectCache = { at: 0, value: null, refreshing: null };
+let connectRevision = 0;
 // When this service saw a sign-in finish. A link saved after T3 Code's last
 // start still needs one; one saved before it is being made, and another
 // restart would only interrupt that. Unknown (0) after this service restarts.
 let connectLinkedAt = 0;
 
 const refreshConnect = () => {
+  const revision = connectRevision;
   connectCache.refreshing ??= t3(["connect", "status", "--json"])
-    .then(({ stdout }) => {
-      connectCache = { at: Date.now(), value: connectState(jsonFrom(stdout)), refreshing: null };
+    .then(async ({ stdout }) => {
+      const value = connectState(jsonFrom(stdout));
+      if (value) value.preferences = value.linked ? await connectPreferences.read().catch(() => null) : null;
+      if (value?.preferences?.revoked) Object.assign(value, { linked: false, revoked: true, state: "signin" });
+      if (revision !== connectRevision) return;
+      connectCache = { at: Date.now(), value, refreshing: null };
     })
     .catch(() => {
+      if (revision !== connectRevision) return;
       connectCache = { ...connectCache, at: Date.now(), refreshing: null };
-    });
+    }).finally(() => { connectCache.refreshing = null; });
   return connectCache.refreshing;
 };
 
-const forgetConnect = () => {
-  connectCache = { ...connectCache, at: 0 };
+const forgetConnect = (preferences) => {
+  connectRevision += 1; // A read started before a settings save must not replace its result.
+  const value = preferences && connectCache.value
+    ? { ...connectCache.value, preferences, publishAgentActivity: preferences.publishAgentActivity }
+    : connectCache.value;
+  connectCache = { ...connectCache, value, at: 0 };
 };
 
 /**
@@ -1219,8 +1236,9 @@ const sourceControlSignIn = async (input, out = false) => {
  * The link it saves is made on T3 Code's next start; the page offers that
  * restart once this is done.
  */
-const startConnectLink = () => {
-  const child = spawn(T3_LAUNCHER, ["connect", "link", "--headless"], {
+const startConnectLink = (mode = "managed") => {
+  if (!["managed", "publish_only"].includes(mode)) throw new Error("Choose a T3 Connect tunnel or notifications only.");
+  const child = spawn(T3_LAUNCHER, ["connect", "link", "--headless", ...(mode === "publish_only" ? ["--publish-only"] : [])], {
     env: { ...process.env, NO_COLOR: "1" },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -2170,7 +2188,7 @@ const cancelLifecycle = (target, rawId) => {
 
 const ROUTES = [...FILES_ROUTES, "/credentials", "/credentials/create", "/credentials/save", "/credentials/remove", "/credentials/test", "/login", "/logout", "/hello", "/status", "/pair", "/revoke", "/devices/rename", "/ports",
   "/storage/versions/prune", "/storage/versions", "/storage/refresh", "/storage/clean/preview", "/storage/clean", "/storage/policy", "/storage",
-  "/public-url/clear", "/public-url", "/setup-key/reveal", "/setup-key/replace", "/connect/unlink", "/t3/restart",
+  "/public-url/clear", "/public-url", "/setup-key/reveal", "/setup-key/replace", "/connect/unlink", "/connect/preferences", "/t3/restart",
   "/t3/updates/check", "/t3/update", "/ports/expose", "/ports/unexpose",
   "/auto-update", "/auto-update/policy",
   "/harnesses/install", "/harnesses/update", "/harnesses/uninstall", "/harnesses/cancel", "/harnesses/versions", "/harnesses/enable", "/harnesses",
@@ -2365,12 +2383,15 @@ const viewerOf = async (req) => {
 // the T3 Code settings entry. Ports are left out: listing them is the costly
 // part of a poll, and a failed publish is rare. Kept briefly, since T3 asks
 // each time its settings open.
-let attentionCache = { at: 0, count: null };
-const attentionCount = async () => {
-  if (attentionCache.count !== null && Date.now() - attentionCache.at < 10_000) return attentionCache.count;
-  const count = Model.attentionCount(await status(), null, null);
-  attentionCache = { at: Date.now(), count };
-  return count;
+let navigationCache = { at: 0, nav: null }, navigationLoading = null;
+const helloNav = () => {
+  if (navigationCache.nav && Date.now() - navigationCache.at < 10_000) return Promise.resolve(navigationCache.nav);
+  if (!navigationLoading) navigationLoading = (async () => {
+    const nav = Model.navModel(await status(), null, null, null);
+    navigationCache = { at: Date.now(), nav };
+    return nav;
+  })().finally(() => { navigationLoading = null; });
+  return navigationLoading;
 };
 
 /**
@@ -2424,6 +2445,8 @@ const server = createServer(async (req, res) => {
   const authed = Boolean(viewer);
   // Opened inside T3 Code's settings rather than on its own.
   const embed = raw.searchParams.get("embed") === "t3";
+  const host = embed && raw.searchParams.get("host") === "tab" ? "tab" : undefined;
+  const layout = raw.searchParams.get("layout") === "wide" ? "wide" : "compact";
 
   try {
     // Don't answer asset probes with the page.
@@ -2442,7 +2465,10 @@ const server = createServer(async (req, res) => {
       // A signed-in T3 Code client is someone around: auto-update waits.
       if (authed) noteActivity();
       const body = { service: "t3-setup", signedIn: authed };
-      if (authed) body.attention = await attentionCount().catch(() => null);
+      if (authed) {
+        const nav = await helloNav().catch(() => Model.navModel(null, null, null, null));
+        Object.assign(body, { attention: nav.attention, protocol: 2, nav, icons: NAV_ICONS, palette: PALETTE });
+      }
       return sendJson(res, 200, body);
     }
 
@@ -2451,15 +2477,24 @@ const server = createServer(async (req, res) => {
     // page's own script asks for JSON instead, so it can say so in place.
     if (req.method === "POST" && route === "/login") {
       const body = new URLSearchParams(await readBody(req));
+      const params = new URLSearchParams();
+      if (body.get("embed") === "t3") {
+        params.set("embed", "t3");
+        if (body.get("host") === "tab") {
+          params.set("host", "tab");
+          params.set("layout", body.get("layout") === "wide" ? "wide" : "compact");
+        }
+      }
       if (!keyMatches(body.get("key"))) {
         await throttle(ip);
         if (wantsJson(req)) return sendJson(res, 401, { ok: false, error: "That key was not accepted." });
-        return send(res, 303, "", { location: `${mount}/?${body.get("embed") === "t3" ? "embed=t3&" : ""}error=1` });
+        params.set("error", "1");
+        return send(res, 303, "", { location: `${mount}/?${params}` });
       }
       failures.delete(ip);
       const setCookie = cookie(req, mount, encodeURIComponent(KEY), 86400);
       if (wantsJson(req)) return sendJson(res, 200, { ok: true }, { "set-cookie": setCookie });
-      return send(res, 303, "", { location: `${mount}/${body.get("embed") === "t3" ? "?embed=t3" : ""}`, "set-cookie": setCookie });
+      return send(res, 303, "", { location: `${mount}/${params.size ? '?' + params : ''}`, "set-cookie": setCookie });
     }
 
     // Lock console: forget this browser. Needs no key - signing out is never
@@ -2470,11 +2505,11 @@ const server = createServer(async (req, res) => {
     }
 
     if (route === "/") {
-      if (authed) return sendPage(req, res, (nonce) => renderConsole({ assets: ASSETS, nonce, mount, embed }));
+      if (authed) return sendPage(req, res, (nonce) => renderConsole({ assets: ASSETS, nonce, mount, embed, host, layout }));
       // The host the browser asked for, for the card's eyebrow; escaped by the template.
-      const host = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "").split(",")[0].trim().slice(0, 200);
+      const hostname = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "").split(",")[0].trim().slice(0, 200);
       return sendPage(req, res, (nonce) => renderUnlock({
-        assets: ASSETS, nonce, mount, host, publicUrl: publicUrl().url, error: raw.searchParams.get("error") === "1", embed,
+        assets: ASSETS, nonce, mount, host, hostname, layout, publicUrl: publicUrl().url, error: raw.searchParams.get("error") === "1", embed,
       }));
     }
 
@@ -2917,7 +2952,7 @@ const server = createServer(async (req, res) => {
       try {
         const input = JSON.parse((await readBody(req)) || "{}");
         if (input.agent === "antigravity") return sendJson(res, 200, publicSession(await startAntigravitySignin()));
-        if (input.agent === "connect") return sendJson(res, 200, publicSession(startConnectLink()));
+        if (input.agent === "connect") return sendJson(res, 200, publicSession(startConnectLink(input.mode)));
         // gh and az: a source control CLI's device code, from the harness's catalogue.
         await loadHarness();
         if (harnessModule.getSourceControl(input.agent)) return sendJson(res, 200, publicSession(await startScmDeviceSignin(input.agent)));
@@ -3041,6 +3076,15 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && route === "/connect/unlink") {
       const answer = await unlinkConnect();
+      return sendJson(res, answer.http, answer.body);
+    }
+
+    if (req.method === "POST" && route === "/connect/preferences") {
+      let input;
+      try { input = JSON.parse((await readBody(req)) || "{}"); }
+      catch { return sendJson(res, 400, { ok: false, error: "Expected a connection setting." }); }
+      const answer = await connectPreferences.save(input);
+      forgetConnect(answer.body.preferences);
       return sendJson(res, answer.http, answer.body);
     }
 

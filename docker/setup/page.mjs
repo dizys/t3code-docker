@@ -24,6 +24,7 @@ export const STYLES = ["design/tokens.css", "design/components.css", "console.cs
 export const CONSOLE_SCRIPTS = [
   "client/base.js",
   "design/ui.js",
+  "client/appearance.js",
   "client/routes.js",
   "client/model.js",
   "client/kit.js",
@@ -53,7 +54,7 @@ export const CONSOLE_SCRIPTS = [
   "client/files.js",
   "app.js",
 ];
-export const UNLOCK_SCRIPTS = ["client/base.js", "design/ui.js", "client/unlock.js"];
+export const UNLOCK_SCRIPTS = ["client/base.js", "design/ui.js", "client/appearance.js", "client/unlock.js"];
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -75,7 +76,11 @@ const { T3Routes: ROUTES } = runClassic(["client/routes.js"], ["T3Routes"]);
  * rather than shipping a page whose script ends early.
  */
 export function loadAssets() {
-  const css = STYLES.map((path) => `/* ${path} */\n${read(path)}`).join("\n");
+  // The native client uses Inter Variable. Inline its Latin subset too, keeping
+  // the console's single-response delivery and system/CJK fallback fonts.
+  const inter = readFileSync(new URL("design/fonts/inter-latin-variable.woff2", import.meta.url)).toString("base64");
+  const font = `@font-face{font-family:"Inter Variable";font-style:normal;font-weight:100 900;font-display:swap;src:url(data:font/woff2;base64,${inter}) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}`;
+  const css = [font, ...STYLES.map((path) => `/* ${path} */\n${read(path)}`)].join("\n");
   if (/<\/style/i.test(css)) throw new Error("a stylesheet contains </style and cannot be inlined");
   const script = (path) => {
     const code = read(path);
@@ -97,12 +102,12 @@ export const escapeHtml = (value) =>
 // tunnel is long enough to see. Inside T3 Code the theme is T3's, passed in the
 // address (?theme=dark) and kept current by message, never saved here.
 const BOOT = `(function(){var r=document.documentElement;try{var m=localStorage.getItem("t3-console-theme")||"system";`
-  + `if(r.hasAttribute("data-embed")){var t=new URLSearchParams(location.search).get("theme");m=t==="dark"||t==="light"?t:"system";}`
+  + `if(r.hasAttribute("data-embed")){var q=new URLSearchParams(location.search),t=q.get("theme");m=t==="dark"||t==="light"?t:"system";if(q.get("host")==="tab"){r.dataset.host="tab";r.dataset.hostLayout=q.get("layout")==="wide"?"wide":"compact";}}`
   + `var d=m==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):m;`
   + `r.setAttribute("data-theme",d);r.setAttribute("data-theme-mode",m);}catch(e){r.setAttribute("data-theme","light");}})();`;
 // Touch density lives on .tc-root, which is <body>, so it is set first thing
 // inside it rather than from <head>; kit.js keeps it current on resize.
-const DENSITY = `try{if(matchMedia("(max-width: 1023.98px)").matches)document.body.setAttribute("data-density","touch");}catch(e){}`;
+const DENSITY = `try{var c=matchMedia(document.documentElement.dataset.host==="tab"?"(max-width: 639.98px)":"(max-width: 1023.98px)").matches;document.documentElement.toggleAttribute("data-compact",c);if(c)document.body.setAttribute("data-density","touch");}catch(e){}`;
 
 // The console's app icon, as the favicon: the handoff's t3-mark.svg.
 const FAVICON = `data:image/svg+xml,${encodeURIComponent(read("design/favicon.svg").trim())}`;
@@ -117,6 +122,7 @@ export const contentSecurityPolicy = (nonce) => [
   "default-src 'none'",
   `script-src 'nonce-${nonce}'`,
   "style-src 'unsafe-inline'",
+  "font-src data:",
   "img-src data: blob:",
   "frame-src blob:",
   "connect-src 'self'",
@@ -126,8 +132,8 @@ export const contentSecurityPolicy = (nonce) => [
   "frame-ancestors 'self'",
 ].join("; ");
 
-const head = ({ nonce, css, mount, embed }) => `<!doctype html>
-<html lang="en"${embed ? ' data-embed="t3"' : ""}><head><meta charset="utf-8">
+const head = ({ nonce, css, mount, embed, host, layout }) => `<!doctype html>
+<html lang="en"${embed ? ' data-embed="t3"' : ""}${embed && host === 'tab' ? ` data-host="tab" data-host-layout="${layout === 'wide' ? 'wide' : 'compact'}"` : ""}><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="referrer" content="no-referrer">
@@ -149,6 +155,17 @@ const skeleton = (rows) => `<div class="tc-group" aria-hidden="true">${
 // Inside T3 Code the console is a dialog over the app: it closes rather than
 // linking to T3, opens in a tab of its own on request, and leaves the theme to T3.
 const CLOSE = `<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm tc-embed-close" type="button" data-cmd="embed.close" aria-label="Close" title="Close (Esc)"><i data-icon="x"></i></button>`;
+const BACK = `<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-cmd="embed.back" aria-label="Back to Settings" title="Back to Settings"><i data-icon="chevron-left"></i></button>`;
+const tabHeaders = (unlock = false) => `
+    <header class="tc-topbar tc-console-topbar">
+      <nav aria-label="Breadcrumb"><ol class="tc-crumbs"><li><button class="tc-crumb-link" type="button" data-cmd="embed.back">Settings</button></li><li>${unlock ? 'Setup' : '<a href="#overview">Setup</a>'}</li>${unlock ? '' : '<li aria-current="page"><span id="current-page">Overview</span></li>'}</ol></nav>
+      <span class="tc-spacer"></span>
+      ${unlock ? '' : `<a class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" id="page-guide" href="${ROUTES.docUrl('setup-page.md')}" target="_blank" rel="noopener" aria-label="Overview guide"><i data-icon="info"></i></a>`}${CLOSE}
+    </header>
+    <header class="tc-pagebar">
+      ${BACK}${unlock ? '<strong class="tc-unlock-page-title">Setup</strong>' : `<button class="tc-pageswitch" id="setup-pages" type="button" data-cmd="embed.pages" aria-label="Setup, Overview. Choose a page" aria-haspopup="menu" aria-expanded="false"><span class="tc-pageswitch-pre">Setup</span><span class="tc-pageswitch-sep" aria-hidden="true">/</span><span class="tc-pageswitch-cur" id="current-page-compact">Overview</span><i data-icon="chevrons-up-down" class="tc-pageswitch-chev"></i><span class="tc-pageswitch-dot" id="page-attention" aria-hidden="true" hidden></span></button>`}
+      <span class="tc-spacer"></span>${CLOSE}
+    </header>`;
 
 /**
  * "G A": a page's two-key shortcut, as its sidebar tooltip says it. Not
@@ -166,20 +183,21 @@ const sidebarNav = () => ROUTES.grouped().filter((group) => group.pages.length).
  * The console once unlocked: the shell, with every page awaiting its first
  * status. `embed` is the variant T3 Code's settings open in a dialog.
  */
-export function renderConsole({ assets, nonce, mount, embed = false }) {
+export function renderConsole({ assets, nonce, mount, embed = false, host, layout }) {
+  const tab = embed && host === 'tab';
   const tabs = ROUTES.TABS.map((tab) =>
     `<a class="tc-tab" href="#${tab.route}" data-nav="${tab.route}"><span class="tc-tab-ico"><i data-icon="${tab.icon}"></i><span class="tc-tab-badge" id="tab-${tab.route}" hidden></span></span>${escapeHtml(tab.title)}</a>`).join("");
-  const pages = [...ROUTES.PAGES, ROUTES.page("more")].map((page) =>
+  const pages = [...ROUTES.PAGES, ...(tab ? [] : [ROUTES.page("more")])].map((page) =>
     `<section class="tc-page${["instructions", "mcp"].includes(page.route) ? " tc-page--wide" : ""}" id="page-${page.route}" data-route="${page.route}" aria-label="${escapeHtml(page.title)}" hidden>${skeleton(page.route === "more" ? 2 : 3)}</section>`).join("\n");
   const foot = embed
     ? `<a class="tc-nav-item" id="open-tab" href="${escapeHtml(mount)}/" target="_blank" rel="noopener" data-open-tab><i data-icon="external-link"></i>Open in a new tab</a>`
     : `<a class="tc-nav-item" id="open-t3" href="/" target="_blank" rel="noopener" data-open-t3><i data-icon="external-link"></i>Open T3 Code</a>
         <button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" id="theme-toggle" data-cmd="theme.cycle" aria-label="Switch theme"><i data-icon="monitor"></i></button>`;
-  return `${head({ nonce, css: assets.css, mount, embed })}
+  return `${head({ nonce, css: assets.css, mount, embed, host, layout })}
 <body class="tc-root">
 <script nonce="${nonce}">${DENSITY}</script>
 <div class="tc-app" id="app">
-  <nav class="tc-sidebar" aria-label="Console">
+${tab ? '' : `  <nav class="tc-sidebar" aria-label="Console">
     <div class="tc-brand"><span class="tc-wordmark" aria-label="T3 Code"><span>Code</span></span><span class="tc-badge tc-badge--outline tc-badge--sm">Setup</span></div>
     <button class="tc-search" type="button" data-cmd="palette" aria-keyshortcuts="Meta+K Control+K"><i data-icon="search"></i>Search<span class="tc-kbd" data-mod-key>⌘K</span></button>
     <div class="tc-nav">${sidebarNav()}</div>
@@ -189,18 +207,23 @@ export function renderConsole({ assets, nonce, mount, embed = false }) {
         ${foot}
       </div>
     </div>
-  </nav>
+  </nav>`}
   <main class="tc-main" id="main" tabindex="-1">
-${embed ? `    <div class="tc-embed-corner">${CLOSE}</div>` : ""}
+${tab ? tabHeaders() : `    <header class="tc-topbar tc-console-topbar">
+      <nav aria-label="Breadcrumb"><ol class="tc-crumbs"><li><a href="#overview">Setup</a></li><li id="current-page" aria-current="page">Overview</li></ol></nav>
+      <span class="tc-spacer"></span>
+      <a class="tc-btn tc-btn--ghost tc-btn--icon" id="page-guide" href="${ROUTES.docUrl('setup-page.md')}" target="_blank" rel="noopener" aria-label="Overview guide"><i data-icon="info"></i></a>
+${embed ? `      <div class="tc-embed-corner">${CLOSE}</div>` : ""}
+    </header>
     <header class="tc-phonebar">
       <span class="tc-wordmark" aria-label="T3 Code"><span>Code</span></span><span class="tc-badge tc-badge--outline tc-badge--sm">Setup</span>
       <span class="tc-spacer"></span>
       <span class="tc-phone-status" id="phone-status"></span>
       <button class="tc-btn tc-btn--ghost tc-btn--icon" type="button" data-cmd="palette" aria-label="Search"><i data-icon="search"></i></button>${embed ? CLOSE.replace(" tc-btn--sm", "") : ""}
-    </header>
+    </header>`}
 ${pages}
   </main>
-  <nav class="tc-tabbar" aria-label="Console">${tabs}</nav>
+${tab ? '' : `  <nav class="tc-tabbar" aria-label="Console">${tabs}</nav>`}
 </div>
 <div id="layers"></div>
 <div class="tc-toaster" id="toaster" role="region" aria-label="Notifications" aria-live="polite"></div>
@@ -213,22 +236,24 @@ ${scripts(assets.console, nonce)}
  * without JavaScript; unlock.js only keeps the user on the page to show a wrong
  * key in place, and reveals the key on request.
  */
-export function renderUnlock({ assets, nonce, mount, host, publicUrl, error, embed = false }) {
+export function renderUnlock({ assets, nonce, mount, host, hostname, layout, publicUrl, error, embed = false }) {
+  const tab = embed && host === 'tab';
+  hostname ??= tab ? '' : host;
   // Inside T3 Code there is no T3 Code to open: the dialog closes instead.
   const t3Url = embed ? "" : publicUrl || (mount ? "/" : "");
   const invalid = error ? ' aria-invalid="true" aria-describedby="key-error"' : "";
-  return `${head({ nonce, css: assets.css, mount, embed })}
+  return `${head({ nonce, css: assets.css, mount, embed, host, layout })}
 <body class="tc-root">
 <script nonce="${nonce}">${DENSITY}</script>
-<main class="tc-standalone">
+${tab ? tabHeaders(true) + '\n' : ''}<main class="tc-standalone">
   <div class="tc-standalone-card">
-    <div class="tc-masthead"><div class="tc-masthead-in"><span class="tc-eyebrow">T3 Code · Setup</span>${embed ? CLOSE : ""}</div></div>
+    <div class="tc-masthead"><div class="tc-masthead-in"><span class="tc-eyebrow">T3 Code · Setup</span>${embed && !tab ? CLOSE : ""}</div></div>
     <div class="tc-standalone-body">
-      ${host ? `<span class="tc-eyebrow">${escapeHtml(host)}</span>` : ""}
+      ${hostname ? `<span class="tc-eyebrow">${escapeHtml(hostname)}</span>` : ""}
       <h1 class="tc-standalone-title">Unlock the console</h1>
       <p class="tc-standalone-desc">Pair devices, sign agents in and publish ports on this server. Enter the setup key: the one you set as <code>T3_SETUP_KEY</code>, or the one this server generated on its first start.</p>
       <form class="tc-unlock-form" method="POST" action="${escapeHtml(mount)}/login" id="loginform" novalidate>${embed ? `
-        <input type="hidden" name="embed" value="t3">` : ""}
+        <input type="hidden" name="embed" value="t3">${tab ? `\n        <input type="hidden" name="host" value="tab"><input type="hidden" name="layout" value="${layout === 'wide' ? 'wide' : 'compact'}">` : ''}` : ""}
         <div class="tc-field">
           <label class="tc-label" for="key">Setup key</label>
           <div class="tc-inputwrap">

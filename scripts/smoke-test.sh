@@ -1586,6 +1586,7 @@ setup_bridge_works() {
     process.stdout.write(JSON.parse(out.slice(out.indexOf("{"))).credential);
   ')" || return 1
   docker cp scripts/setup-bridge-audit.js "$NAME:/tmp/setup-bridge-audit.js" >/dev/null 2>&1 || return 1
+  docker cp scripts/appearance-ui-audit.js "$NAME:/tmp/appearance-ui-audit.js" >/dev/null 2>&1 || return 1
   { printf '\nsetup-bridge-audit:\n'
     docker exec \
       -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
@@ -1861,6 +1862,48 @@ check "the log says it was asked for" \
   "output_has 'docker logs ${NAME}-one' 'restarting T3 Code, as asked on the setup page'"
 check "status reports T3 Connect off, with its relay client ready" \
   "one_status | jq -e '.connect.state == \"off\" and .connect.relayClient.status == \"available\"'"
+one_connect_preferences_are_gated() {
+  local endpoint="${ONE_URL}/__setup/connect/preferences"
+  local payload='{"publishAgentActivity":true}'
+  [ "$(curl -sS --noproxy '*' --max-time 10 -o /dev/null -w '%{http_code}' \
+    -H 'content-type: application/json' -d "$payload" "$endpoint")" = 401 ] || return 1
+  [ "$(curl -sS --noproxy '*' --max-time 10 -o /dev/null -w '%{http_code}' -b "$ONE_JAR" \
+    -H 'sec-fetch-site: cross-site' -H 'content-type: application/json' -d "$payload" "$endpoint")" = 403 ] || return 1
+  [ "$(curl -sS --noproxy '*' --max-time 10 -o /dev/null -w '%{http_code}' -b "$ONE_JAR" \
+    -H 'content-type: application/json' -d '{"publishAgentActivity":"true"}' "$endpoint")" = 400 ] || return 1
+  [ "$(curl -sS --noproxy '*' --max-time 25 -o /dev/null -w '%{http_code}' -b "$ONE_JAR" \
+    -H 'content-type: application/json' -d "$payload" "$endpoint")" = 409 ]
+}
+check "connection preferences require sign-in, same-site access, booleans and a linked account" one_connect_preferences_are_gated
+one_native_activity_preferences() {
+  docker exec -i --user t3 "${NAME}-one" node --input-type=module >>"$UI_AUDIT_LOG" 2>&1 <<'JS'
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createT3Api } from '/opt/t3-setup/t3-api.mjs';
+const cli = (...args) => execFileSync('/usr/local/bin/t3', args, { encoding: 'utf8' });
+const api = createT3Api({ url: 'ws://127.0.0.1:3773/ws', issueSession: async () => {
+  const output = cli('auth', 'session', 'issue', '--ttl', '4h', '--subject', 't3-setup-console', '--json');
+  return JSON.parse(output.slice(output.indexOf('{')));
+} });
+let before;
+try {
+  before = await api.http('/api/connect/link-state');
+  assert.equal(before.linked, false, 'the smoke container must not have a real T3 account');
+  await api.http('/api/connect/preferences', { publishAgentActivity: true });
+  const saved = await api.http('/api/connect/link-state');
+  assert.equal(saved.publishAgentActivity, true);
+  assert.equal(saved.holdWebhooksWhileOffline, before.holdWebhooksWhileOffline);
+} finally {
+  try {
+    if (before) await api.http('/api/connect/preferences', { publishAgentActivity: before.publishAgentActivity });
+  } finally {
+    api.close();
+    if (api.sessionId()) cli('auth', 'session', 'revoke', api.sessionId());
+  }
+}
+JS
+}
+check "native activity preferences persist without changing webhook holding or linking an account" one_native_activity_preferences
 # docker stop reaches T3 Code through the supervisor, which then exits with
 # it, well inside the timeout: a SIGKILL at the deadline would read as 137.
 one_stops_cleanly() {

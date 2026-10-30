@@ -11,6 +11,7 @@ const { createSkillsFixtures } = require('./lib/skills-fixtures.cjs');
 const { checkChipFocus } = require('./lib/chip-focus.cjs');
 const base = process.argv[2] || 'http://127.0.0.1:23780/__setup/';
 const key = process.argv[3] || 'dev';
+const TAB = process.env.T3_UI_AUDIT_TAB === '1';
 const output = process.env.T3_SKILLS_UI_OUTPUT || '/tmp/t3-skills-ui-audit';
 fs.mkdirSync(output, { recursive: true });
 const deferred = (timeoutMs = 15000) => { let resolve; const promise = new Promise((done, reject) => { const timer = setTimeout(() => reject(new Error('Timed out waiting for a fixture gate')), timeoutMs); timer.unref(); resolve = () => { clearTimeout(timer); done(); }; }); return { promise, resolve }; };
@@ -52,7 +53,7 @@ const checkSelect = async (page, select, theme) => {
 (async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
   try {
-    for (const theme of ['light', 'dark']) for (const [width, height, embedded] of [[1440, 900], [1024, 900], [390, 844], [360, 720], [820, 900], [1198, 878, true]]) {
+    for (const theme of ['light', 'dark']) for (const [width, height, embedded] of (TAB ? [480,639,640,704,1040].map(w=>[w,900,true]) : [[1440, 900], [1024, 900], [390, 844], [360, 720], [820, 900], [1198, 878, true]])) {
       if (process.env.T3_SKILLS_UI_THEMES && !process.env.T3_SKILLS_UI_THEMES.split(',').includes(theme)) continue;
       if (process.env.T3_SKILLS_UI_WIDTHS && !process.env.T3_SKILLS_UI_WIDTHS.split(',').includes(String(width))) continue;
       console.log('Starting', theme, width);
@@ -109,7 +110,7 @@ const checkSelect = async (page, select, theme) => {
         if (response) return route.fulfill({ status: response.status || 200, json: response.body });
         return route.continue();
       });
-      const target = embedded ? await framed(page, base + '?embed=t3&theme=' + theme) : page;
+      const target = embedded ? await framed(page, base + '?embed=t3&theme=' + theme + (TAB?'&host=tab&layout='+(width<640?'compact':'wide'):'')) : page;
       if (!embedded) await page.goto(base);
       if (await target.locator('input[type=password]').count()) {
         await target.locator('input[type=password]').fill(key);
@@ -163,7 +164,7 @@ const checkSelect = async (page, select, theme) => {
       assert.equal(await target.locator('.tc-mx-row').count(), 20);
       assert.equal(await target.locator('.tc-mx-agent').count(), 5);
       assert.equal(await target.locator('#cx-tab-skills').innerText(), 'Skills 24');
-      if (width >= 1024 && width !== 1440) await checkColumns();
+      if (width >= (TAB ? 640 : 1024) && width !== 1440) await checkColumns();
       const inventoryCount = Object.values(gets).reduce((a, b) => a + b, 0);
       await target.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       await page.waitForTimeout(300);
@@ -171,14 +172,14 @@ const checkSelect = async (page, select, theme) => {
       await target.locator('#skill-search').fill('__no_skill_matches__');
       await target.getByText('No skills match these filters',{exact:true}).waitFor();
       const clearFilters=target.getByRole('button',{name:'Clear filters',exact:true});
-      if(width<1024)assert((await clearFilters.boundingBox()).height>=44,'empty-state recovery keeps a 44px touch target');
+      if(width<(TAB?640:1024))assert((await clearFilters.boundingBox()).height>=44,'empty-state recovery keeps a 44px touch target');
       await shot('filtered-empty'); await clearFilters.click();
       await page.keyboard.press('/');
       assert.equal(await target.evaluate(() => document.activeElement.id), 'skill-search');
       await target.locator('#skill-search').fill('research narrative');
       assert.equal(await target.locator('.tc-mx-row').count(), 1);
       await target.locator('#skill-search').fill('');
-      if (width >= 1024) {
+      if (width >= (TAB ? 640 : 1024)) {
         await target.locator('.tc-lh [data-cmd="skills.show"][data-id=attention]').first().click();
         assert.equal(await target.locator('.tc-mx-row').count(), 1);
         await target.locator('.tc-lh [data-cmd="skills.show"][data-id=all]').click();
@@ -211,7 +212,7 @@ const checkSelect = async (page, select, theme) => {
       assert.equal(await target.locator('.tc-files li').count(), 3);
       await checkSelect(page, target.getByRole('combobox', { name: /Claude Code visibility/ }), theme);
       await shot('inspector');
-      if (width < 768) {
+      if (width < (TAB ? 640 : 768)) {
         await target.locator('[data-inspect-menu]').click();
         await target.getByRole('menuitem', { name: 'Reinstall from source…', exact: true }).click();
         await target.locator('#skill-source').waitFor();
@@ -342,9 +343,10 @@ const checkSelect = async (page, select, theme) => {
       await target.locator('[data-import-replace]').waitFor();
       assert(await next().isDisabled());
       assert.equal(writes.filter(write => write.path.endsWith('/plan')).at(-1).input.providers.join(','), 'claude,codex');
-      if (width < 1024) await target.locator('[data-import-rail]').click();
+      const collapsedPlan = await target.locator('[data-import-rail]').isVisible();
+      if (collapsedPlan) await target.locator('[data-import-rail]').click();
       assert((await target.locator('.tc-wizard-rail').innerText()).includes('Cursor finds 2 copies'));
-      if (width >= 1024) {
+      if (!collapsedPlan) {
         await target.evaluate(() => document.fonts.ready);
         await target.waitForFunction(() => {
           const rail = document.querySelector('.tc-wizard-rail');
@@ -473,9 +475,9 @@ const checkSelect = async (page, select, theme) => {
       const checkUpdates = {
         waitFor: () => target.locator('[data-cmd="skills.check-updates"]').first().waitFor({ state: 'attached' }),
         click: async () => {
-          if (width < 1024) await visible(target, '.tc-sk-agent-chips [data-cmd="skills.show"][data-id=updates]').click();
+          if (width < (TAB ? 640 : 1024)) await visible(target, '.tc-sk-agent-chips [data-cmd="skills.show"][data-id=updates]').click();
           await visible(target, '[data-cmd="skills.check-updates"]').first().click();
-          if (width < 1024) await visible(target, '[data-cmd="skills.show"][data-id=all]').click();
+          if (width < (TAB ? 640 : 1024)) await visible(target, '[data-cmd="skills.show"][data-id=all]').click();
         },
       };
       await checkUpdates.waitFor();

@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { publicBuildEnvironment } from "../scripts/build-t3-runtime.mjs";
+import { executableBuildPlan, publicBuildEnvironment } from "../scripts/build-t3-runtime.mjs";
+
+test("native Linux ARM64 retains upstream's host SEA packaging and artifact name", () => {
+  const plan = executableBuildPlan("arm64", { platform: "linux", hostArch: "arm64" });
+  assert.deepEqual(plan.args, ["pnpm", "exec", "node", "apps/server/scripts/cli.ts", "build-exe"]);
+  assert.equal(plan.output, "t3");
+});
+
+test("explicit Linux targets remain available without mistaking another host for native ARM64", () => {
+  for (const [arch, platform, hostArch] of [["x64", "linux", "x64"], ["x64", "linux", "arm64"], ["arm64", "linux", "x64"], ["arm64", "darwin", "arm64"]]) {
+    const plan = executableBuildPlan(arch, { platform, hostArch });
+    assert.deepEqual(plan.args.slice(-2), ["--target", `linux-${arch}`]);
+    assert.equal(plan.output, `t3-linux-${arch}`);
+  }
+  assert.throws(() => executableBuildPlan("riscv64"), /supported Linux/);
+});
 
 const defaults = {
   T3CODE_CLERK_PUBLISHABLE_KEY: "pk_live_Y2xlcmsuZXhhbXBsZS50ZXN0JA",

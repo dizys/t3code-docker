@@ -21,6 +21,11 @@ open and hold for actions. View offers hidden files, sorting, selection and Size
 Search matches names inside the current folder and its descendants, with type,
 size and modification filters. It never executes a file.
 
+The location bar uses a full row so long paths have room. Search and actions sit
+below it, with **New folder** and **Upload** together. In compact consoles,
+**View** also offers **List** and **Sizes**. File names stay above ownership and
+safety labels; Details keeps the full path and modification time available.
+
 Folder sizes show allocated disk space; files show their length. Files reuses
 Storage’s existing scan, with a small cached directory index. Missing sizes are
 measured in the background, two folders at a time, for up to 20 seconds each.

@@ -269,9 +269,9 @@ test("Muse offers opt-in install, sign-in and updates without claiming saved cre
 
 test("OpenCode v2 releases can be found by major prefix, preserving release-age and minimum-version markers", () => {
   const releases = [
-    { version: "2.0.28", waiting: true, supported: true, requiresNightly: true },
-    { version: "2.0.27", supported: true, requiresNightly: true },
-    { version: "2.0.17", supported: false, requiresNightly: true },
+    { version: "2.0.28", waiting: true, supported: true, minimumT3Version: "0.1.2" },
+    { version: "2.0.27", supported: true, minimumT3Version: "0.1.2" },
+    { version: "2.0.17", supported: false, minimumT3Version: "0.1.2" },
     { version: "1.19.0", supported: true },
   ];
   assert.deepEqual(plain(M.matchReleases(releases, "2")).map(r => r.version), ["2.0.28", "2.0.27", "2.0.17"]);
@@ -523,6 +523,12 @@ test("T3 Connect reads as one state with at most one next step", () => {
   assert.equal(on.action, null, "on, nothing is owed: turning it off is in its menu");
   assert.deepEqual(on.menu.map((m) => m.cmd), ["connect.off"]);
   assert.equal(on.menu[0].danger, true);
+  assert.match(view(saved({ state: "on", preferences: { linked: true, managedTunnelActive: false } })).text, /through your own address/);
+  assert.match(view(saved({ state: "on", linkMode: "publish_only" })).text, /through your own address/);
+  assert.match(view(saved({ state: "on", preferences: { linked: true } })).text, /through T3’s relay/);
+  const revoked = view(saved({ state: "signin", revoked: true }));
+  assert.equal(revoked.action.label, "Set up again");
+  assert.match(revoked.text, /removed from your T3 account/);
 
   assert.equal(view(saved({ state: "signin", desired: true })).action.cmd, "connect.setup");
   assert.deepEqual(view(null), { state: "unknown", badge: null, text: "Couldn’t read its state just now.", action: null });

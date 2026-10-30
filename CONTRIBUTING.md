@@ -22,6 +22,16 @@ Issues and pull requests are welcome. Before opening one:
   `docker/t3-client/setup-bridge.js`, and prints a pairing link.
   `scripts/setup-bridge-audit.js` checks those pages in a browser, through the
   same router.
+  It also checks full native appearance synchronization, including custom colors,
+  contrast, fonts, size, legacy fallback and unsaved-draft preservation.
+  `node scripts/appearance-ui-audit.js URL KEY` checks standalone role parity
+  against the pinned native reference, offline Inter delivery and forced-color
+  focus at phone, tablet and desktop widths. See the
+  [design system](docker/setup/design/README.md) for source mapping and sync rules.
+  It covers grouped Settings navigation, its compact phone rail, native search,
+  the older sidebar sheet, and opening/closing Setup with focus restored.
+  Set `T3_BRIDGE_UI_OUTPUT=/tmp/t3-bridge-ui` to save desktop and phone
+  screenshots in both themes.
   `node scripts/console-screens.js` photographs every setup page in light and
   dark, on a phone, a tablet, a desktop and inside T3 Code, in three states:
   set up, first start, and everything needing attention at once. Its data
@@ -160,12 +170,20 @@ the tested digests into one manifest without rebuilding. `latest` points at
 [Docker Hub publishing](docs/dockerhub-publishing.md).
 
 `node scripts/files-ui-audit.js http://127.0.0.1:23785/__setup/ dev` checks Files
-against synthetic in-memory paths. It covers desktop, tablet, phone, narrow phone
-and embedded layouts in both themes, including selection, polling, late replies,
-previews, Sizes, managed paths and permission/missing states. Screenshots go to
+against synthetic in-memory paths. It covers desktop, laptop, tablet, phone,
+narrow phone and embedded layouts in both themes, including 800px and 1100px
+frames inside a larger window. It checks toolbar grouping, filename space,
+wrapping badges, deep paths, resize and scroll preservation, selection, polling,
+late replies, previews, Sizes, managed paths and permission/missing states.
+Screenshots go to
 `/tmp/t3-files-ui-audit` (`T3_FILES_UI_OUTPUT` overrides it). Use the existing
 Playwright installation through `NODE_PATH` and `CHROME_PATH`, as above. It cannot
 read or change the production filesystem.
+
+`T3_FILES_UI_LAYOUT_ONLY=1` runs the focused Files layout cases, including
+Details open/closed, long labels and paths, and Sizes. The default run retains
+the full interaction checks. `T3_FILES_UI_VARIANTS=laptop,embedded-modal,embedded-compact`
+narrows either run while iterating on a constrained console.
 
 `node scripts/files-space-ui-audit.js URL KEY` checks archive and cleanup flows.
 It reads the console document from that URL and serves its download fixture over

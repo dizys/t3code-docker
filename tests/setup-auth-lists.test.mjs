@@ -58,4 +58,27 @@ if(action==='list') {
   const invalidated=await request('/status');assert.deepEqual(invalidated.sessions,[]);
   for(let i=0;i<100;i++){warm=await request('/status');if(warm.authLists.session.available)break;await pause(20)}
   assert.equal(warm.authLists.session.available,true);assert.deepEqual(warm.sessions,[]);
+  // Native hosts get only registry-derived navigation, never status internals.
+  const anonymous = await (await fetch(`http://127.0.0.1:${port}/hello`)).json();
+  assert.deepEqual(anonymous, { service: 't3-setup', signedIn: false });
+  const hellos = await Promise.all(Array.from({length: 4}, () => request('/hello')));
+  for (const hello of hellos) {
+    assert.equal(hello.protocol, 2); assert.equal(hello.signedIn, true);
+    assert.equal(hello.nav.attention, hello.attention); assert.equal(hello.nav.current, null);
+    const pages = hello.nav.groups.flatMap(g => g.pages);
+    assert.equal(pages.length, 13); assert(hello.palette.some(p => p.route === 'files'));
+    assert.deepEqual(Object.keys(hello.icons).sort(), [...new Set(pages.map(p => p.icon))].sort());
+    assert(!('paths' in hello)); assert(!('server' in hello));
+  }
+  for (const hello of hellos.slice(1)) assert.deepEqual(hello, hellos[0], 'concurrent hosts share one cached navigation snapshot');
+  // A browser without scripts retains only the allowed embedding enums.
+  const login = async values => fetch(`http://127.0.0.1:${port}/login`, {
+    method:'POST', redirect:'manual', body:new URLSearchParams(values),
+  });
+  const good = await login({key:'fixture',embed:'t3',host:'tab',layout:'wide'});
+  assert.equal(good.status,303); assert.equal(good.headers.get('location'),'/?embed=t3&host=tab&layout=wide');
+  const bad = await login({key:'wrong',embed:'t3',host:'tab',layout:'malicious'});
+  assert.equal(bad.status,303); assert.equal(bad.headers.get('location'),'/?embed=t3&host=tab&layout=compact&error=1');
+  const alone = await login({key:'fixture',host:'tab',layout:'wide'});
+  assert.equal(alone.headers.get('location'),'/');
 });

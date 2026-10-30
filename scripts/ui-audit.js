@@ -45,7 +45,8 @@ const VIEWPORTS = [[360, 800], [390, 844], [820, 1180], [1100, 1000], [1440, 900
 // the dialog fills the screen, and at the dialog's own size on a desktop.
 const EMBEDDED = [[390, 844], [1198, 878]];
 const embedded = (url) => { const u = new globalThis.URL(url); u.searchParams.set("embed", "t3"); return u.href; };
-const RUNS = [
+const TAB = process.env.T3_UI_AUDIT_TAB === '1';
+const RUNS = TAB ? [480,639,640,704,1040].map(width=>{const url=new globalThis.URL(embedded(URL));url.searchParams.set('host','tab');url.searchParams.set('layout',width<640?'compact':'wide');return {url:url.href,viewport:[width,900],tag:' tab'};}) : [
   ...VIEWPORTS.map((viewport) => ({ url: URL, viewport, tag: "" })),
   ...EMBEDDED.map((viewport) => ({ url: embedded(URL), viewport, tag: " embedded" })),
 ];
@@ -355,7 +356,7 @@ const audit = () => {
       await page.evaluate(() => { location.hash = 'mcp'; });
       await page.waitForSelector('#mcp-library .tc-mcp-table:visible, #mcp-library .tc-sk-phone-list:visible, #mcp-library .tc-empty:visible');
     }],
-    ...ROUTES.filter(route => route !== 'mcp').map((route) => [route, async (page) => {
+    ...ROUTES.filter(route => route !== 'mcp' && (!TAB || route !== 'more')).map((route) => [route, async (page) => {
       await page.evaluate((r) => { location.hash = r; }, route);
       await page.waitForSelector(`#page-${route}:not([hidden]) .tc-section, #page-${route}:not([hidden]) .tc-group`, { timeout: 60000 });
     }]),

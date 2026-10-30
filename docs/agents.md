@@ -59,9 +59,9 @@ Typing a prefix such as `2.1` picks the newest release under it.
 **OpenCode's version picker includes both 1.x and 2.x.** OpenCode 1 remains
 the default first-start install. Choose **Install a specific version…** on its
 row and search for `2` to install OpenCode 2 from the official `@opencode/cli`
-package through mise. It requires T3 Code **Nightly** and OpenCode **2.0.18**
-or newer. The two distributions share one row and one active `opencode`
-command; **Update** stays within the major version you selected.
+package through mise. It requires T3 Code **0.1.2** or newer, including **Stable**,
+and OpenCode **2.0.18** or newer. The two distributions share one row and one
+active `opencode` command; **Update** stays within the major version you selected.
 
 Before switching majors, stop running OpenCode sessions and keep a backup of
 its data. OpenCode 2 converts the shared OpenCode database on first use, and
@@ -160,6 +160,12 @@ both count, as they do for T3 Code:
 | OpenCode | 1.x: its `auth.json`; 2.x: `auth list --format json --standalone` for saved accounts |
 | Muse Code | saved credentials in `~/.config/muse/auth.json`; sign-in is checked on the first message |
 | Antigravity | T3 Code's provider status |
+
+Codex 0.164.0 changed API-key status from "Logged in using an API key" to
+"API key configured". Setup recognizes both formats so a saved key updates
+the Agents row and completes an active sign-in.
+A configured key confirms local storage; Codex checks whether the key works
+when you send a request.
 
 Muse has no login-status command, and its model list works while signed out.
 The setup page reports saved credentials without claiming that they are

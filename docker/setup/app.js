@@ -46,9 +46,11 @@
   // ready, when the person asked to close it and how many things need them;
   // T3 Code passes its theme. Nothing else is accepted from anywhere else.
   const EMBED = document.documentElement.getAttribute('data-embed') === 't3' && window.parent !== window;
+  const TAB = EMBED && document.documentElement.dataset.host === 'tab';
   const toHost = (type, detail) => {
     if (EMBED) window.parent.postMessage(Object.assign({ source: 't3-setup', type }, detail), location.origin);
   };
+  if (TAB) Kit.onModalChange(open => toHost('layer', { open }));
   // An embedded address opened in a tab of its own (copied, say) has nothing
   // to close back to: show the page as itself.
   if (!EMBED && document.documentElement.hasAttribute('data-embed')) {
@@ -253,6 +255,20 @@
     const count = M.attentionCount(state.status, null, ui);
     if (count !== toldAttention) toHost('attention', { count });
     toldAttention = count;
+  };
+
+  const navIcons = M.navIcons(T3C.icons);
+  let navFrame = null, toldNav = null, forceNav = false;
+  const tellNav = (force = false) => {
+    forceNav ||= force;
+    if (!EMBED || navFrame !== null) return;
+    navFrame = requestAnimationFrame(() => {
+      navFrame = null;
+      const model = { ...M.navModel(state.status, state.ports, ui, state.route), icons: navIcons };
+      const serialized = JSON.stringify(model);
+      if (forceNav || serialized !== toldNav) { toldNav = serialized; toHost('nav', model); }
+      forceNav = false;
+    });
   };
 
   // Polled separately and more often: a tunnel takes a few seconds to be
@@ -1057,6 +1073,7 @@
         <div class="tc-row-actions tc-row-actions--wrap">${action}${!url && here && !here.local ? html`<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" aria-label="More for the public URL" aria-haspopup="menu" aria-expanded="${String(Kit.menuOpenFor('menu-url'))}" data-cmd="url.menu" data-key="menu-url">${icon('ellipsis')}</button>` : ''}</div>
       </div>
       ${connectRow(s)}
+      ${connectPreferenceRows(s)}
     </div></div>`;
   };
 
@@ -1105,6 +1122,54 @@
       <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name">T3 Connect</span>${badge(view.badge)}</div><span class="tc-status tc-status--prose">${view.text}</span></div>
       <div class="tc-row-actions tc-row-actions--wrap">${view.action ? html`<button class="tc-btn tc-btn--sm" type="button" data-cmd="${view.action.cmd}">${view.action.icon ? icon(view.action.icon) : ''}${view.action.label}</button>` : ''}${menu.length ? html`<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" aria-label="More for T3 Connect" aria-haspopup="menu" aria-expanded="${String(Kit.menuOpenFor('menu-connect'))}" data-cmd="connect.menu" data-key="menu-connect">${icon('ellipsis')}</button>` : ''}</div>
     </div>`;
+  };
+
+  let connectSaving = null;
+  let connectPreferenceError = null;
+  const connectPreferenceRows = (s) => {
+    const prefs = s.connect?.preferences;
+    const reason = !s.connect ? 'Connection settings are unavailable. Try again after T3 Code is ready.'
+      : s.connect.revoked ? 'This server was removed from your T3 account. Set up T3 Connect again above.'
+      : !s.connect.linked ? 'Set up T3 Connect above to link this server to your T3 account.'
+        : !prefs ? 'Could not read connection settings. Check that T3 Code is running and up to date.' : null;
+    return html`${[
+      ['publishAgentActivity', 'Publish agent activity', 'smartphone', 'Send agent activity to mobile notifications and Live Activities. Sign in to the same T3 account in the mobile app and allow notifications.'],
+      ['holdWebhooksWhileOffline', 'Hold webhooks while offline', 'clock', 'T3 Connect stores webhook requests for up to 24 hours while this server is offline, then delivers them. Turning this off still delivers requests already held.'],
+    ].map(([key, label, glyph, help]) => {
+      const saving = connectSaving === key;
+      const error = connectPreferenceError?.key === key ? connectPreferenceError.message : null;
+      const unavailable = reason || (key === 'holdWebhooksWhileOffline'
+        ? prefs.holdWebhooksWhileOffline === null ? 'Update T3 Code to manage offline webhook holding.'
+          : !prefs.managedTunnelActive ? 'Requires an active T3 Connect tunnel.' : null : null);
+      return html`<div class="tc-row tc-row--compact" data-key="connect-${key}"${saving ? raw(' aria-busy="true"') : ''}>
+        <span class="tc-tile tc-tile--icon" aria-hidden="true">${icon(glyph)}</span>
+        <div class="tc-row-main">
+          <div class="tc-row-title"><span class="tc-row-name" id="connect-${key}-name">${label}</span>${saving ? html`<span class="tc-status tc-access-pending" role="status"><span class="tc-spinner" aria-hidden="true"></span>Saving…</span>` : ''}</div>
+          <span class="tc-status tc-status--prose" id="connect-${key}-desc">${unavailable || help}</span>
+          ${error ? html`<span class="tc-status tc-status--prose tc-danger" role="alert" id="connect-${key}-error">${error}</span>` : ''}
+        </div>
+        <div class="tc-row-actions"><label class="tc-switch-hit" for="connect-toggle-${key}"><button class="tc-switch" id="connect-toggle-${key}" type="button" role="switch" aria-checked="${String(prefs?.[key] === true)}" aria-labelledby="connect-${key}-name" aria-describedby="connect-${key}-desc${error ? ' connect-' + key + '-error' : ''}" data-cmd="connect.preference" data-id="${key}" data-key="connect-toggle-${key}"${unavailable || connectSaving ? raw(' disabled') : ''}${saving ? raw(' aria-busy="true"') : ''}></button></label></div>
+      </div>`;
+    })}`;
+  };
+
+  const saveConnectPreference = async (key) => {
+    const prefs = state.status?.connect?.preferences;
+    if (connectSaving || !prefs || !['publishAgentActivity', 'holdWebhooksWhileOffline'].includes(key)) return;
+    const enabled = !prefs[key];
+    connectSaving = key;
+    connectPreferenceError = null;
+    render();
+    const res = await api('/connect/preferences', { body: { [key]: enabled } });
+    await loadStatus();
+    connectSaving = null;
+    if (!res.ok) connectPreferenceError = { key, message: res.error || 'Could not save the setting. Try again.' };
+    else {
+      if (state.status?.connect) state.status.connect.preferences = res.data.preferences;
+      Kit.announce((key === 'publishAgentActivity' ? 'Agent activity publishing' : 'Offline webhook holding') + (enabled ? ' on' : ' off'));
+    }
+    render();
+    document.querySelector('[data-key="connect-toggle-' + key + '"]')?.focus({ preventScroll: true });
   };
 
   // --------------------------------------------------------------- agents --
@@ -1190,7 +1255,7 @@
       <div class="tc-group" data-key="agents-list">
         ${rows.length ? html`<div class="tc-list">${rows.map((row) => resourceRow(row))}</div>`
           : html`<div class="tc-empty tc-empty--compact"><span class="tc-empty-desc">Couldn’t read the agents just now. The console tries again on its own.</span></div>`}
-        <div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>Turn each agent on in T3 Code under Settings → Providers.</span></div>
+        <div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>Turn each agent on in T3 Code under ${TAB ? html`<button class="tc-crumb-link tc-settings-link" type="button" data-cmd="embed.settings" data-path="/settings/providers">Settings → Providers</button>` : 'Settings → Providers'}.</span></div>
       </div>`;
   };
 
@@ -1247,7 +1312,7 @@
       <div class="tc-group" data-key="scm-list">
         ${rows.length ? html`<div class="tc-list">${rows.map((row) => resourceRow(row))}</div>`
           : html`<div class="tc-empty tc-empty--compact"><span class="tc-empty-desc">Couldn’t read the source control CLIs just now. The console tries again on its own.</span></div>`}
-        <div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>Bitbucket needs no CLI: add its token in T3 Code under Settings → Source Control.</span></div>
+        <div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>Bitbucket needs no CLI: add its token in T3 Code under ${TAB ? html`<button class="tc-crumb-link tc-settings-link" type="button" data-cmd="embed.settings" data-path="/settings/source-control">Settings → Source Control</button>` : 'Settings → Source Control'}.</span></div>
       </div>`;
   };
 
@@ -1546,8 +1611,9 @@
     const checking = check.checking || ui.runtimeChecking;
     const failures = !checking ? check.failures : [];
     const lastChecked = s.updates && s.updates.checkedAt ? M.relTime(s.updates.checkedAt, n) : null;
+    const idleCheckLabel = html`${icon('refresh-cw')}Check for updates`;
     const headActions = html`
-      <button class="tc-btn tc-btn--sm tc-update-check tc-update-check--label" type="button" data-cmd="updates.check" data-key="updates-check" aria-label="${checking ? 'Checking for updates' : 'Check for updates'}"${check.checking && !check.manual ? raw(' title="Checking in the background. Press to check again now."') : ''} aria-disabled="${String(Boolean(check.manual || ui.runtimeChecking))}">${checking ? html`<span class="tc-spinner" aria-hidden="true"></span>Checking…` : html`${icon('refresh-cw')}Check for updates`}</button>
+      <button class="tc-btn tc-btn--sm tc-update-check tc-update-check--label" type="button" data-cmd="updates.check" data-key="updates-check" aria-label="${checking ? 'Checking for updates' : 'Check for updates'}"${check.checking && !check.manual ? raw(' title="Checking in the background. Press to check again now."') : ''} aria-disabled="${String(Boolean(check.manual || ui.runtimeChecking))}"><span class="tc-update-check-size" aria-hidden="true">${idleCheckLabel}</span><span class="tc-update-check-content" aria-hidden="true">${checking ? html`<span class="tc-spinner"></span>Checking…` : idleCheckLabel}</span></button>
       ${view.due.length ? html`<button class="tc-btn tc-btn--primary tc-btn--sm" type="button" data-cmd="updates.all" data-key="updates-all">${icon('circle-arrow-up')}Update all · ${view.due.length}</button>` : ''}`;
     return html`
       ${pageHead('updates', { actions: headActions })}
@@ -1817,15 +1883,17 @@
   const titleOf = (route) => (T3Routes.page(route) || {}).title || route;
 
   /** A sidebar mark: a count of what needs the person, or a quiet sign of work or of something live. */
-  const NAV_MARK = {
-    warn: (b) => ({ cls: 'tc-nav-badge tc-badge tc-badge--warn tc-badge--count', text: String(b.count), title: M.plural(b.count, 'thing needs', 'things need') + ' you' }),
-    running: (b) => ({ cls: 'tc-nav-badge tc-nav-mark tc-nav-mark--running', text: '', title: M.plural(b.count, 'install') + ' running' }),
-    live: (b) => ({ cls: 'tc-nav-badge tc-nav-mark tc-nav-mark--live', text: '', title: M.plural(b.count, 'port') + ' published' }),
-    count: (b) => ({ cls: 'tc-nav-badge tc-badge tc-badge--info tc-badge--count', text: String(b.count), title: M.plural(b.count, 'update') + ' available' }),
+  const navMark = (value) => {
+    const badge = M.navBadgeOf(value);
+    if (!badge) return null;
+    const count = badge.kind === 'warn' || badge.kind === 'count';
+    return { cls: count ? 'tc-nav-badge tc-badge tc-badge--' + (badge.kind === 'warn' ? 'warn' : 'info') + ' tc-badge--count'
+      : 'tc-nav-badge tc-nav-mark tc-nav-mark--' + badge.kind,
+    text: count ? String(badge.count) : '', title: badge.label };
   };
-  const navMark = (b) => (!b ? null : b.tone === 'warn' ? NAV_MARK.warn(b) : NAV_MARK[b.kind] ? NAV_MARK[b.kind](b) : null);
 
   const renderShell = (s, n) => {
+    if (TAB) return;
     const badges = M.navBadges(s, state.ports, ui);
     for (const route of ROUTES) {
       const el = $('nav-' + route);
@@ -1853,9 +1921,28 @@
   };
 
   const render = () => {
+    // Delivery happens after this render, including its early loading/error
+    // returns. A route change never depends on the first /status response.
+    tellNav();
     const s = state.status;
     const n = now();
     document.body.dataset.consoleRoute = state.route;
+    const pageInfo = T3Routes.page(state.route);
+    const title = pageInfo?.title || titleOf(state.route);
+    if ($('current-page').textContent !== title) $('current-page').textContent = title;
+    if (TAB) {
+      if ($('current-page-compact').textContent !== title) $('current-page-compact').textContent = title;
+      const attention = M.attentionCount(s, null, ui);
+      $('page-attention').hidden = attention === 0;
+      $('setup-pages').setAttribute('aria-label', 'Setup, ' + title + '. ' + (attention ? attention + (attention === 1 ? ' thing needs you. ' : ' things need you. ') : '') + 'Choose a page');
+    }
+    const guide = $('page-guide');
+    guide.hidden = !pageInfo?.doc;
+    if (pageInfo?.doc) {
+      const href = T3Routes.docUrl(pageInfo.doc, s?.image?.version);
+      if (guide.getAttribute('href') !== href) guide.setAttribute('href', href);
+      guide.setAttribute('aria-label', pageInfo.title + ' guide');
+    }
     if (s) renderShell(s, n);
     const route = state.route;
     const el = $('page-' + route);
@@ -1870,12 +1957,32 @@
   };
 
   // --------------------------------------------------------------- routes --
+  const pageMenu = trigger => {
+    const model = M.navModel(state.status, state.ports, ui, state.route);
+    const info = T3Routes.page(state.route);
+    const badgeMarkup = badge => {
+      if (!badge) return '';
+      const count = badge.kind === 'warn' || badge.kind === 'count';
+      return html`<span class="${count ? 'tc-nav-badge tc-badge tc-badge--' + (badge.kind === 'warn' ? 'warn' : 'info') + ' tc-badge--count' : 'tc-nav-badge tc-nav-mark tc-nav-mark--' + badge.kind}" aria-label="${badge.label}">${count ? badge.count : ''}</span>`;
+    };
+    const rect = trigger.getBoundingClientRect();
+    Kit.menu(trigger, {
+      label: 'Setup pages', className: 'tc-pagemenu', cancel: false, radioIcons: true, swipeDismiss: true,
+      at: { x: rect.left, y: rect.bottom + 4 },
+      header: html`<div class="tc-pagemenu-head" data-menu-drag><span class="tc-pagemenu-tile">${icon('server-cog')}</span><div><strong>Setup</strong><span>${location.host}</span></div></div>`,
+      groups: model.groups.map(group => ({ label: group.label, items: group.pages.map(page => ({
+        label: page.title, icon: page.icon, radio: true, checked: page.route === model.current, current: page.route === model.current,
+        trailing: badgeMarkup(page.badge), run: () => go(page.route),
+      })) })),
+      footer: html`<div class="tc-pagemenu-status">${dot(model.status.ok ? 'ok' : 'danger')}<span>${state.status ? model.status.text : 'Connecting'}${model.status.version ? ' · ' + model.status.version : ''}</span></div><a href="${BASE + '/' + location.hash}" target="_blank" rel="noopener">Open in a new tab ${icon('external-link')}</a>${info?.doc ? html`<a href="${T3Routes.docUrl(info.doc, state.status?.image?.version)}" target="_blank" rel="noopener" aria-label="${info.title + ' guide'}">Guide ${icon('info')}</a>` : ''}`,
+    });
+  };
   // #agents, or an address a page had before it moved (#devices once it is
   // Access), which is rewritten in place so the address bar says where it is.
   const routeFromHash = () => {
     const [name, sub] = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
     if (name === 'instructions' && sub === 'mcp') { history.replaceState(null, '', '#mcp'); return 'mcp'; }
-    const route = T3Routes.resolve(name);
+    const route = TAB && name === 'more' ? 'overview' : T3Routes.resolve(name);
     if (route && route !== name) history.replaceState(null, '', '#' + route + (sub ? '/' + sub : ''));
     if (route === 'instructions') state.contextTab = sub === 'skills' ? 'skills' : 'instructions';
     return route && PAGES[route] ? route : 'overview';
@@ -1886,6 +1993,19 @@
   };
   let first = true;
   let shownHash = location.hash, navigationTask = null, navigationVersion = 0;
+  const beforeLeave = async () => {
+    if (contextEditor.layer && !await contextEditor.requestClose()) return false;
+    if (!await skillsUI.beforeNavigate()) return false;
+    if (!await mcpUI.beforeNavigate()) return false;
+    return filesUI.beforeNavigate();
+  };
+  let hostLeaving = false;
+  const leaveHost = async (type, detail) => {
+    if (hostLeaving) return;
+    hostLeaving = true;
+    try { if (!TAB || await beforeLeave()) toHost(type, detail); }
+    finally { hostLeaving = false; }
+  };
   const show = (route, focus) => {
     const changed = route !== state.route || first;
     state.route = route;
@@ -1916,17 +2036,13 @@
     // Back/forward can arrive while a discard confirmation is open. Share the
     // decision, then apply only the latest destination; cancelled navigation
     // keeps the old route, tab and draft together.
-    if (!navigationTask) navigationTask = (async () => {
-      if (contextEditor.layer && !await contextEditor.requestClose()) return false;
-      if (!await skillsUI.beforeNavigate()) return false;
-      if (!await mcpUI.beforeNavigate()) return false;
-      return filesUI.beforeNavigate();
-    })();
+    if (!navigationTask) navigationTask = beforeLeave();
     const allowed = await navigationTask;
     if (version !== navigationVersion) return;
     navigationTask = null;
-    if (!allowed) { history.replaceState(null, '', shownHash || location.pathname + location.search); return; }
+    if (!allowed) { history.replaceState(null, '', shownHash || location.pathname + location.search); tellNav(true); return; }
     show(routeFromHash(), focus);
+    tellNav(true);
   };
   window.addEventListener('hashchange', () => { void navigateFromHash(keyboardNav); });
   let keyboardNav = false;
@@ -2691,7 +2807,7 @@
   // own `t3 connect link --headless`, which the setup service runs), restart
   // T3 Code so it makes the link, and wait for it to come on. Opened again
   // later, it starts wherever the server says things are.
-  const conn = { layer: null, phase: 'idle', session: null, error: null, identity: null, attempt: 0, poll: null, oldPid: null, since: 0 };
+  const conn = { layer: null, phase: 'idle', mode: 'managed', session: null, error: null, identity: null, attempt: 0, poll: null, oldPid: null, since: 0 };
 
   const connectSheetBody = () => {
     const st = conn.session || {};
@@ -2699,7 +2815,14 @@
     const restartable = Boolean(s.t3 && s.t3.pid);
     const signedIn = sheetStep(1, 'Sign in to T3' + (conn.identity ? ' as ' + conn.identity : ''), 'done', '');
     let body;
-    if (conn.phase === 'failed') {
+    if (conn.phase === 'choose') {
+      body = html`<div class="tc-form"><p class="tc-hint">Choose how this server uses your T3 account. Both options need a sign-in and a T3 Code restart.</p><div class="tc-opts" role="group" aria-label="T3 Connect setup">
+        ${[
+          ['managed', 'T3 Connect tunnel', 'Reach this server through T3’s relay without a public address of your own. Activity publishing can be turned on afterwards.'],
+          ['publish_only', 'Notifications only', 'Publish agent activity for mobile notifications and Live Activities. Keep connecting through your own address, such as Tailscale or a reverse proxy.'],
+        ].map(([mode, label, help]) => html`<label class="tc-opt"><input class="tc-radio" type="radio" name="connect-mode" value="${mode}"${conn.mode === mode ? raw(' checked') : ''}><span><strong>${label}</strong><small>${help}</small></span></label>`)}
+        </div></div>`;
+    } else if (conn.phase === 'failed') {
       body = html`${notice('danger', 'circle-alert', 'T3 Connect did not finish', conn.error || 'The sign-in stopped before it finished.')}${st.tail ? html`<pre class="tc-log-tail">${st.tail}</pre>` : ''}`;
     } else if (conn.phase === 'signin') {
       body = st.url
@@ -2714,10 +2837,12 @@
     } else if (conn.phase === 'linking') {
       body = html`${signedIn}${sheetStep(2, 'Turn it on', 'active', html`${sheetWaiting('T3 Code is making the link…')}${now() - conn.since > 120_000 ? html`<span class="tc-hint">This is taking longer than usual. You can close this: Access shows when it is on.</span>` : ''}`)}`;
     } else if (conn.phase === 'on') {
-      body = notice('ok', 'circle-check', 'T3 Connect is on', 'Devices signed in to your T3 account reach this server through ' + ((s.connect && s.connect.relayHost) || 'T3’s relay') + '.');
+      body = notice('ok', 'circle-check', 'T3 Connect is on', M.connectView(s).text);
     }
     const close = (label, variant) => html`<button class="${cx('tc-btn', variant || 'tc-btn--ghost')}" type="button" data-sheet="close">${label}</button>`;
-    const foot = conn.phase === 'failed'
+    const foot = conn.phase === 'choose'
+      ? html`${close('Cancel')}<button class="tc-btn tc-btn--primary" type="button" data-sheet="continue">Continue</button>`
+      : conn.phase === 'failed'
       ? html`${close('Close')}<button class="tc-btn tc-btn--primary" type="button" data-sheet="retry">${icon('refresh-cw')}Try again</button>`
       : conn.phase === 'authorized'
         ? html`${close('Later')}${restartable ? html`<button class="tc-btn tc-btn--primary" type="button" data-sheet="restart">${icon('refresh-cw')}Restart T3 Code</button>` : ''}`
@@ -2725,7 +2850,7 @@
           : conn.phase === 'signin' ? html`<span class="tc-sheet-foot-note tc-desk-only"><span class="tc-kbd">Esc</span> cancels</span>${close('Cancel')}`
             : close('Close');
     return html`
-      <div class="tc-sheet-head"><span class="tc-tile tc-tile--icon tc-tile--lg" aria-hidden="true">${icon('globe')}</span><div class="tc-sheet-head-text"><h2 class="tc-sheet-title" id="connect-title">T3 Connect</h2><span class="tc-small tc-muted">Runs <code>t3 connect link</code> for you</span></div><span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-sheet="close" aria-label="Close">${icon('x')}</button></div>
+      <div class="tc-sheet-head"><span class="tc-tile tc-tile--icon tc-tile--lg" aria-hidden="true">${icon('globe')}</span><div class="tc-sheet-head-text"><h2 class="tc-sheet-title" id="connect-title">T3 Connect</h2><span class="tc-small tc-muted">${conn.phase === 'choose' ? 'Link this server to your T3 account' : conn.mode === 'publish_only' ? 'Notifications through your own server address' : 'Reach this server through T3’s relay'}</span></div><span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-sheet="close" aria-label="Close">${icon('x')}</button></div>
       <div class="tc-sheet-body" aria-live="polite">${body}</div>
       <div class="tc-sheet-foot">${foot}</div>`;
   };
@@ -2754,10 +2879,11 @@
   };
 
   const connBeginSignin = async () => {
+    if (conn.phase === 'signin') return;
     const attempt = connNext();
     Object.assign(conn, { phase: 'signin', session: null, error: null });
     connRender();
-    const res = await api('/auth/signin', { body: { agent: 'connect' } });
+    const res = await api('/auth/signin', { body: { agent: 'connect', mode: conn.mode } });
     if (!conn.layer || conn.attempt !== attempt) {
       if (res.ok && res.data.id) api('/auth/cancel', { body: { id: res.data.id } });
       return;
@@ -2802,8 +2928,8 @@
   const openConnect = (trigger, { restart } = {}) => {
     if (conn.layer) return;
     const view = M.connectView(state.status);
-    const phase = { on: 'on', linking: 'linking', restart: 'authorized' }[view.state] || 'signin';
-    Object.assign(conn, { phase, session: null, error: null, identity: null, since: now() });
+    const phase = { on: 'on', linking: 'linking', restart: 'authorized' }[view.state] || 'choose';
+    Object.assign(conn, { phase, mode: state.status?.connect?.linkMode || 'managed', session: null, error: null, identity: null, since: now() });
     conn.layer = Kit.open({
       kind: 'sheet',
       panel: { tag: 'aside', class: 'tc-sheet ' + (Kit.isPhone() ? 'tc-sheet--bottom' : 'tc-sheet--inset'), role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'connect-title' },
@@ -2823,11 +2949,13 @@
       if (!action) return;
       const what = action.getAttribute('data-sheet');
       if (what === 'close') conn.layer.close('close');
-      else if (what === 'retry') connBeginSignin();
+      else if (what === 'retry' || what === 'continue') connBeginSignin();
       else if (what === 'restart') connRestart();
     });
-    if (phase === 'signin') connBeginSignin();
-    else if (phase === 'linking') { const attempt = connNext(); conn.poll = setTimeout(() => connWatch(attempt), 1500); }
+    conn.layer.panel.addEventListener('change', (e) => {
+      if (e.target.name === 'connect-mode' && conn.phase === 'choose') conn.mode = e.target.value;
+    });
+    if (phase === 'linking') { const attempt = connNext(); conn.poll = setTimeout(() => connWatch(attempt), 1500); }
     else if (phase === 'authorized' && restart) connRestart();
   };
 
@@ -3016,7 +3144,7 @@
       return html`<span class="tc-hint">${current
         ? html`On <span class="tc-mono">${current}</span>. T3 Code switches to the release you pick once it is installed and runs; ${current} keeps working until then.`
         : html`T3 Code is pointed at the release you pick once it is installed and runs.`}${kept.length ? html` Also on the volume: <span class="tc-mono">${kept.join(', ')}</span>.` : ''}</span>
-        ${t.id === 'opencode' ? html`<span class="tc-hint">OpenCode 1 is the default. Choose a 2.x release to use OpenCode 2 with T3 Code Nightly. Updates stay on the selected major version.</span>` : ''}`;
+        ${t.id === 'opencode' ? html`<span class="tc-hint">OpenCode 1 is the default. OpenCode 2 requires T3 Code 0.1.2 or newer, including Stable. Updates stay on the selected major version.</span>` : ''}`;
     }
     const info = toolSheet.info;
     const bins = (info && info.bins && info.bins.length ? info.bins : t.bins) || [];
@@ -3048,6 +3176,7 @@
     else if (r.waiting) tags.push(r.releasedAt ? 'out ' + M.relTime(r.releasedAt, now()) : 'new');
     else if (r.prerelease) tags.push('preview');
     if (r.requiresNightly) tags.push('requires Nightly');
+    if (r.minimumT3Version) tags.push('T3 Code ' + r.minimumT3Version + '+');
     if (r.version === toolSheet.offered) tags.push('newest');
     if (r.version === current) tags.push('installed');
     else if ((facts.managedVersions || []).includes(r.version)) tags.push('on the volume');
@@ -3225,7 +3354,7 @@
         const confirmed = await Kit.confirm({
           title: toV2 ? 'Install OpenCode 2?' : 'Switch back to OpenCode 1?',
           body: toV2
-            ? 'Use T3 Code Nightly and stop running OpenCode sessions before switching. OpenCode 2 converts its shared database on first use.'
+            ? 'Requires T3 Code 0.1.2 or newer. Stop running OpenCode sessions before switching. OpenCode 2 converts its shared database on first use.'
             : 'Stop running OpenCode sessions before switching. Installing OpenCode 1 does not restore a database or configuration converted by OpenCode 2.',
           consequences: [
             { icon: 'shield-check', text: 'Keep a backup of your OpenCode data before switching' },
@@ -3576,7 +3705,10 @@
     palette: () => openPalette(),
     // Inside T3 Code, T3 Code is right behind the dialog.
     'open.t3': () => (EMBED ? toHost('close') : window.open(t3Url(), '_blank', 'noopener')),
-    'embed.close': () => toHost('close'),
+    'embed.close': () => leaveHost('close'),
+    'embed.back': () => leaveHost('back'),
+    'embed.settings': (a) => { if (TAB && /^\/settings\/[a-z0-9-]+$/.test(a.path)) return leaveHost('settings', { path: a.path }); },
+    'embed.pages': (_, el) => { if (TAB) pageMenu(el); },
     lock: async () => {
       await fetch(BASE + '/logout', { method: 'POST', credentials: 'same-origin', redirect: 'manual' }).catch(() => {});
       locked = true;
@@ -3686,6 +3818,7 @@
     'url.edit': (a, el) => openUrlSheet(el),
 
     'connect.setup': (a, el) => openConnect(el),
+    'connect.preference': (a) => saveConnectPreference(a.id),
     'connect.restart': (a, el) => openConnect(el, { restart: true }),
     'connect.off': async () => {
       const ok = await Kit.confirm({
@@ -3994,19 +4127,38 @@
     window.addEventListener('message', (e) => {
       const m = e.data;
       if (e.source !== window.parent || e.origin !== location.origin || !m || m.source !== 't3-code') return;
-      if (m.type === 'theme' && (m.theme === 'light' || m.theme === 'dark') && m.theme !== themeMode()) setTheme(m.theme);
+      if (m.type === 'theme' && (m.theme === 'light' || m.theme === 'dark')) {
+        if (m.theme !== themeMode()) setTheme(m.theme);
+        if (!T3Appearance.apply(document.documentElement, m.appearance)) T3Appearance.clear(document.documentElement);
+      }
+      if (TAB && m.type === 'host' && (m.layout === 'wide' || m.layout === 'compact')) {
+        const root = document.documentElement, focused = document.activeElement;
+        if (root.dataset.hostLayout !== m.layout) {
+          const headerFocus = focused?.closest('.tc-console-topbar, .tc-pagebar');
+          const menu = Kit.top();
+          if (menu?.returnTo === $('setup-pages')) menu.close('layout');
+          root.dataset.hostLayout = m.layout;
+          const params = new URLSearchParams(location.search); params.set('layout', m.layout);
+          history.replaceState(null, '', location.pathname + '?' + params + location.hash);
+          if (headerFocus) (m.layout === 'compact' ? $('setup-pages') : document.querySelector('.tc-console-topbar [data-cmd="embed.back"]')).focus({ preventScroll: true });
+        }
+      }
+      if (TAB && m.type === 'navigate' && typeof m.route === 'string' && m.route.length <= 100) {
+        const route = T3Routes.resolve(m.route);
+        if (route && route !== 'more' && PAGES[route]) go(m.route);
+      }
     });
     // Escape closes the dialog once nothing on this page wants it: an open
     // menu, sheet or palette takes it first (Kit stops it there).
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !e.defaultPrevented && !e.isComposing) toHost('close');
+      if (e.key === 'Escape' && !e.defaultPrevented && !e.isComposing) void leaveHost('close');
     });
   }
   show(routeFromHash());
   loadStatus();
   loadPorts();
   if (EMBED) {
-    $('main').focus({ preventScroll: true });
-    toHost('ready');
+    (TAB && document.documentElement.dataset.hostLayout === 'compact' ? document.querySelector('.tc-pagebar [data-cmd="embed.back"]') : $('main')).focus({ preventScroll: true });
+    toHost('ready', { protocol: 2 });
   }
 })();

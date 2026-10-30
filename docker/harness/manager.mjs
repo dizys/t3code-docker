@@ -1119,6 +1119,7 @@ export function createHarnessManager(options = {}) {
       latest: results[installations.findIndex((installation) => installation.miseTool === active.miseTool)].value?.latest ?? null,
       releases: results.flatMap((result, index) => result.status === "fulfilled" ? result.value.releases.map((release) => ({
         ...release, requiresNightly: Boolean(installations[index].requiresNightly),
+        ...(installations[index].minimumT3Version ? { minimumT3Version: installations[index].minimumT3Version } : {}),
       })) : []).sort((a, b) => compareVersions(b.version, a.version)),
       degraded: results.flatMap((result, index) => result.status === "rejected" ? [{ tool: installations[index].miseTool, error: String(result.reason?.message ?? result.reason) }] : []),
     };

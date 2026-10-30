@@ -10,6 +10,7 @@ try { ({ chromium } = require('playwright')); } catch { ({ chromium } = require(
 const base = process.argv[2] || 'http://127.0.0.1:23780/__setup/';
 const key = process.argv[3] || 'dev', GB = 1e9;
 const output = process.env.T3_STORAGE_UI_OUTPUT || '/tmp/t3-storage-ui-audit';
+const TAB = process.env.T3_UI_AUDIT_TAB === '1';
 const spacingOnly = process.env.T3_STORAGE_UI_SPACING_ONLY === '1';
 const deferred = () => { let release; return { promise: new Promise(resolve => { release = resolve; }), release: () => release() }; };
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -68,7 +69,7 @@ const geometry = () => {
   const fixtureStatus = await initial.json();
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
   try {
-    const runs = [[360,800,false],[390,844,false],[390,520,false],[820,1180,false],[844,440,false],[1100,1000,false],[1440,1000,false],[390,844,true],[1198,878,true]];
+    const runs = TAB ? [480,639,640,704,1040].map(w=>[w,900,true]) : [[360,800,false],[390,844,false],[390,520,false],[820,1180,false],[844,440,false],[1100,1000,false],[1440,1000,false],[390,844,true],[1198,878,true]];
     const widths = process.env.T3_STORAGE_UI_WIDTHS?.split(',').map(Number);
     for (const [width,height,embed] of runs.filter(([w]) => !widths || widths.includes(w))) for (const theme of ['light','dark']) {
       const context = await browser.newContext({ viewport: { width,height }, colorScheme: theme, reducedMotion: 'reduce' });
@@ -81,7 +82,7 @@ const geometry = () => {
       await page.route('**/*', async route => {
         const url = new URL(route.request().url()), method = route.request().method(), at = suffix => url.pathname.endsWith(suffix);
         if (at('/storage-audit-host')) {
-          const child = new URL(base); child.searchParams.set('embed','t3'); child.searchParams.set('theme',theme); child.hash = 'storage';
+          const child = new URL(base); child.searchParams.set('embed','t3'); child.searchParams.set('theme',theme); if(TAB){child.searchParams.set('host','tab');child.searchParams.set('layout',width<640?'compact':'wide');} child.hash = 'storage';
           return route.fulfill({ contentType: 'text/html', body: `<iframe title="Setup" src="${child.href}" style="border:0;width:100%;height:100%"></iframe><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}</style>` });
         }
         if (at('/status')) return route.fulfill({ json: { ...fixtureStatus, storage: storage() } });
@@ -125,7 +126,14 @@ const geometry = () => {
       };
       await navigate();
       const tag = `${width}x${height}-${theme}${embed?'-embedded':''}`;
-      const check = async state => assert.deepEqual(await surface.evaluate(geometry),[],tag+' '+state);
+      const check = async state => {
+        const findings = await surface.evaluate(geometry);
+        if (findings.length) {
+          await page.screenshot({ path: path.join(output, tag + '-failure.png'), fullPage: true });
+          console.error(await surface.evaluate(() => [...document.querySelectorAll('.tc-storage *, .tc-layer [role=dialog] *')].filter(el => el.getBoundingClientRect().width && getComputedStyle(el).overflowX === 'visible' && el.scrollWidth > el.clientWidth + 1).slice(0, 12).map(el => ({ cls: el.className, parent: el.parentElement.className, width: el.clientWidth, content: el.scrollWidth, text: el.textContent.trim().slice(0, 90) }))));
+        }
+        assert.deepEqual(findings, [], tag + ' ' + state);
+      };
       const snap = async name => { await check(name); await page.screenshot({path:path.join(output,`${tag}-${name}.png`)}); };
       const writes = () => requests.filter(r => !r.route.endsWith('/preview') && !r.route.endsWith('/refresh'));
       const cleanRequests = () => requests.filter(r => r.route.endsWith('/clean'));

@@ -35,10 +35,10 @@ test("Settings is every page under /settings, and nothing else", () => {
   for (const path of ["/", "/pair", "/welcome", "/settingsx", "/chat/settings", ""]) assert.equal(B.isSettingsPath(path), false, path);
 });
 
-test("the dialog opens the console embedded, in T3's theme", () => {
-  assert.equal(B.embedUrl("/__setup/", "dark", null), "/__setup/?embed=t3&theme=dark");
-  assert.equal(B.embedUrl("/__setup/", "light", "agents"), "/__setup/?embed=t3&theme=light#agents");
-  assert.equal(B.embedUrl("/setup/", "<script>", null), "/setup/?embed=t3&theme=light", "anything else is light");
+test("the tab opens the console in its host layout and T3 theme", () => {
+  assert.equal(B.embedUrl("/__setup/", "dark", null), "/__setup/?embed=t3&host=tab&layout=compact&theme=dark#overview");
+  assert.equal(B.embedUrl("/__setup/", "light", "agents", "wide"), "/__setup/?embed=t3&host=tab&layout=wide&theme=light#agents");
+  assert.equal(B.embedUrl("/setup/", "<script>", null), "/setup/?embed=t3&host=tab&layout=compact&theme=light#overview", "anything else is light");
 });
 
 test("only the console's own answer counts as the console", () => {
@@ -167,6 +167,32 @@ test("Setup does not take the first highlight from T3's virtualized Actions", ()
   assert.equal(B.paletteOwnsFirst({ before: 0, virtualActions: false }), true);
 });
 
+const nativeRow = (id, attributes = {}, className = "") => ({
+  id, className,
+  hasAttribute: (name) => Object.hasOwn(attributes, name),
+  getAttribute: (name) => attributes[name] ?? null,
+});
+
+test("native palette navigation uses T3's painted selection rather than the primitive default", () => {
+  const initial = [nativeRow("native-first", { "data-highlighted": "", "aria-selected": "true" }), nativeRow("native-next")];
+  assert.equal(B.paletteActiveIndex(initial), -1, "a primitive default is not T3's painted highlight");
+  assert.equal(B.paletteStep({ key: "ArrowDown", own: 0, ours: 1, theirs: initial.length, at: -1, before: 0 }).pass, true,
+    "leaving Setup must let T3 paint its first native row");
+  const rows = [nativeRow("native-first", { "data-active": "true" }), nativeRow("native-next")];
+  const at = B.paletteActiveIndex(rows);
+  assert.equal(at, 0);
+  const next = B.paletteStep({ key: "ArrowUp", own: -1, ours: 1, theirs: rows.length, at, before: 0 });
+  assert.equal(next.own, 0);
+  assert.equal(next.pass, false, "ArrowUp from the first native row returns to Setup");
+});
+
+test("false native active flags are ignored and older palette styles remain supported", () => {
+  assert.equal(B.paletteActiveIndex([nativeRow("inactive", { "data-active": "false" }), nativeRow("active", { "data-active": "" })]), 1);
+  assert.equal(B.paletteActiveIndex([nativeRow("old", {}, "p-2 bg-accent! text-accent-foreground!")]), 0);
+  assert.equal(B.paletteActiveIndex([nativeRow("plain", { "data-highlighted": "false" })]), -1);
+  assert.equal(B.paletteActiveIndex([]), -1);
+});
+
 test("the build step injects the bridge once, before </body>, or fails loudly", () => {
   const dir = mkdtempSync(join(tmpdir(), "t3-client-"));
   const shell = join(dir, "index.html");
@@ -186,4 +212,37 @@ test("the build step injects the bridge once, before </body>, or fails loudly", 
 
   writeFileSync(shell, "<!doctype html><html><body><div id=\"root\"></div></html>");
   assert.throws(run, /no <\/body>/, "an upstream layout change stops the build");
+});
+
+test('tab host enums and native settings paths are bounded',()=>{
+  assert.equal(B.layoutFor(768),'wide');assert.equal(B.layoutFor(767),'compact');
+  for(const path of ['/settings/general','/settings/providers','/settings/source-control'])assert.equal(B.settingsPath(path),true);
+  for(const path of ['/settings','/settings/../pair','https://evil.test/settings/general','/settings/providers?q=x','/settings/providers/extra',null])assert.equal(B.settingsPath(path),false);
+});
+const navFixture = () => ({current:'overview',groups:[{id:'home',label:null,pages:[{route:'overview',title:'Overview',icon:'home',badge:null}]}],status:{ok:true,text:'Running',version:'v1'},attention:2});
+const iconsFixture = () => ({home:[['path',{d:'M1 1h2',fill:'none'}]]});
+const paletteFixture = () => [{id:'overview',route:'overview',title:'Overview',meta:'Setup',icon:'home',terms:[]}];
+test('authenticated hello validates and projects navigation, icons and palette',()=>{
+  const hello={service:'t3-setup',signedIn:true,protocol:2,attention:2,nav:navFixture(),icons:iconsFixture(),palette:paletteFixture()};
+  const result=B.readHello(hello);assert.equal(result.protocol,2);assert.equal(result.nav.current,'overview');assert.equal(result.palette[0].icon,'home');
+  assert.equal(B.readHello({...hello,signedIn:false}).nav,undefined);
+  for(const changes of [{nav:{...hello.nav,current:'unknown'}},{nav:{...hello.nav,attention:-1}},{icons:{home:[['script',{}]]}},{palette:[{...hello.palette[0],route:'unknown'}]}])assert.equal(B.readHello({...hello,...changes}).protocol,undefined);
+  const secret={...hello.nav,internal:'secret'};assert.equal(B.readNav(secret).internal,undefined);
+});
+test('SVG boundary rejects executable elements, attributes, URLs and oversized shapes',()=>{
+  assert.ok(B.readIconNodes([['circle',{cx:'12',cy:'12',r:'3'}]]));
+  for(const nodes of [[['script',{d:'x'}]],[['path',{onload:'alert'}]],[['path',{d:'url(x)'}]],[['path',{fill:'red'}]],[['path',{d:'x'.repeat(2001)}]],[],Array(129).fill(['path',{d:'M1 1'}])])assert.equal(B.readIconNodes(nodes),null);
+  assert.equal(B.readIcons({'bad key':iconsFixture().home}),null);
+});
+test('navigation rejects duplicate or malformed routes, groups and badges',()=>{
+  const nav=navFixture();
+  const cases=[{...nav,groups:[{...nav.groups[0],pages:[...nav.groups[0].pages,...nav.groups[0].pages]}]},{...nav,groups:[{...nav.groups[0],pages:[{...nav.groups[0].pages[0],route:'../pair'}]}]},{...nav,groups:[{...nav.groups[0],pages:[{...nav.groups[0].pages[0],badge:{kind:'html',count:1,label:'x'}}]}]},{...nav,status:{...nav.status,ok:'yes'}}];
+  for(const value of cases)assert.equal(B.readNav(value),null);
+});
+test('future registry pages flow into navigation diffs and palette without a bridge page table',()=>{
+  const previous=navFixture(),next=navFixture();next.groups[0].pages.push({route:'backups',title:'Backups',icon:'home',badge:{kind:'count',count:2,label:'2 backups'}});
+  const diff=B.navDiff(previous,next);assert.equal([...diff.added].join(),'backups');assert.equal([...diff.order].join(),'overview,backups');
+  next.groups[0].pages.shift();next.current='backups';assert.equal([...B.navDiff(previous,next).removed].join(),'overview');
+  const items=B.readPalette([{id:'backups',route:'backups',title:'Backups',meta:'Setup · restore points',icon:'home',terms:['restore']}],next);
+  assert.equal(B.paletteMatches('setup backups',items)[0].route,'backups');
 });

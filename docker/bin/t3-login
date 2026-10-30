@@ -44,7 +44,7 @@ Usage: t3-login <harness>
   cursor     Cursor CLI         -> cursor-agent login
   grok       Grok Build         -> grok login
   muse       Muse Code          -> muse login
-  connect    T3 Connect         -> t3 connect
+  connect    T3 Connect         -> t3 connect [command] [options]
 
 Run this with a TTY:  docker compose exec -it t3code t3-login claude
 Then enable the provider in T3 Code under Settings > Providers.
@@ -59,9 +59,10 @@ or with `t3-harness install <id>`.
 
 `connect` authorizes this environment for T3 Connect. It does not start or
 disturb the running server - the link takes effect on T3 Code's next start, so
-restart it afterwards: Restart T3 Code under Environment on the setup page, or
+restart it afterwards: Restart T3 Code under Server on the setup page, or
 restart the container. The setup page can also do the whole sign-in itself
-(Devices -> From anywhere).
+(Access -> T3 Connect). For notifications through your own address:
+  t3-login connect link --publish-only
 USAGE
 }
 
@@ -105,7 +106,7 @@ case "$harness" in
     fi
     cmd=("$bin" "${args[@]}")
     ;;
-  connect)  cmd=("$T3_INFRA_LAUNCHER" connect) ;;
+  connect)  cmd=("$T3_INFRA_LAUNCHER" connect "${@:2}") ;;
   -h|--help|"") usage; [ -n "$harness" ] && exit 0 || exit 2 ;;
   *) printf 't3-login: unknown harness %s\n\n' "$harness" >&2; usage >&2; exit 2 ;;
 esac

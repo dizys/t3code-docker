@@ -9,13 +9,14 @@ const { statusFor, portsFor, routeConsole, framed, unlock, visit } = require('./
 const { createMcpFixtures } = require('./lib/mcp-fixtures.cjs');
 const { checkChipFocus } = require('./lib/chip-focus.cjs');
 const base = process.argv[2] || 'http://127.0.0.1:23804/__setup/', key = process.argv[3] || 'dev';
+const TAB = process.env.T3_UI_AUDIT_TAB === '1';
 const out = process.env.T3_MCP_UI_OUTPUT || '/tmp/t3-mcp-ui-audit'; fs.mkdirSync(out, { recursive: true });
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 (async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
   try {
-    for (const theme of ['light', 'dark']) for (const variant of ['desktop', 'phone', 'embedded', 'embedded-phone']) {
-      const embedded = variant.startsWith('embedded'), phone = variant === 'phone' || variant === 'embedded-phone', viewport = phone ? { width: 390, height: 844 } : variant === 'embedded' ? { width: 1198, height: 878 } : { width: 1440, height: 900 };
+    for (const theme of ['light', 'dark']) for (const variant of (TAB ? [480,639,640,704,1040].map(w=>'tab-'+w) : ['desktop', 'phone', 'embedded', 'embedded-phone'])) {
+      const embedded = TAB || variant.startsWith('embedded'), phone = TAB ? Number(variant.slice(4))<640 : variant === 'phone' || variant === 'embedded-phone', viewport = TAB ? {width:Number(variant.slice(4)),height:900} : phone ? { width: 390, height: 844 } : variant === 'embedded' ? { width: 1198, height: 878 } : { width: 1440, height: 900 };
       const context = await browser.newContext({ viewport, colorScheme: theme, reducedMotion: 'reduce' });
       const page = await context.newPage(), mcp = createMcpFixtures(), errors = [], calls = [];
       let failRead = false, failRemoval = false, linkGate = null, readGate = null, parseGate = null, createGate = null, conflictLink = false, conflictSave = false, unreadableStore = false, installedOverride = null;
@@ -39,12 +40,12 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
         if (unreadableStore && req.method() === 'GET' && url.pathname.endsWith('/context/mcp')) { result.body.ok = false; Object.assign(result.body.shared, { error: 'Synthetic unreadable store', revision: null, count: 0, servers: [] }); }
         return route.fulfill({ status: result.status, json: result.body });
       });
-      const url = new URL(base); if (embedded) { url.searchParams.set('embed', 't3'); url.searchParams.set('theme', theme); }
+      const url = new URL(base); if (embedded) { url.searchParams.set('embed', 't3'); url.searchParams.set('theme', theme); if(TAB){url.searchParams.set('host','tab');url.searchParams.set('layout',phone?'compact':'wide');} }
       const target = embedded ? await framed(page, url.href) : page;
       if (!embedded) await page.goto(url.href);
       await unlock(target, key); await visit(target, page, 'mcp');
       assert.equal(await target.evaluate(() => document.documentElement.getAttribute('data-embed')), embedded ? 't3' : null, 'The authenticated page must retain its actual embedding mode');
-      if (phone) assert.equal(await target.getByRole(embedded ? 'button' : 'link', { name: embedded ? 'Close setup' : 'Close MCP servers', exact: true }).isVisible(), true, 'Phone close uses the applied embedding mode');
+      if (phone && !TAB) assert.equal(await target.getByRole(embedded ? 'button' : 'link', { name: embedded ? 'Close setup' : 'Close MCP servers', exact: true }).isVisible(), true, 'Phone close uses the applied embedding mode');
       await target.locator('#mcp-search').waitFor();
       await target.locator('[data-key="mcp-shared:docs"]').waitFor({ state: 'attached' });
       await target.evaluate(() => { location.hash = 'instructions/mcp'; });
@@ -270,7 +271,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
       await screenshot('unreadable-store');
       if (embedded && phone) {
         await page.evaluate(() => { window.mcpMessages = []; window.addEventListener('message', event => window.mcpMessages.push(event.data)); });
-        await target.getByRole('button', { name: 'Close setup', exact: true }).click();
+        await (TAB?target.locator('.tc-pagebar [data-cmd="embed.close"]'):target.getByRole('button', { name: 'Close setup', exact: true })).click();
         await page.waitForFunction(() => window.mcpMessages.some(message => message?.source === 't3-setup' && message.type === 'close'));
       }
       if (variant === 'desktop' && theme === 'light') {

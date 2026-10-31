@@ -131,7 +131,7 @@ and to GHCR as `ghcr.io/dizys/t3code-docker`, each for `linux/amd64` and
 | T3 Code server and web app | ✅ | ✅ |
 | git, gh, ssh, Node, Python, clang, ffmpeg, ImageMagick, psql | ✅ | ✅ |
 | Claude Code, Codex, OpenCode | first start | first start |
-| Grok, Cursor, Muse Code, Antigravity | one click | one click |
+| Grok, Cursor, Muse Code, Pi, Antigravity | one click | one click |
 | Go, Rust, Bun, Deno, uv | first start | first start |
 | glab, fj, tea, az (GitLab, Forgejo, Gitea, Azure DevOps) | one click | one click |
 | mise, for per-project versions | ✅ | ✅ |

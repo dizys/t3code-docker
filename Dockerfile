@@ -351,7 +351,7 @@ FROM core AS browser
 # Browser automation over MCP. T3 Code's own preview tools are hosted by the
 # web/desktop client, so a phone-only setup has no eyes without this.
 ARG CHROME_DEVTOOLS_MCP_VERSION=1.12.0
-ARG PLAYWRIGHT_MCP_VERSION=0.0.83
+ARG PLAYWRIGHT_MCP_VERSION=0.0.84
 USER root
 
 RUN set -eux; \

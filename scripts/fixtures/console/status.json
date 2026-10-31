@@ -544,6 +544,17 @@
    "keyKind": null,
    "authMethod": null,
    "credentialsPresent": false
+  },
+  {
+   "id": "pi",
+   "name": "Pi",
+   "installed": false,
+   "runnable": false,
+   "signedIn": null,
+   "version": null,
+   "latestVersion": "1.4.0",
+   "canSignIn": false,
+   "canSetKey": false
   }
  ],
  "harnessCache": {

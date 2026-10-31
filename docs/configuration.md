@@ -52,7 +52,7 @@ mounted (`/home/t3/.t3`), credentials and threads persist, and the next start
 reinstalls the tools.
 
 Agent CLIs normally store their sign-ins in `~/.claude`, `~/.codex`,
-`~/.cursor`, `~/.grok`, OpenCode's XDG directories, Muse's `~/.config/muse`
+`~/.cursor`, `~/.grok`, Pi's `~/.pi`, OpenCode's XDG directories, Muse's `~/.config/muse`
 and `~/.local/share/muse`, and the source control
 CLIs in `~/.config/gh`, `~/.config/glab-cli`, `~/.config/tea`,
 `~/.local/share/forgejo-cli` and `~/.azure`, and git its settings in

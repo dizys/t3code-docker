@@ -16,7 +16,7 @@
 #   t3-harness update <id> [--version <v>] [--json]
 #   t3-harness uninstall <id> [--json]
 #
-# Agent ids: claude, codex, opencode, grok, cursor, muse. Toolchain ids: go, rust,
+# Agent ids: claude, codex, opencode, grok, cursor, muse, pi. Toolchain ids: go, rust,
 # bun, deno, uv. Source control CLIs: glab, fj, tea, az, and gh, which is
 # part of the image: installing gh adds a newer one through mise, as an added
 # tool, and update and uninstall act on that one. Install defaults to mise's
@@ -62,7 +62,7 @@ Usage: t3-harness <command> [options]
   update <id> [--version <version>] [--json]
   uninstall <id> [--json]
 
-  id is an agent (claude, codex, opencode, grok, cursor, muse), a toolchain
+  id is an agent (claude, codex, opencode, grok, cursor, muse, pi), a toolchain
   (go, rust, bun, deno, uv), a source control CLI (glab, fj, tea, az; gh comes
   with the image, and installing it adds a newer one as an added tool), or any
   other mise tool, which is managed as an

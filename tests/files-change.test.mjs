@@ -32,6 +32,15 @@ test('sign-in/key consequences and unknown or active processes fail closed',asyn
   f.setProcesses({complete:true,processes:[]});await f.changes.rename({path:keys,name:'keys',confirmed:true});assert((await fs.stat(path.join(f.home,'keys'))).isDirectory());
 });
 
+test('renaming a Pi profile requires explicit sign-in confirmation and preserves its contents',async t=>{
+  const f=await filesFixture(t),profile=path.join(f.home,'.pi'),auth=path.join(profile,'agent/auth.json');
+  await fs.mkdir(path.dirname(auth),{recursive:true});await fs.writeFile(auth,'fixture credentials',{mode:0o600});
+  await assert.rejects(f.changes.rename({path:profile,name:'pi-backup'}),error=>error.code==='conflicts'&&error.fields.consequence.signIns.includes('Pi'));
+  assert.equal(await fs.readFile(auth,'utf8'),'fixture credentials','unconfirmed actions do not change the profile');
+  await f.changes.rename({path:profile,name:'pi-backup',confirmed:true});
+  assert.equal(await fs.readFile(path.join(f.home,'pi-backup/agent/auth.json'),'utf8'),'fixture credentials');
+});
+
 test('editor writes preserve mode, detect stale contents, save copies and deduplicate request identities',async t=>{
   const {workspace,changes}=await filesFixture(t),file=path.join(workspace,'script.sh');await fs.writeFile(file,'before\n',{mode:0o750});
   const before=await readText(file,{edit:true});await fs.writeFile(file,'outside\n');

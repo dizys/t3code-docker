@@ -314,7 +314,7 @@ recreate
 is "the image declares its variant" "$VARIANT" "$(droot printenv T3_IMAGE_VARIANT 2>/dev/null || true)"
 
 baseline="$(droot t3-harness status --json)"
-is "the installer lists six harnesses" "6" "$(field '.harnesses | length' "$baseline")"
+is "the installer lists seven harnesses" "7" "$(field '.harnesses | length' "$baseline")"
 for id in $IDS; do
   facts="$(field ".harnesses[] | select(.id == \"$id\")" "$baseline")"
   is "$id starts uninstalled" "false" "$(field '.installed' "$facts")"
@@ -322,6 +322,7 @@ done
 is "read-only status wrote no manager state" "absent" \
   "$(dex sh -c 'test -f /home/t3/.local/state/mise/harness-state.json && echo present || echo absent')"
 is "Muse starts uninstalled" "false" "$(field '.harnesses[] | select(.id == "muse") | .installed' "$baseline")"
+is "Pi starts uninstalled" "false" "$(field '.harnesses[] | select(.id == "pi") | .installed' "$baseline")"
 
 section "Install all five harnesses through the noninteractive CLI"
 declare -A VERSION=() EXE=()

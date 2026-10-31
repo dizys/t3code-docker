@@ -12,10 +12,11 @@
 // is the same, though 0.0.45 reports no update for it here; Cursor's launcher
 // is ready for when it does.)
 //
-// A launcher is a two-line script at a path of the shape T3 recognises. It
+// A launcher is a small script at a path of the shape T3 recognises. It
 // runs the exact executable the harness manager installed, with whatever
-// arguments it was given, except the one call T3 makes to update it (`update`,
-// or OpenCode's `upgrade`, alone), which it hands to `t3-harness update <id>`:
+// arguments it was given, except the exact call T3 makes to update it (`update`,
+// OpenCode's `upgrade`, or Pi's `update --self`), which it hands to
+// `t3-harness update <id>`:
 // the same managed update as the setup page's: newest stable immediately,
 // never implicitly older, under its lock, with its exact
 // version record and rollback. That update syncs the provider settings, which
@@ -40,6 +41,7 @@ export const LAUNCHERS = Object.freeze({
   // T3 only offers Muse updates for its official auto-updating launcher.
   // This standalone binary is updated from Setup → Agents instead.
   muse: { path: ["muse", "muse"], update: null },
+  pi: { path: ["pi", "pi"], update: ["update", "--self"] },
 });
 
 /** The launcher directory: beside the harness manager's own links. */

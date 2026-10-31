@@ -17,6 +17,7 @@ export const PROVIDERS = Object.freeze([
   { id: "grok", driver: "grok", name: "Grok Build", defaultBinary: "grok" },
   { id: "cursor", driver: "cursor", name: "Cursor", defaultBinary: "cursor-agent" },
   { id: "muse", driver: "muse", name: "Muse Code", defaultBinary: "muse" },
+  { id: "pi", driver: "pi", name: "Pi", defaultBinary: "pi" },
 ]);
 
 /** The T3 driver kind for a harness id, or null when the id is unknown. */

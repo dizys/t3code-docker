@@ -20,10 +20,11 @@ const T3Model = (() => {
     grok: { name: 'Grok Build', mark: 'grok', mono: 'GB', hue: '--id-grok', how: 'device code', flow: 'device', command: 'grok login --device-auth' },
     cursor: { name: 'Cursor', mark: 'cursor', mono: 'CU', hue: '--id-cursor', how: 'browser sign-in', flow: 'browser', command: 'cursor-agent login' },
     muse: { name: 'Muse Code', mark: 'muse', mono: 'MC', hue: '--id-toolchain', how: 'device code', flow: 'device', command: 'muse login', keyCommand: 'muse auth set --api-key-stdin', requiresNightly: true },
+    pi: { name: 'Pi', mono: 'Pi', hue: '--id-toolchain', how: 'terminal /login', flow: 'terminal', command: 't3-login pi' },
     // Installed and signed in by T3 Code itself (managedBy: 't3').
     antigravity: { name: 'Antigravity', mark: 'antigravity', mono: 'AG', hue: '--id-toolchain', how: 'Google sign-in', flow: 'redirect', command: null },
   };
-  const AGENT_ORDER = ['claude', 'codex', 'opencode', 'grok', 'cursor', 'muse', 'antigravity'];
+  const AGENT_ORDER = ['claude', 'codex', 'opencode', 'grok', 'cursor', 'muse', 'pi', 'antigravity'];
 
   const TOOLCHAINS = {
     go: { name: 'Go', mark: 'go', mono: 'Go' },
@@ -419,7 +420,8 @@ const T3Model = (() => {
       row.state = 'unknown';
       row.status.text = h.id === 'muse' && h.credentialsPresent
         ? 'Credentials saved, checked when you first use it' : 'Couldn’t check its sign-in';
-      if (h.id === 'muse' && updateAvailable) row.action = { cmd: 'harness.update', label: 'Update' };
+      if (h.id === 'pi') row.status.text = 'Run t3-login pi, then /login; enable Pi in T3 Settings';
+      if ((h.id === 'muse' || h.id === 'pi') && updateAvailable) row.action = { cmd: 'harness.update', label: 'Update' };
     } else {
       row.state = updateAvailable ? 'update' : 'ok';
       // The version beside the name says when there is a newer one; the
@@ -814,7 +816,7 @@ const T3Model = (() => {
   // added tools; the Add a tool search shows them, but says where they live.
   const MANAGED_ON = {
     claude: 'Agents', 'claude-code': 'Agents', codex: 'Agents', opencode: 'Agents', grok: 'Agents', cursor: 'Agents',
-    'cursor-agent': 'Agents', 'cursor-cli': 'Agents', muse: 'Agents', 'muse-code': 'Agents',
+    'cursor-agent': 'Agents', 'cursor-cli': 'Agents', muse: 'Agents', 'muse-code': 'Agents', pi: 'Agents', 'npm:@earendil-works/pi-coding-agent': 'Agents',
     'npm:@opencode/cli': 'Agents', '@opencode/cli': 'Agents',
     go: 'Toolchains', rust: 'Toolchains', bun: 'Toolchains', deno: 'Toolchains', uv: 'Toolchains',
     // The source control CLIs, under every name mise knows them by.

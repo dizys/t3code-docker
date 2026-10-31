@@ -62,6 +62,7 @@ export function createPathPolicy({ home = os.homedir(), workspace = '/workspace'
       configured('UV_CACHE_DIR', path.join(cacheHome, 'uv')), configured('DENO_DIR', path.join(cacheHome, 'deno')), configured('MISE_CACHE_DIR', path.join(cacheHome, 'mise'))])]
       .map(root => ({ root, tag: 'Caches', pages: ['storage'], title: 'Caches managed in Storage', body: guarded.managed[3].banner.body })),
   ];
+  const piAgentDir = env.PI_CODING_AGENT_DIR?.replace(/^~(?=\/|$)/, () => home);
   const profileFiles = [
     ['Codex', configured('CODEX_HOME', '.codex'), 'auth.json'],
     ['Claude Code', configured('CLAUDE_CONFIG_DIR', '.claude'), '.credentials.json'],
@@ -71,6 +72,9 @@ export function createPathPolicy({ home = os.homedir(), workspace = '/workspace'
     ['Grok Build', path.join(home, '.grok'), 'auth.json'],
     ['Cursor', path.join(home, '.cursor'), 'cli-config.json'],
     ['Muse Code', path.join(configHome, 'muse'), 'auth.json'],
+    ['Pi', path.join(home, '.pi'), 'agent/auth.json'],
+    // A custom Pi profile does not remove credentials saved in the default one.
+    ...(piAgentDir ? [['Pi', path.resolve(home, piAgentDir), 'auth.json']] : []),
   ].map(([name, root, file]) => ({ name, root, file: path.join(root, file) }));
   const keyRoots = [...guarded.keys.paths.map(value => path.join(home, value.slice(2))), path.join(t3Root, 'server-credentials')];
   const location = async value => {

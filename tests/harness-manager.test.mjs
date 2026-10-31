@@ -127,6 +127,7 @@ function createWorld(fs, { arch = "x64" } = {}) {
     latest: {
       claude: "2.1.273", codex: "0.154.1", opencode: "1.18.31", grok: "1.0.34", "cursor-agent": "2026.09.15-d2fe57e", muse: "1.4.7-R6101.1",
       "npm:@opencode/cli": "2.0.27",
+      "npm:@earendil-works/pi-coding-agent": "1.4.0",
       "aqua:anomalyco/opencode": "1.18.31",
       go: "1.27.1", rust: "1.98.1", bun: "1.4.2", deno: "2.9.7", uv: "0.12.21",
       glab: "1.120.0", "forgejo:forgejo-contrib/forgejo-cli": "0.6.0", "pipx:azure-cli": "2.90.0",
@@ -375,7 +376,7 @@ function byId(harnesses, id) {
 test("catalogue exposes the managed harnesses", () => {
   assert.deepEqual(
     CATALOGUE.map((entry) => entry.id),
-    ["claude", "codex", "opencode", "grok", "cursor", "muse"],
+    ["claude", "codex", "opencode", "grok", "cursor", "muse", "pi"],
   );
   for (const entry of CATALOGUE) {
     assert.ok(entry.miseTool, `${entry.id} has a mise tool`);
@@ -533,7 +534,7 @@ test("status on a fresh home reports nothing managed and no side effects", async
   const before = fs.snapshot();
   const { harnesses, degraded } = await manager.status();
   assert.deepEqual(degraded, []);
-  assert.equal(harnesses.length, 6);
+  assert.equal(harnesses.length, 7);
   for (const harness of harnesses) {
     assert.equal(harness.configured, false, `${harness.id} not configured`);
     assert.equal(harness.installed, false, `${harness.id} not installed`);
@@ -1361,7 +1362,7 @@ test("status degrades instead of throwing when mise is unavailable", async () =>
     host: "test-host",
   });
   const { harnesses, degraded } = await manager.status();
-  assert.equal(harnesses.length, 6);
+  assert.equal(harnesses.length, 7);
   assert.equal(degraded.length, 1);
   assert.equal(degraded[0].what, "mise");
   for (const harness of harnesses) assert.equal(harness.runnable, false);
@@ -2419,4 +2420,26 @@ test("while a check runs, the last verdicts are there to show, without asking an
   assert.equal(last.glab.account, "dev-user");
   assert.equal(last.gh.status, "unauthenticated", "the fake gh is signed out");
   assert.deepEqual(world.calls, []);
+});
+
+for (const arch of ["x64", "arm64"]) test(`Pi lifecycle uses its npm distribution on ${arch} and preserves credentials`, async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs, { arch });
+  const manager = managerFor(world);
+  const auth = path.join(HOME, ".pi/agent/auth.json");
+  fs.seedFile(auth, '{"provider":{"type":"api_key","key":"test"}}');
+  const installed = await manager.install("pi");
+  assert.equal(installed.ok, true, installed.error);
+  assert.equal(installed.harness.runnable, true);
+  assert.equal(installed.harness.installedVersion, "1.4.0");
+  assert.equal(installed.harness.authenticated, null);
+  assert.match(installed.harness.executable, /bin\/pi$/);
+  assert.ok(world.useSpecs.includes("npm:@earendil-works/pi-coding-agent@1.4.0"));
+  world.latest["npm:@earendil-works/pi-coding-agent"] = "1.4.1";
+  const updated = await manager.update("pi");
+  assert.equal(updated.ok, true, updated.error);
+  assert.equal(updated.harness.installedVersion, "1.4.1");
+  assert.equal((await manager.uninstall("pi")).ok, true);
+  assert.equal((await manager.resolve("pi")).installed, false);
+  assert.match(await fs.readFile(auth), /test/);
 });

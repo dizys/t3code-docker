@@ -208,7 +208,7 @@ COPY --from=t3-build-node /usr/local/bin/node /usr/local/bin/node
 COPY docker/runtime/ /src/docker/runtime/
 COPY scripts/build-t3-runtime.mjs /src/scripts/build-t3-runtime.mjs
 # The one bundled version pin; scripts/bump-versions.sh refreshes it.
-ARG T3_VERSION=0.1.5
+ARG T3_VERSION=0.1.6
 ARG TARGETARCH
 ENV npm_config_store_dir=/var/cache/pnpm
 RUN --mount=type=cache,target=/var/cache/pnpm set -eux; \

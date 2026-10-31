@@ -28,6 +28,8 @@ export const CONSOLE_SCRIPTS = [
   "client/routes.js",
   "client/model.js",
   "client/kit.js",
+  "client/code-text.js",
+  "client/code-editor.js",
   "client/access-state.js",
   "client/storage-review.js",
   "client/storage-preferences.js",

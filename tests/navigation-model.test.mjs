@@ -62,7 +62,7 @@ test('registry routes, renderers, shortcuts, groups, aliases and icons agree', (
     assert(M.iconNodes(icons[p.icon]).length > 0, p.icon);
   }
   for (const target of Object.values(R.ALIASES)) assert(routes.has(target));
-  assert.deepEqual(Object.keys(M.navIcons(icons)).sort(), [...new Set(R.PAGES.map(p => p.icon))].sort());
+  assert.deepEqual(Object.keys(M.navIcons(icons)).sort(), [...new Set([...R.PAGES, ...R.paletteEntries()].map(p => p.icon))].sort());
 });
 
 test('native palette metadata preserves existing commands and includes every page', () => {
@@ -75,7 +75,7 @@ test('native palette metadata preserves existing commands and includes every pag
     for (const key of ['route', 'title', 'meta']) assert.equal(entry[key], old[key], key + ' for ' + old.id);
     assert.deepEqual(entry.terms, plain(old.terms || []));
   }
-  assert.equal(entries.length, R.PAGES.length + 1);
+  assert.equal(entries.length, R.PAGES.length + R.DESTINATIONS.length + 1);
   assert.equal(new Set(entries.map(p => p.id)).size, entries.length);
   for (const p of R.PAGES) assert(entries.some(entry => entry.route === p.route));
   for (const entry of entries) {

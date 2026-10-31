@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import test from 'node:test';
-const context=vm.createContext({});vm.runInContext(await readFile(new URL('../docker/setup/client/files-model.js',import.meta.url),'utf8')+'\nglobalThis.F=T3FilesModel;',context);const F=context.F;
+const context=vm.createContext({});vm.runInContext(await readFile(new URL('../docker/setup/client/code-text.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('../docker/setup/client/files-model.js',import.meta.url),'utf8')+'\nglobalThis.F=T3FilesModel;',context);const F=context.F;
 
 test('folder addresses round-trip spaces, unicode, hashes, percent and absolute locations',()=>{
  const roots={workspace:'/work space',home:'/users/someone'};

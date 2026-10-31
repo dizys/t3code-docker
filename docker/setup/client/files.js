@@ -516,6 +516,8 @@ const T3FilesUI = (() => {
       if(name==='extract')return archives.extract(args.path||current.panelPath);
       if(name==='archive-retry'){archiveInfo=null;return loadArchive(current.panelPath);}
       if(name==='selection-menu')return Kit.menu(trigger,{label:'Selection actions',footer:selectionReason(),items:[
+        ...(selectedRows().length===1?[{label:'Details',icon:'panel-right',run:()=>showDetails(rowPath(selectedRows()[0]))}]:[]),
+        ...(places?.capabilities?.change?[{label:'Move to…',icon:'folder-input',disabled:!!selectionReason(),run:()=>command('move')}]:[]),
         {label:'Copy paths',icon:'copy',run:()=>command('copy-selected')},
         ...(places?.capabilities?.archives?[{label:'Compress',icon:'archive',disabled:!!selectionReason(),run:()=>command('compress')}]:[]),
         ...(places?.capabilities?.space?[{sep:true},{label:'Delete permanently…',danger:true,icon:'trash-2',disabled:!!selectionReason(),run:()=>command('delete')}]:[]),

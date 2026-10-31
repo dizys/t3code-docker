@@ -49,11 +49,53 @@ selector. Native interface size is bounded to its supported 12px to 20px range;
 rem geometry follows it while hairlines, switch end insets and minimum 44px
 touch targets retain their physical size.
 
-The mobile information architecture intentionally stays specific to Setup:
-primary bottom tabs, More, and focused Files/Skills/MCP screens. Keeping these
-flows avoids compressing twelve sections and management tables into the native
-phone settings icon rail. The desktop sidebar switches at 1024px to leave room
-for these data-heavy pages. Colors and controls remain shared across both modes.
+Standalone Setup keeps its primary phone tabs, More, and focused
+Files/Skills/MCP screens. Its sidebar switches at 1024px. Inside native
+Settings, Setup is a tab of that surface: a pinned entry, grouped navigation
+on wide windows, and a page switcher on compact windows.
+
+### Settings host and navigation
+
+`client/routes.js` owns page names, icons, groups, shortcuts, aliases and
+native-palette metadata. `T3Model.navModel` projects only the information a
+host needs. Signed-in `/hello` responses include that model, allowlisted SVG
+geometry and palette entries. Anonymous `/hello` still returns only the
+service name and `signedIn: false`. Status details and credentials never
+cross this boundary.
+
+The native bridge copies attributes from a native Settings page row, never
+its React tree. It pins Setup outside the scrolling list and mounts one
+iframe in the Settings body. It updates keyed navigation rows in place. The
+child decides the current page, including after a cancelled discard prompt;
+the parent only requests navigation. Back, native-settings links and Close
+have distinct behavior. Leaving restores the exact original inert and ARIA
+attributes and disconnects per-open observers and listeners.
+
+Three independent dimensions matter:
+
+- The parent window uses native `md` (768px) to choose wide or compact hosting.
+- The console frame uses 640px for tab density, and 1024px standalone.
+  `Kit.COMPACT` and root `data-compact` keep scripts and CSS in sync before
+  first paint. Zero-specificity `:where` gates preserve the standalone cascade.
+- Components can still adapt to their available lane. The import planner
+  stacks below 800px, and Files protects name space beside Details.
+
+The compact page menu extends `Kit.menu` with groups, item icons, a trailing
+check and footer links. Popovers remain nonmodal. Modal child layers tell the
+bridge to dim and inert its wide navigation; the frame owns its own backdrop.
+No second modal or duplicate scrim is introduced.
+
+The bridge uses source-window and origin checks for messages, bounded
+navigation/palette fields, allowlisted icon elements and attributes, and
+`^/settings/[a-z0-9-]+$` for native-settings links. Host layout enums survive
+unlock redirects, including a plain form POST without JavaScript. No CSP or
+runtime-dependency expansion is needed.
+
+On pinned T3 v0.1.5, `history.pushState` plus `popstate` opens native Settings
+without a reload. A bounded fallback navigates normally if the native router
+does not respond. Unrecognized Settings hooks or legacy metadata use the
+standalone console rather than drawing an incomplete tab. Optional
+session-storage failure does not prevent opening or leaving Setup.
 
 ### Font asset
 

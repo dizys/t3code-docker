@@ -205,6 +205,28 @@ const run = async base => {
     await standalone.waitForLoadState('domcontentloaded');
     expect(new URL(standalone.url()).hash==='#agents'&&!new URL(standalone.url()).searchParams.has('embed'),'Control-click opens the standalone page in a new tab');
     await standalone.close();
+    // The whole console is already loaded. Changing pages must remain local
+    // even while API reads take a full network round trip.
+    const frameToken=await frame.evaluate(()=>window.__slowNavigationIdentity=String(Math.random()));
+    const documents=[];const record=request=>{if(request.resourceType()==='document'&&new URL(request.url()).pathname.includes('/__setup/'))documents.push(request.url());};
+    page.on('request',record);
+    const network=await context.newCDPSession(page),timings=[];
+    await network.send('Network.enable');
+    await network.send('Network.emulateNetworkConditions',{offline:false,latency:1800,downloadThroughput:512000,uploadThroughput:128000});
+    try {
+      for(const route of hello.nav.groups.flatMap(group=>group.pages.map(page=>page.route))) {
+        const started=Date.now();await page.locator('.t3-setup-nav [data-route="'+route+'"]').click();
+        await frame.waitForFunction(route=>document.body.dataset.consoleRoute===route,route,{timeout:1200});
+        await page.locator('.t3-setup-nav [data-route="'+route+'"][aria-current=page]').waitFor({timeout:1200});
+        timings.push({route,ms:Date.now()-started});
+      }
+      if(OUTPUT)fs.writeFileSync(path.join(OUTPUT,'slow-navigation.json'),JSON.stringify({networkLatencyMs:1800,documents,timings},null,2));
+      expect(timings.every(t=>t.ms<1200),'every Setup page switches before the throttled network round trip',JSON.stringify(timings));
+      expect(await frame.evaluate(()=>window.__slowNavigationIdentity)===frameToken&&documents.length===0,'slow-network navigation keeps one iframe document and downloads no new shell');
+    } finally {
+      await network.send('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});await network.detach();page.off('request',record);
+    }
+    await page.locator('.t3-setup-nav [data-route=overview]').click();await frame.waitForFunction(()=>document.body.dataset.consoleRoute==='overview');
     // A sibling frame, a forged source, and malformed payloads cannot navigate.
     await page.evaluate(()=>{
       window.postMessage({source:'t3-setup',type:'close'},location.origin);
@@ -264,16 +286,34 @@ const run = async base => {
       await page.locator('[data-command-palette=true] input[role=combobox]').fill(query);
       await page.locator('[data-t3-setup-item]').first().waitFor();
     };
-    for(const [query,route] of [['setup agents','agents'],['setup files','files']]){
+    for(const entry of hello.palette.filter(item=>item.route)){
+      const query='setup '+entry.title,route=entry.route,id=entry.id;
       const documentToken=await page.evaluate(()=>{window.__setupPaletteDocument=String(Math.random());return window.__setupPaletteDocument;});
       await search(query);
-      const result=page.locator('[data-t3-setup-item="'+route+'"]');
+      const result=page.locator('[data-t3-setup-item="'+id+'"]');
       await result.waitFor();
-      expect(await result.count()===1,'registry palette search finds '+route);
-      await page.waitForFunction(route=>{const icon=document.querySelector('[data-t3-setup-item="'+route+'"] > svg');return icon&&Math.abs(icon.getBoundingClientRect().width-16)<0.2;},route);
+      if(id==='files-trash') {
+        // Native asynchronous results can replace the list after our first
+        // row appears. Exercise that redraw instead of assuming the first
+        // observation remains valid until the next browser call.
+        const removed=await page.evaluate(()=>{
+          document.querySelector('[data-t3-setup-palette]')?.remove();
+          return document.querySelectorAll('[data-t3-setup-item="files-trash"]').length===0;
+        });
+        expect(removed,'native list redraw removes the injected palette results');
+      }
+      await page.waitForFunction(({id,query})=>{
+        const input=document.querySelector('[data-command-palette=true] input[role=combobox]');
+        const rows=document.querySelectorAll('[data-t3-setup-item="'+id+'"]');
+        return input?.value===query&&rows.length===1&&rows[0].getBoundingClientRect().height>0;
+      },{id,query});
+      ok('registry palette search finds '+id+' after native results settle');
+      await page.waitForFunction(id=>{const icon=document.querySelector('[data-t3-setup-item="'+id+'"] > svg');return icon&&Math.abs(icon.getBoundingClientRect().width-16)<0.2;},id);
       expect(await result.locator('svg').evaluate(el=>Math.abs(el.getBoundingClientRect().width-16)<0.2&&Math.abs(el.getBoundingClientRect().height-16)<0.2),'palette icons stay bounded at 16px');
       await result.click();await page.locator('.t3-setup-pane[data-ready]').waitFor();frame=page.frames().find(f=>f.url().includes('/__setup/'));
-      await frame.waitForFunction(route=>document.body.dataset.consoleRoute===route,route);ok('native palette opens Settings / Setup / '+route);
+      await frame.waitForFunction(route=>document.body.dataset.consoleRoute===route,route);
+      if(entry.hash)expect(await frame.evaluate(()=>location.hash)==='#'+entry.hash,'palette opens the exact '+entry.title+' subpage');
+      ok('native palette opens Settings / Setup / '+entry.title);
       expect(await page.evaluate(()=>window.__setupPaletteDocument)===documentToken,'the pinned native router opens Settings without a document reload');
       await frame.locator('.tc-console-topbar [data-cmd="embed.close"]').click();await page.locator('.t3-setup-pane').waitFor({state:'detached'});
     }

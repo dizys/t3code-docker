@@ -1570,7 +1570,7 @@ const T3Model = (() => {
     }
     return nodes;
   };
-  const navIcons = (icons) => Object.fromEntries([...new Set(T3Routes.PAGES.map((p) => p.icon))]
+  const navIcons = (icons) => Object.fromEntries([...new Set([...T3Routes.PAGES, ...T3Routes.paletteEntries()].map((p) => p.icon))]
     .map((name) => [name, iconNodes(Object.hasOwn(icons || {}, name) ? icons[name] : null)]));
 
   // -------------------------------------------------------------- summary --
@@ -1811,6 +1811,7 @@ const T3Model = (() => {
         keywords: KEYWORDS.goto + ' ' + page.title + (formerly ? ' ' + formerly : ''),
       });
     }
+    for (const target of routes.DESTINATIONS || []) add('Go to', target.title, target.icon, { cmd: 'goto', route: target.hash }, { keywords: target.terms.join(' ') });
     return items;
   };
 

@@ -56,6 +56,15 @@ const T3Routes = (() => {
       palette: { meta: 'Setup · T3 Code, this container and Setup itself', terms: ['environment', 'configuration'] } },
   ];
 
+  // Searchable subpages keep their parent navigation row and exact hash.
+  const DESTINATIONS = [
+    { id: 'skills', route: 'instructions', hash: 'instructions/skills', title: 'Skills', icon: 'book-open', meta: 'Setup · skill library and agent availability', terms: ['skill library'] },
+    { id: 'skill-updates', route: 'instructions', hash: 'instructions/skills/updates', title: 'Skill updates', icon: 'circle-arrow-up', meta: 'Setup · review updates to installed skills', terms: ['skills updates source'] },
+    { id: 'files-projects', route: 'files', hash: 'files/projects', title: 'Projects', icon: 'folder', meta: 'Setup · files in your workspace', terms: ['project files workspace'] },
+    { id: 'files-home', route: 'files', hash: 'files/home', title: 'Home folder', icon: 'folder', meta: 'Setup · browse your home folder', terms: ['home files'] },
+    { id: 'files-trash', route: 'files', hash: 'files/trash', title: 'Trash', icon: 'trash-2', meta: 'Setup · restore or remove deleted files', terms: ['trash deleted files restore'] },
+  ];
+
   // Native hosts get their search metadata from this registry too.
   const PALETTE_SETUP = { id: 'setup', route: null, title: 'Open setup', meta: 'Agents, skills, toolchains, source control, ports, devices and updates on this server', terms: ['setup console'], icon: 'server-cog' };
 
@@ -88,6 +97,7 @@ const T3Routes = (() => {
   /** The page an address names, through its aliases; null when it names none. */
   const resolve = (name) => (BY_ROUTE.has(name) ? name : ALIASES[name] || null);
   /** The tab that holds a page on a phone. */
+  const destination = name => resolve(name) || DESTINATIONS.find(item => item.hash === name)?.hash || null;
   const tabOf = (route) => (TABS.some((tab) => tab.route === route) ? route : 'more');
   /** Pages in their sidebar groups, each group with its label. */
   const grouped = () => GROUPS.map((group) => ({ ...group, pages: PAGES.filter((p) => p.group === group.id) }));
@@ -104,6 +114,7 @@ const T3Routes = (() => {
         terms: [...(metadata.terms || [])], icon: p.icon,
       };
     }),
+    ...DESTINATIONS.map(item => ({ ...item, terms: [...item.terms] })),
   ];
 
   /**
@@ -116,5 +127,5 @@ const T3Routes = (() => {
     return REPO + (release ? 'v' + release[1] : 'main') + '/docs/' + doc;
   };
 
-  return { PAGES, GROUPS, TABS, ALIASES, PALETTE_SETUP, paletteEntries, page, resolve, tabOf, grouped, docUrl };
+  return { PAGES, GROUPS, TABS, ALIASES, PALETTE_SETUP, DESTINATIONS, destination, paletteEntries, page, resolve, tabOf, grouped, docUrl };
 })();

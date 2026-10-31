@@ -206,7 +206,7 @@ const checkSelect = async (page, select, theme) => {
       await checkNoticeContrast(visible(target, '.tc-sk-notices .tc-notice-desc, .tc-sk-phone-summary .tc-pnote small').first());
       const deep = () => visible(target, 'button[data-cmd="skills.view"]').filter({ hasText: 'deep-research' });
       await deep().click();
-      await target.locator('.tc-insp-body .tc-code').waitFor();
+      await target.locator('.tc-insp-body [data-source-editor] textarea[readonly]').waitFor();
       assert.equal(await target.evaluate(() => window.skillInjected), undefined);
       assert.equal(await target.locator('.tc-avail-row').count(), 5);
       assert.equal(await target.locator('.tc-files li').count(), 3);
@@ -219,7 +219,7 @@ const checkSelect = async (page, select, theme) => {
         assert.equal(await target.locator('#skill-source').inputValue(), '', 'a local skill does not invent a remembered origin');
         assert.equal(await target.evaluate(() => document.activeElement.id), 'skill-source');
         await close();
-        await deep().click(); await target.locator('.tc-insp-body .tc-code').waitFor();
+        await deep().click(); await target.locator('.tc-insp-body [data-source-editor] textarea[readonly]').waitFor();
       }
       await target.locator('[data-inspect-edit]').click();
       const draft = '---\nname: deep-research\ndescription: A reviewed draft\n---\nUnsaved draft survives status refresh.';
@@ -240,7 +240,7 @@ const checkSelect = async (page, select, theme) => {
         await target.getByRole('button', { name: 'Discard draft', exact: true }).click();
         await target.waitForFunction(() => document.body.dataset.consoleRoute === 'agents');
         await navigate('instructions/skills');
-        await deep().click(); await target.locator('.tc-insp-body .tc-code').waitFor();
+        await deep().click(); await target.locator('.tc-insp-body [data-source-editor] textarea[readonly]').waitFor();
         await target.locator('[data-inspect-edit]').click(); await target.locator('#skill-content').fill(draft);
       }
       await target.locator('[data-inspect-copy-to=codex]').click();
@@ -253,7 +253,7 @@ const checkSelect = async (page, select, theme) => {
       await target.getByRole('button', { name: 'Discard draft', exact: true }).click();
       await target.locator('[data-import-agent=codex]').waitFor();
       await close();
-      await deep().click(); await target.locator('.tc-insp-body .tc-code').waitFor();
+      await deep().click(); await target.locator('.tc-insp-body [data-source-editor] textarea[readonly]').waitFor();
       await target.locator('[data-inspect-edit]').click(); await target.locator('#skill-content').fill(draft);
       if (width === 1440 && theme === 'light') { saveGate = deferred(); saveStarted = deferred(); }
       saveFail = true; await target.locator('[data-inspect-save]').click();
@@ -289,7 +289,7 @@ const checkSelect = async (page, select, theme) => {
         providerError = 'grok'; await visible(target, '[data-cmd="skills.refresh"]').click();
         await target.getByText('Fixture agent is temporarily unavailable', { exact: true }).waitFor();
         assert(await target.getByRole('button', { name: 'OpenCode permission for deep-research: Allowed', exact: true }).isEnabled());
-        await deep().click(); await target.locator('.tc-insp-body .tc-code').waitFor();
+        await deep().click(); await target.locator('.tc-insp-body [data-source-editor] textarea[readonly]').waitFor();
         assert.equal(await target.locator('.tc-avail-row[data-reach=unknown]').count(), 1, 'failed discovery is unknown, not a missing installation');
         await close();
         providerError = null; await visible(target, '[data-cmd="skills.refresh"]').click();
@@ -442,7 +442,7 @@ const checkSelect = async (page, select, theme) => {
         await target.getByText('This snapshot expired', { exact: true }).waitFor({ state: 'hidden' });
         await close();
         // File actions preserve drafts and carry both Markdown/tree revisions.
-        await deep().click(); await target.locator('.tc-insp-body .tc-code').waitFor();
+        await deep().click(); await target.locator('.tc-insp-body [data-source-editor] textarea[readonly]').waitFor();
         await target.locator('[data-inspect-remove]').click();
         await target.getByRole('button', { name: 'Cancel', exact: true }).click();
         assert(!writes.some(write => write.path.endsWith('/remove')));

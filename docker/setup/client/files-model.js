@@ -32,14 +32,7 @@ const T3FilesModel = (() => {
   const totalOf = rows => rows.every(row=>Number.isFinite(row.bytes))?rows.reduce((sum,row)=>sum+row.bytes,0):null;
   const gitLine = git => !git?'Not a Git repository':git.loading?'Reading Git status…':!git.available&&git.available!==undefined?'Git status unavailable':git.noRemote?'No remote':git.changed?git.changed+' changed':git.ahead?null:'Clean';
   const mask = line => {const match=/^([\s]*(?:export\s+)?[\w.-]+\s*[:=]\s*)(.*)$/.exec(line);return match?match[1]+(match[2]?'••••••••':''):line.trim()?'••••••••':'';};
-  // Small, escaped lexical accents, never HTML or a language interpreter.
-  // Long lines and token counts are bounded independently of the byte limit.
-  const tokens = line => {
-    const text=line.slice(0,4000), out=[], expression=/(\/\/.*$|^\s*#.*$|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b(?:const|let|var|import|from|export|default|function|return|async|await|class|new|if|else|true|false|null|def|fn|pub|use|struct|type|interface)\b)/g;
-    let at=0,match;
-    while(out.length<256&&(match=expression.exec(text))){if(match.index>at)out.push({text:text.slice(at,match.index)});const token=match[0];out.push({text:token,tone:/^(?:\s*#|\/\/)/.test(token)?'m':/^["'`]/.test(token)?'s':'k'});at=expression.lastIndex;}
-    if(at<text.length)out.push({text:text.slice(at)});if(line.length>4000)out.push({text:' …',tone:'m'});return out;
-  };
+  const tokens = line => { const result = T3CodeText.tokens(line); if (line.length > 4000) result.push({text:' …',tone:'m'}); return result; };
   const state = code => ({
     missing:{icon:'folder-open',title:'This folder is no longer here',copy:'It may have been moved or removed. Open its parent to keep browsing.'},
     'no-access':{icon:'lock',title:'You can’t open this folder',copy:'This console runs as t3, like agents’ terminals. The owner has not given t3 permission to open it.'},

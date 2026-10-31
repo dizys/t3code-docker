@@ -21,7 +21,18 @@ Issues and pull requests are welcome. Before opening one:
   page as you edit, serves T3 Code's pages with your copy of
   `docker/t3-client/setup-bridge.js`, and prints a pairing link.
   `scripts/setup-bridge-audit.js` checks those pages in a browser, through the
-  same router.
+  same router. It covers the pinned Settings entry, grouped navigation,
+  native palette links for every page and registered subpage, exact cleanup and
+  draft preservation across resize. Its navigation stress case simulates 1800ms
+  network latency and asserts that page switches reuse the iframe document.
+  `node scripts/setup-tab-audit.js URL` checks the tab headers, page menu,
+  keyboard footer links, swipe dismissal and guarded navigation against the
+  fixture console. Set `T3_UI_AUDIT_TAB=1` on `ui-audit.js`,
+  `skills-ui-audit.js`, `mcp-ui-audit.js`, `files-ui-audit.js` and
+  `storage-ui-audit.js` to exercise 480, 639, 640, 704 and 1040px tab frames.
+  Omit it to retain their standalone and legacy-embed runs. For native visual
+  evidence, `T3_BRIDGE_UI_FIXTURES=1` switches only the final screenshot tour
+  to synthetic data after the real authentication and host checks have run.
   It also checks full native appearance synchronization, including custom colors,
   contrast, fonts, size, legacy fallback and unsaved-draft preservation.
   `node scripts/appearance-ui-audit.js URL KEY` checks standalone role parity
@@ -194,3 +205,16 @@ native attachments bypass Playwright response interception.
 actions and readable labels, managed/read-only controls, unlock/relock, blocked
 keyboard shortcuts, and the shared Kit menu’s disabled styles, click guards and
 keyboard focus. Its file changes stay in synthetic in-memory fixtures.
+
+`node scripts/console-editor-ui-audit.js URL KEY` checks the shared source
+editor and Files selection bar at desktop, laptop, tablet, phone and embedded
+frame widths in both themes. It checks highlighted Markdown, native undo, Find
+and Escape, loading a large Markdown file, bounded viewport DOM, read-only
+skills and selection/action overlap. Evidence is written to `/tmp/t3-editor-ui-audit`
+(`T3_EDITOR_UI_OUTPUT` overrides it). This fixture audit runs in browser CI.
+
+Source syntax and viewport limits live in `docker/setup/client/code-text.js`.
+`code-editor.js` owns source rendering and the native input surface; each caller
+owns its save, revision, conflict and dirty-close logic. Use Kit’s `onRender`
+hook to sync an editor after a layer patch, and destroy it on close to release
+resize observers and queued animation frames.

@@ -81,25 +81,51 @@ styles from anywhere else, which helps over a slow tunnel.
 
 If the setup page is reachable at `/__setup` on the same hostname as T3 Code
 (see [Exposing it through one hostname](remote-access.md#exposing-it-through-one-hostname)),
-T3 Code links to it in two places:
+T3 Code links to it in these places:
 
 - Before a browser is paired, T3 Code's pairing screen has a small **Setup**
   button in the bottom-left corner. It opens the setup page in a new tab, which
   asks for the key.
-- Once paired, **Settings** has a **Setup** entry at the end of its list. It
-  opens the setup page in a dialog over T3 Code, in T3 Code's theme, without
-  asking for the key. On a phone the dialog fills the screen. The number beside
-  the entry counts what needs you: agents signed out or failing, tools that
-  failed. Available updates aren't counted. **Esc** or **✕** closes the
-  dialog, and **Open in a new tab** at the foot of its sidebar opens the page
-  on its own.
+- Once paired, **Setup** is pinned at the foot of **Settings** navigation. It
+  opens inside the same Settings surface, in T3 Code's theme, without asking
+  for the key. The count names things that need you; available updates are not
+  included. The pin stays visible while the native settings list scrolls.
+- On a wide window, Setup's grouped pages replace the Settings navigation.
+  **Settings** in the breadcrumb or **‹ Settings** returns to the native page
+  you were on. On a narrow window, Setup fills the Settings surface and
+  **Setup / Overview** opens its page menu. The menu is a popover when there
+  is room and a bottom sheet on a phone.
+- **Esc** or **✕** closes Settings, just as on T3 Code's own pages. An open
+  Setup dialog takes Escape first. **Open in a new tab** in Setup's navigation
+  or page menu opens the standalone console. Control-click or Command-click
+  on a navigation row opens that standalone page too.
 - In T3 Code's command palette (**⌘K**), searching for **setup** offers **Open
-  setup**, and **pair**, **agents**, **toolchains** or **ports** offer that
-  page of the setup page. Enter opens the same dialog on that page. A short
-  search such as "set", which could equally mean T3 Code's settings, lists
-  Setup without taking Enter away from T3 Code's own first result.
+  setup**. Searches such as **setup files**, **pair**, **agents** or **ports**
+  open Settings on that Setup page. A short search such as "set", which could
+  equally mean T3 Code's settings, keeps Enter with T3 Code's first result.
 
-The dialog doesn't ask for the key because the setup page accepts T3 Code's own
+Resizing keeps the same frame and any unsaved draft. Reloading while Setup is
+open restores its page for this browser tab; leaving Setup clears that
+remembered page. The standalone console keeps its own sidebar and phone tabs.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="media/setup-tab/desktop-dark.png">
+  <img src="media/setup-tab/desktop-light.png" alt="Setup pages inside native T3 Code Settings" width="100%">
+</picture>
+
+<details>
+<summary>Narrow windows and phones</summary>
+
+| Narrow Settings surface | Phone page menu |
+| --- | --- |
+| ![Compact Setup header](media/setup-tab/compact-dark.png) | ![Setup page menu on a phone](media/setup-tab/phone-menu-dark.png) |
+
+The screenshots use synthetic fixture data. Settings chrome comes from the
+pinned native T3 Code client.
+
+</details>
+
+Setup uses T3 Code's own
 session. It asks T3 Code about the browser's session cookie and lets the
 browser in only if T3 Code says the session is valid and includes terminal
 access. A browser with a terminal in the container can already read the key

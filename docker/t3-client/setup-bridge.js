@@ -99,7 +99,8 @@
     const result = [];
     for (const item of items) {
       if (!item || !routeKey(item.id) || ids.has(item.id) || item.route !== null && !routes.has(item.route) || !boundedText(item.title) || !boundedText(item.meta,500) || !routeKey(item.icon) || !Array.isArray(item.terms) || item.terms.length > 25 || !item.terms.every(t=>boundedText(t))) return null;
-      ids.add(item.id); result.push({id:item.id,route:item.route,title:item.title,meta:item.meta,icon:item.icon,terms:[...item.terms]});
+      if (item.hash !== undefined && (typeof item.hash !== 'string' || item.hash.length > 100 || !/^[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*){1,2}$/.test(item.hash) || item.hash.split('/')[0] !== item.route)) return null;
+      ids.add(item.id); result.push({id:item.id,route:item.route,...(item.hash ? {hash:item.hash} : {}),title:item.title,meta:item.meta,icon:item.icon,terms:[...item.terms]});
     }
     return result;
   };
@@ -138,6 +139,10 @@
   // page's title with Setup's name, and its `terms`, a few names it goes by.
   const PALETTE_ITEMS = [
     { id: 'setup', route: null, title: 'Open setup', meta: 'Agents, skills, toolchains, source control, ports, devices and updates on this server', terms: ['setup console'] },
+    { id: 'overview', route: 'overview', title: 'Overview', meta: 'Setup · progress, and anything that needs you', terms: [] },
+    { id: 'files', route: 'files', title: 'Files', meta: 'Setup · projects, the home folder and disk use', terms: ['upload download', 'workspace'] },
+    { id: 'storage', route: 'storage', title: 'Storage', meta: 'Setup · disk space, caches and old versions', terms: ['disk', 'cache'] },
+    { id: 'server', route: 'server', title: 'Server', meta: 'Setup · T3 Code, this container and Setup itself', terms: ['environment', 'configuration'] },
     { id: 'agents', route: 'agents', title: 'Agents', meta: 'Setup · sign in, install and update', terms: [] },
     { id: 'context', route: 'instructions', title: 'Instructions & skills', meta: 'Setup · global AGENTS.md and skills', terms: ['agents.md global instructions', 'context', 'skills'] },
     { id: 'mcp', route: 'mcp', title: 'MCP servers', meta: 'Setup · shared definitions and provider configuration', terms: ['mcp tools servers'] },
@@ -1172,9 +1177,9 @@ html.dark .t3-setup-scrim { background: color-mix(in srgb, var(--background, #0a
         return;
       }
       if(!state.nav){window.open(state.base+'#'+(item.route||'overview'),'_blank','noopener');return;}
-      if(state.tab)toConsole(state.tab.frame,{type:'navigate',route:item.route||'overview'});
-      else if(settingsHost())openTab(document.activeElement,item.route||'overview');
-      else navigateNative('/settings',item.route||'overview');
+      if(state.tab)toConsole(state.tab.frame,{type:'navigate',route:item.hash||item.route||'overview'});
+      else if(settingsHost())openTab(document.activeElement,item.hash||item.route||'overview');
+      else navigateNative('/settings',item.hash||item.route||'overview');
     };
     step();
   };

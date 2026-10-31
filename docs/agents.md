@@ -1,6 +1,6 @@
 # Agents
 
-Claude Code, Codex and OpenCode install on first start. Grok, Cursor and Muse install
+Claude Code, Codex and OpenCode install on first start. Grok, Cursor, Muse and Pi install
 when you press **Install** on the Agents page, or on first start with
 `T3_PREINSTALL=all`. Each is installed into `/home/t3/.local/share/mise` at an
 exact version, so it survives a recreate with the rest of the volume. Sign them
@@ -16,6 +16,7 @@ credentials where the server never looks.
 | Cursor | Cursor (executable `cursor-agent`) | `t3-login cursor` |
 | Grok Build | Grok Build | `t3-login grok` |
 | Muse Code | Muse Code (Nightly) | `t3-login muse` |
+| Pi | Pi | `t3-login pi`, then `/login` |
 | Antigravity | Antigravity (runtime installed by T3 Code) | — |
 
 **Antigravity** isn't a CLI that mise installs. T3 Code runs Google's
@@ -47,6 +48,18 @@ requires **Nightly**, selected under **Setup → Updates**, and enabling
 **Muse Code** under **Settings → Providers**. The image still starts with
 Stable by default. You can also opt in with `T3_PREINSTALL=muse` or include it
 in a comma-separated list; `all` and `agents` include it too.
+
+**Pi** is an optional install on the Agents page, or with `T3_PREINSTALL=pi`.
+It uses the official `@earendil-works/pi-coding-agent` npm package through mise,
+with dependency lifecycle scripts disabled by mise's default policy. The image's
+Node.js meets Pi's Node 22.19 minimum; T3 Code requires Pi 0.80.5 or newer.
+Run `docker compose exec -it t3code t3-login pi`, then `/login` to connect a provider.
+Enable Pi under T3 Code's **Settings → Providers** and refresh it. Setup does not
+probe Pi's provider-specific authentication, so it leaves sign-in status unknown.
+Its credentials and sessions in `~/.pi/agent` survive updates and uninstall.
+Updates from Setup and T3 Code's provider settings use the same managed updater.
+See [T3 Code's Pi guide](https://github.com/pingdotgg/t3code/blob/main/docs/user/providers-pi.md)
+and [Pi's installation guide](https://pi.dev/docs/latest/quickstart).
 
 Each row on the **Agents** page shows the agent's mark and the exact version
 installed, and T3 Code is pointed at that executable. When a newer release is
@@ -134,6 +147,7 @@ Each agent offers the sign-in methods it supports:
 | Cursor | browser sign-in, checked until it completes | — |
 | Grok Build | device code: a URL and a code to confirm | — |
 | Muse Code | Meta device code: a URL and a code to confirm | stored with `auth set --api-key-stdin` |
+| Pi | terminal sign-in: `t3-login pi`, then `/login` | — |
 | Antigravity | Google sign-in through T3 Code: paste back the address you land on | — |
 
 **Sign in** opens a sheet that follows the agent's own flow as numbered steps:
@@ -159,6 +173,7 @@ both count, as they do for T3 Code:
 | Grok Build | `grok models`, plus `XAI_API_KEY`, as T3 Code does |
 | OpenCode | 1.x: its `auth.json`; 2.x: `auth list --format json --standalone` for saved accounts |
 | Muse Code | saved credentials in `~/.config/muse/auth.json`; sign-in is checked on the first message |
+| Pi | no status probe; sign-in stays unknown (terminal `/login`) |
 | Antigravity | T3 Code's provider status |
 
 Codex 0.164.0 changed API-key status from "Logged in using an API key" to

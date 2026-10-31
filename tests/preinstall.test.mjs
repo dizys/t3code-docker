@@ -83,10 +83,10 @@ test("T3_PREINSTALL parses groups, ids, and off switches", () => {
   assert.deepEqual(ids(undefined), ["agent:claude", "agent:codex", "agent:opencode", ...toolchains]);
   assert.deepEqual(ids("default"), ids(undefined));
   assert.deepEqual(ids("all"), [
-    "agent:claude", "agent:codex", "agent:opencode", "agent:grok", "agent:cursor", "agent:muse", ...toolchains,
+    "agent:claude", "agent:codex", "agent:opencode", "agent:grok", "agent:cursor", "agent:muse", "agent:pi", ...toolchains,
   ]);
   for (const all of ["1", "true", "yes"]) assert.deepEqual(ids(all), ids("all"), all);
-  assert.deepEqual(ids("agents"), ids("all").slice(0, 6));
+  assert.deepEqual(ids("agents"), ids("all").slice(0, 7));
   assert.deepEqual(ids("muse"), ["agent:muse"]);
   assert.deepEqual(ids("toolchains"), toolchains);
   assert.deepEqual(ids("default,grok"), ["agent:claude", "agent:codex", "agent:opencode", "agent:grok", ...toolchains]);
@@ -166,7 +166,7 @@ test("T3_PREINSTALL=all still installs every agent", async () => {
   const manager = fakeManager();
   await run(manager, fs, { T3_PREINSTALL: "all" });
   assert.deepEqual(manager.calls.filter((call) => call.startsWith("agent:")),
-    ["agent:claude", "agent:codex", "agent:opencode", "agent:grok", "agent:cursor", "agent:muse"]);
+    ["agent:claude", "agent:codex", "agent:opencode", "agent:grok", "agent:cursor", "agent:muse", "agent:pi"]);
 });
 
 test("what is already there is adopted, not reinstalled", async () => {
@@ -245,16 +245,16 @@ test("a run whose process is gone reads as interrupted", async () => {
 
 test("three failures in a row stop the run; the rest wait for the next start", async () => {
   const fs = memoryFs();
-  const offline = fakeManager({ fail: { claude: "x", codex: "x", opencode: "x", grok: "x", cursor: "x", muse: "x" } });
+  const offline = fakeManager({ fail: { claude: "x", codex: "x", opencode: "x", grok: "x", cursor: "x", muse: "x", pi: "x" } });
   const summary = await run(offline, fs, { T3_PREINSTALL: "agents" });
   assert.deepEqual(offline.calls, ["agent:claude", "agent:codex", "agent:opencode"]);
-  assert.deepEqual(summary.deferred, ["agent:grok", "agent:cursor", "agent:muse"]);
+  assert.deepEqual(summary.deferred, ["agent:grok", "agent:cursor", "agent:muse", "agent:pi"]);
   const shown = await readPreinstall({ stateDir: STATE_DIR, fs });
-  assert.deepEqual(shown.items.map((item) => item.state), ["failed", "failed", "failed", "pending", "pending", "pending"]);
+  assert.deepEqual(shown.items.map((item) => item.state), ["failed", "failed", "failed", "pending", "pending", "pending", "pending"]);
 
   const online = fakeManager();
   await run(online, fs, { T3_PREINSTALL: "agents" });
-  assert.deepEqual(online.calls, ["agent:claude", "agent:codex", "agent:opencode", "agent:grok", "agent:cursor", "agent:muse"]);
+  assert.deepEqual(online.calls, ["agent:claude", "agent:codex", "agent:opencode", "agent:grok", "agent:cursor", "agent:muse", "agent:pi"]);
 });
 
 test("an agent the user uninstalled stays uninstalled, even after a failed first try", async () => {

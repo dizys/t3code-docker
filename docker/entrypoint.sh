@@ -266,7 +266,7 @@ register_projects
 # Whatever you mounted, signing in once stays signed in. The same goes for the
 # source control CLIs T3 Code opens pull requests through: gh, glab, tea, fj
 # and az keep their sign-ins in these.
-AGENT_DIRS=".claude .codex .cursor .grok .config/opencode .local/share/opencode .config/muse .local/share/muse .agents/skills .local/state/skills .gemini/config/skills .gemini/antigravity-cli/skills"
+AGENT_DIRS=".claude .codex .cursor .grok .pi .config/opencode .local/share/opencode .config/muse .local/share/muse .agents/skills .local/state/skills .gemini/config/skills .gemini/antigravity-cli/skills"
 AGENT_DIRS="$AGENT_DIRS .config/gh .config/glab-cli .config/tea .local/share/forgejo-cli .azure"
 # And git's own settings, plus Claude's global account/MCP config outside its
 # config directory. Git and Claude's native writer preserve these file links.

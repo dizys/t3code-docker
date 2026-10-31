@@ -161,6 +161,21 @@ export const CATALOGUE = Object.freeze([
     },
     auth: "muse",
   },
+  {
+    id: "pi",
+    name: "Pi",
+    firstStart: false,
+    miseTool: "npm:@earendil-works/pi-coding-agent",
+    executable: "node_modules/.bin/pi",
+    bin: "pi",
+    versionArgs: ["--version"],
+    versionPattern: "(\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?)",
+    minimumVersion: "0.80.5",
+    architectures: ["x64", "arm64"],
+    credentials: { env: [], paths: [".pi/agent/auth.json"] },
+    // Pi signs in interactively with /login; saved credentials cannot prove auth.
+    auth: null,
+  },
 ]);
 
 /** Look up one catalogue entry by its stable id. */

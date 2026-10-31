@@ -43,6 +43,7 @@ Usage: t3-login <harness>
   opencode   OpenCode           -> opencode auth login [target] [--method id]
   cursor     Cursor CLI         -> cursor-agent login
   grok       Grok Build         -> grok login
+  pi         Pi                 -> pi (then /login)
   muse       Muse Code          -> muse login
   connect    T3 Connect         -> t3 connect [command] [options]
 
@@ -89,7 +90,7 @@ opencode_major() { # bin
 
 harness="${1:-}"
 case "$harness" in
-  claude|codex|opencode|cursor|grok|muse)
+  claude|codex|opencode|cursor|grok|muse|pi)
     case "$harness" in
       claude)   bin="$(harness_exec claude)";     args=(auth login) ;;
       codex)    bin="$(harness_exec codex)";       args=(login) ;;
@@ -98,6 +99,7 @@ case "$harness" in
       # never relied on.
       cursor)   bin="$(harness_exec cursor)"; args=(login) ;;
       grok)     bin="$(harness_exec grok)";         args=(login) ;;
+      pi)       bin="$(harness_exec pi)";           args=() ;;
       muse)     bin="$(harness_exec muse)";         args=(login) ;;
     esac
     if [ -z "$bin" ]; then

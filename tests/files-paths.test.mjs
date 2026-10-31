@@ -77,3 +77,45 @@ test('saved server credentials carry key and secret warnings in Files, including
   const file = await policy.classify(path.join(folder, 'credentials.json'));
   assert.equal(file.keys, true); assert.equal(file.secret, true);
 });
+
+test('Pi profiles and auth files carry sign-in warnings without marking unrelated files', async t => {
+  const f = await fixture(t), profile = path.join(f.home, '.pi');
+  await fs.mkdir(path.join(profile, 'agent'), { recursive: true });
+  await fs.writeFile(path.join(profile, 'agent/auth.json'), '{}');
+  const policy = createPathPolicy({ home: f.home, workspace: f.workspace, env: {} });
+  for (const value of [profile, path.join(profile, 'agent'), path.join(profile, 'agent/auth.json')]) {
+    const rule = await policy.classify(value);
+    assert.deepEqual(rule.signIns, ['Pi']); assert(rule.tags.includes('sign-in'));
+  }
+  assert.equal((await policy.classify(path.join(profile, 'agent/auth.json'))).secret, true);
+  for (const value of [f.home, path.join(profile, 'extensions'), path.join(profile, 'agent/settings.json')]) {
+    assert.equal((await policy.classify(value)).signIns.includes('Pi'), false, value);
+  }
+});
+
+test('persisted Pi profiles retain managed and sign-in warnings through aliases and canonical paths', async t => {
+  const f = await fixture(t), target = path.join(f.home, '.t3/agents/.pi'), alias = path.join(f.home, '.pi');
+  await fs.mkdir(path.join(target, 'agent'), { recursive: true });
+  await fs.writeFile(path.join(target, 'agent/auth.json'), '{}');
+  await fs.symlink(target, alias);
+  const policy = createPathPolicy({ home: f.home, workspace: f.workspace, env: {} });
+  for (const root of [alias, target]) for (const suffix of ['', 'agent', 'agent/auth.json']) {
+    const rule = await policy.classify(path.join(root, suffix));
+    assert.deepEqual(rule.signIns, ['Pi']); assert(rule.tags.includes('managed')); assert(rule.tags.includes('sign-in'));
+  }
+});
+
+test('custom Pi agent directories honor tilde paths and symlinks while guarding saved default credentials', async t => {
+  const f = await fixture(t), target = path.join(f.home, 'profiles/pi-work'), alias = path.join(f.workspace, 'pi-profile');
+  await fs.mkdir(target, { recursive: true }); await fs.writeFile(path.join(target, 'auth.json'), '{}');
+  await fs.symlink(target, alias);
+  for (const configured of [alias, '~/profiles/pi-work']) {
+    const policy = createPathPolicy({ home: f.home, workspace: f.workspace, env: { PI_CODING_AGENT_DIR: configured } });
+    for (const root of [alias, target]) for (const suffix of ['', 'auth.json']) {
+      assert.deepEqual((await policy.classify(path.join(root, suffix))).signIns, ['Pi']);
+    }
+    assert.deepEqual((await policy.classify(path.join(f.home, '.pi'))).signIns, ['Pi']);
+    assert.deepEqual((await policy.classify(path.join(f.home, 'profiles'))).signIns, [], 'unrelated parent content stays unmarked');
+    assert.deepEqual((await policy.classify(path.join(target, 'settings.json'))).signIns, []);
+  }
+});

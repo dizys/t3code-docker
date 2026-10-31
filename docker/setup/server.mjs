@@ -653,7 +653,7 @@ const managedExecutable = async (id) => {
   return null;
 };
 
-const HARNESS_IDS = new Set(["claude", "codex", "opencode", "grok", "cursor", "muse"]);
+const HARNESS_IDS = new Set(["claude", "codex", "opencode", "grok", "cursor", "muse", "pi"]);
 
 const lifecycleHttpStatus = (code) => {
   switch (code) {

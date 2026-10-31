@@ -125,6 +125,11 @@
       {
         "path": "~/.cursor",
         "agent": "Cursor"
+      },
+      {
+        "path": "~/.pi",
+        "agent": "Pi",
+        "file": "agent/auth.json"
       }
     ],
     "onTrashOrDelete": "Signs Codex out on this server. Paired devices keep working; Codex asks you to sign in again.",

@@ -1523,3 +1523,16 @@ test('Credentials attention feeds Overview, navigation and host badges without c
   assert.equal(M.credentialState({ type: 'ssh', hostKey: null, test: { code: 'ok' } }).code, 'host-key-untrusted');
   assert.equal(M.credentialState({ type: 'api', test: { code: 'rejected', detail: { status: 401 } } }).label, 'Rejected · HTTP 401');
 });
+
+test("Pi offers an optional install and updates with terminal login guidance", () => {
+  const at = (overrides) => row(statusWith({ harnesses: [harness("pi", { canSignIn: false, canSetKey: false, signedIn: null, ...overrides })] }), "pi");
+  const missing = at({ installed: false, runnable: false, version: null, installedVersion: null });
+  assert.equal(missing.name, "Pi");
+  assert.equal(missing.action.cmd, "harness.install");
+  assert.equal(missing.attention, false);
+  const installed = at({ installedVersion: "1.4.0", latestVersion: "1.4.1" });
+  assert.equal(installed.action.cmd, "harness.update");
+  assert.match(installed.status.text, /t3-login pi.*\/login/);
+  assert.ok(installed.menu.some(item => item.cmd === "harness.uninstall"));
+  assert.ok(!installed.menu.some(item => item.cmd === "harness.signin" || item.cmd === "harness.apikey"));
+});

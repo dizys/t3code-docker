@@ -155,15 +155,26 @@ and Chromium; set `CHROME_PATH` if needed. Screenshots go to
 `/tmp/t3-opencode-auth-ui` (`T3_AUTH_UI_OUTPUT` overrides it). These audits
 never read or change your real OpenCode credentials.
 
-For Credentials changes, run `node --test tests/credentials*.test.mjs`
-and `node scripts/credentials-ui-audit.mjs`. The UI audit uses a real setup
-server in a disposable home, synthetic credentials and intercepted connection
-tests. It covers add/edit/delete, masked values, failed reads, concurrent edits
-and repeated saves in light/dark, phone, tablet, desktop and an actual embedded
-frame. Screenshots go to `/tmp/t3-credentials-ui` (`T3_CREDENTIALS_UI_OUTPUT`
-overrides it). It never connects to a real SSH server or external API.
-The image smoke suite also checks both installed helpers and a local API
-round trip with a disposable saved token on each variant and architecture.
+For Credentials changes, run `node --test tests/credential*.test.mjs`
+and `node scripts/credentials-ui-audit.mjs`. The browser audit starts a real
+Setup API in a disposable home and a loopback API server. It tests drafts,
+secret replacement, concurrent edits, host-key review, stale addresses, failed
+reads, repeated saves, deletion focus, deep links and long metadata in both
+themes, standalone, legacy embed and Settings widths. SSH scans and host trust
+are intercepted; it never contacts an external service or changes a production
+credential. Screenshots go to `/tmp/t3-credentials-ui`
+(`T3_CREDENTIALS_UI_OUTPUT` overrides it). `T3_CREDENTIALS_UI_WIDTHS=390,640,1280`
+narrows the matrix; `T3_CREDENTIALS_UI_THEMES=light` narrows the themes. The image
+smoke suite runs both themes at those three widths on both browser architectures,
+plus installed-helper and loopback API checks on each image variant.
+
+For handoff comparisons, start `console-preview.mjs`, then run
+`node scripts/credentials-visual-audit.mjs http://127.0.0.1:23785/__setup/`.
+It captures the list, empty state, SSH/API details, editor, conflict, host-key
+review and deletion, including phone states in both themes. It uses public
+synthetic fixture records and keeps newly entered secrets masked. Outputs go to
+`/tmp/t3-credentials-visual` (`T3_CREDENTIALS_VISUAL_OUTPUT` overrides it). Compare
+these at the supplied handoff’s viewport; include real screenshots in the PR.
 
 T3 functionality specific to this container and Setup belongs in the local
 source patch set under `docker/runtime/patches`. Maintain the patched distribution

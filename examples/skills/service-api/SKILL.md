@@ -10,7 +10,7 @@ t3-api project-api GET projects
 printf '%s' '{"name":"demo-project"}' | t3-api project-api POST projects --stdin
 ```
 
-Change the connection ID and paths in this example to match your service. Paths
+Change the credential name and paths in this example to match your service. Paths
 are relative to its saved base URL, without a leading slash. Authentication,
-including the header or query parameter name, is configured in Setup → Server
-credentials. Do not read or print credential files. Use `--stdin` for JSON bodies.
+including the header or query parameter name, is configured in Setup →
+Credentials. Do not read or print credential files. Use `--stdin` for JSON bodies.

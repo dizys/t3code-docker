@@ -39,7 +39,8 @@ import { createMcpService } from "./mcp.mjs";
 import { clientAddress } from "./client-address.mjs";
 import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
 import { createCredentialStore, credentialFailure, CredentialError } from "./credentials.mjs";
-import { testCredential } from "./credentials/run.mjs";
+import { createCredentialsService, CREDENTIAL_ROUTES } from "./credentials/service.mjs";
+import { createCredentialUsage } from "./credentials/usage.mjs";
 import { connectState, createConnectPreferences, jsonFrom, parseLinkOutput } from "./connect.mjs";
 import {
   checkReaches, clearSaved, parsePublicUrl, platformUrl, readSaved, resolvePublicUrl, writeSaved,
@@ -69,9 +70,7 @@ const SINGLE_PORT = Number(process.env.T3_SINGLE_PORT) || null;
 const SINGLE_PREFIX = BASE_PATH ? (BASE_PATH.startsWith("/") ? BASE_PATH : `/${BASE_PATH}`) : "/__setup";
 // Where T3 Code keeps its state; the volume a user mounts is the home around it.
 const STATE_DIR = process.env.T3CODE_HOME || `${process.env.HOME || "/home/t3"}/.t3`;
-const credentials = createCredentialStore();
-const credentialShutdown = new AbortController();
-let credentialTests = 0;
+const credentialStore = createCredentialStore();
 const VOLUME = process.env.HOME || STATE_DIR.replace(/\/\.t3\/?$/, "") || STATE_DIR;
 const WORKSPACE = process.env.T3_WORKSPACE || "/workspace";
 // The setup key and where it came from (setup-key.mjs): "env" for
@@ -536,6 +535,10 @@ const skillsService = createSkillsService({ home: CONTEXT_HOME, env: process.env
 const mcpService = createMcpService({ home: CONTEXT_HOME, env: process.env, baseDir: STATE_DIR,
   io: await contextFs(),
 });
+const credentials = createCredentialsService({ store: credentialStore, usage: createCredentialUsage({
+  home: CONTEXT_HOME, baseDir: STATE_DIR, env: process.env, io: await contextFs(),
+  installed: async () => ((await harnessCache.snapshotCheap()).harnesses || []).filter(row => row.installed).map(row => row.id),
+}) });
 let filesPromise, filesInstance, filesPayloads = 0;
 const loadFiles = () => filesPromise ??= loadStorage().then(storage => createFilesService({
   home: CONTEXT_HOME, workspace: WORKSPACE, stateDir: STATE_DIR, env: process.env, storage, processSnapshot: harnessModule.processSnapshot, t3: t3Api, recordEvent, withStopped: action => filesHold.withStopped(action),
@@ -932,6 +935,8 @@ const status = async () => {
     updates: { refreshing: latestCache.refreshing(), manual: latestCache.manualPending(), errors: latestCache.errors(), checkedAt: latestCache.checkedAt() },
     // Every other tool in the global mise config, added here or with `mise use -g`.
     packages: withLatest("package", packageRows),
+    // Local credential attention only. This never scans skills or connects.
+    credentials: await attemptTimed('credentials', () => credentials.summary(), 1200, { count: null, attention: [], error: 'Saved credentials could not be read.' }),
     // Global instruction metadata; the editor fetches contents on demand.
     // Shared MCP metadata rides alongside; server entries stay server-side.
     context: await attempt("context", async () => {
@@ -2186,7 +2191,7 @@ const cancelLifecycle = (target, rawId) => {
   return { http: 404, body: { ok: false, code: "not-running", error: "Nothing is running or waiting for that row." } };
 };
 
-const ROUTES = [...FILES_ROUTES, "/credentials", "/credentials/create", "/credentials/save", "/credentials/remove", "/credentials/test", "/login", "/logout", "/hello", "/status", "/pair", "/revoke", "/devices/rename", "/ports",
+const ROUTES = [...FILES_ROUTES, ...CREDENTIAL_ROUTES, "/login", "/logout", "/hello", "/status", "/pair", "/revoke", "/devices/rename", "/ports",
   "/storage/versions/prune", "/storage/versions", "/storage/refresh", "/storage/clean/preview", "/storage/clean", "/storage/policy", "/storage",
   "/public-url/clear", "/public-url", "/setup-key/reveal", "/setup-key/replace", "/connect/unlink", "/connect/preferences", "/t3/restart",
   "/t3/updates/check", "/t3/update", "/ports/expose", "/ports/unexpose",
@@ -2533,24 +2538,12 @@ const server = createServer(async (req, res) => {
     if (route === '/credentials' || route.startsWith('/credentials/')) {
       if (req.method !== (route === '/credentials' ? 'GET' : 'POST')) return sendJson(res, 405, { ok: false, error: 'Use the supported method for this credential action.' });
       try {
-        if (route === '/credentials') return sendJson(res, 200, { ok: true, ...await credentials.list() });
+        if (route === '/credentials') return sendJson(res, 200, await credentials.handle(route));
         let input;
         try { input = JSON.parse(await readBody(req)); }
-        catch (error) { return sendJson(res, error.message === 'body too large' ? 413 : 400, { ok: false, error: 'Send connection details as a JSON object of at most 64 KiB.' }); }
-        if (!input || typeof input !== 'object' || Array.isArray(input)) throw new CredentialError('Send connection details as a JSON object.');
-        if (route === '/credentials/create' || route === '/credentials/save') return sendJson(res, 200, { ok: true, ...await credentials.save({ ...input, create: route === '/credentials/create' }) });
-        if (route === '/credentials/remove') return sendJson(res, 200, { ok: true, ...await credentials.remove(input) });
-        if (route === '/credentials/test') {
-          if (credentialTests >= 3) throw new CredentialError('Other connections are being tested. Try again in a moment.', 409);
-          credentialTests++;
-          try {
-            const snapshot = await credentials.list();
-            if (snapshot.revision !== input.revision) throw new CredentialError('Connections changed. Reload the list before testing again.', 409);
-            await testCredential(await credentials.forUse(input.id), { signal: AbortSignal.any([AbortSignal.timeout(15000), credentialShutdown.signal]) });
-            return sendJson(res, 200, { ok: true, message: 'Connection succeeded.' });
-          } finally { credentialTests--; }
-        }
-        return sendJson(res, 404, { ok: false, error: 'Credential action not found.' });
+        catch (error) { return sendJson(res, error.message === 'body too large' ? 413 : 400, { ok: false, code: 'invalid', error: 'Send credential details as a JSON object of at most 64 KiB.' }); }
+        if (!input || typeof input !== 'object' || Array.isArray(input)) throw new CredentialError('Send credential details as a JSON object.');
+        return sendJson(res, 200, await credentials.handle(route, input));
       } catch (error) { const failure = credentialFailure(error); return sendJson(res, failure.status, failure.body); }
     }
 
@@ -2808,6 +2801,7 @@ const server = createServer(async (req, res) => {
           : route === "/context/skills/save" ? await skillsService.save(input.provider, input.id, input.revision, input.content)
             : route === "/context/skills/state" ? await skillsService.setState(input.provider, input.id, input.stateRevision, input.enabled, input.state)
               : await skillsService.remove(input.provider, input.id, input.revision, input.removalRevision);
+        credentials.invalidateUsage();
         if (!["/context/skills/check-update", "/context/skills/source", "/context/skills/update/preview", "/context/skills/plan", "/context/skills/discard"].includes(route)) recordEvent("context.saved", route === "/context/skills/update" ? "Updated a repository skill; review the installation result" : route === "/context/skills/hooks/state" ? "Changed a Codex plugin hook setting" : route === "/context/skills/install" ? "Imported local skills; review individual installation results" : route === "/context/skills/remove" ? "Removed a local skill installation" : route === "/context/skills/state" ? "Changed native skill availability" : "Saved a local skill");
         return sendJson(res, 200, result);
       } catch (error) {
@@ -2880,6 +2874,7 @@ const server = createServer(async (req, res) => {
         // Allow encoding overhead here; decoded instruction size is validated below.
         const input = JSON.parse((await readBody(req, 6 * 64 * 1024 + 4096)) || "{}");
         const fs = await contextFs();
+        credentials.invalidateUsage();
         if (input.provider !== undefined) {
           const options = { home: CONTEXT_HOME, env: process.env };
           const result = input.mode !== undefined
@@ -3131,7 +3126,7 @@ const server = createServer(async (req, res) => {
 // tracking them - a sign-in nobody can finish, a URL nobody can stop - so
 // they go when the service does, however it goes.
 const stopChildren = () => {
-  credentialShutdown.abort();
+  credentials.close();
   filesInstance?.stop();
   for (const session of sessions.values()) {
     if (!TERMINAL_STATES.has(session.state)) {
@@ -3147,6 +3142,9 @@ for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
   process.on(signal, () => process.exit(0));
 }
 
+// The setup service alone migrates legacy stores before serving requests.
+try { await credentials.initialize(); }
+catch { console.warn('[setup] Saved credentials need attention; open Credentials to inspect the store.'); }
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`[setup] listening on 0.0.0.0:${PORT}`);
   // Background facts: the storage check now, release lookups shortly after

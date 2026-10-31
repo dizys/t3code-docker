@@ -18,7 +18,7 @@ const T3CredentialsUI = (() => {
       started = true; loading = true; error = null; paint();
       const response = await api('/credentials');
       if (version !== epoch) return;
-      if (response.ok && Array.isArray(response.data?.profiles)) data = response.data;
+      if (response.ok && Array.isArray(response.data?.credentials)) data = { ...response.data, profiles: response.data.credentials.map(row => ({ ...row, label: row.id })) };
       else error = response.error || 'Could not load saved connections.';
       loading = false; paint();
     };
@@ -37,7 +37,7 @@ const T3CredentialsUI = (() => {
     const openEditor = profile => {
       if (editor || !data || error || loading) return;
       notice?.close(); notice = null;
-      const view = { original: profile, revision: data.revision, draft: profile ? { ...profile } : { id: '', label: '', type: 'ssh', host: '', username: '', port: 22, baseUrl: '', authType: 'bearer', authName: 'X-API-Key', authPrefix: '', testPath: '' }, busy: false, error: null };
+      const view = { original: profile, revision: profile?.revision, draft: profile ? { ...profile } : { id: '', label: '', type: 'ssh', host: '', username: '', port: 22, baseUrl: '', authType: 'bearer', authName: 'X-API-Key', authPrefix: '', testPath: '' }, busy: false, error: null };
       editor = view;
       const field = (key, label, options = {}) => html`<div class="tc-form-field" data-key="credential-field-${key}${key === 'authName' ? '-' + view.draft.authType : ''}"><label class="tc-label" for="credential-${key}">${label}</label><input class="tc-input" id="credential-${key}" data-credential-field="${key}" value="${view.draft[key] || ''}" type="${options.type || 'text'}"${options.required === false ? '' : raw(' required')}${disabled(view.busy || options.locked)}${options.max ? html` maxlength="${options.max}"` : ''}${options.type === 'number' ? raw(' min="1" max="65535"') : ''} autocomplete="off" autocapitalize="off" spellcheck="false">${options.hint ? html`<p class="tc-hint">${options.hint}</p>` : ''}</div>`;
       const markup = () => html`<div class="tc-dialog-body">
@@ -74,7 +74,7 @@ const T3CredentialsUI = (() => {
         const secretInput = view.layer.panel.querySelector('#credential-secret');
         const payload = { ...view.draft, port: Number(view.draft.port), secret: secretInput.value || undefined };
         view.busy = true; view.error = null; view.layer.render();
-        const response = await api(profile ? '/credentials/save' : '/credentials/create', { body: { profile: payload, revision: view.revision } });
+        const response = await api(profile ? '/credentials/save' : '/credentials/create', { body: { credential: payload, revision: view.revision } });
         delete payload.secret;
         if (response.ok) {
           secretInput.value = ''; results.delete(view.draft.id);
@@ -95,7 +95,7 @@ const T3CredentialsUI = (() => {
       if (action === 'copy' && profile) { void Kit.copy(command(profile), button, 'Skill command copied'); return; }
       if (!profile || busy.has(profile.id) || error) return;
       if (action === 'edit') { openEditor(profile); return; }
-      const revision = data.revision;
+      const revision = profile.revision;
       if (action === 'remove') {
         const yes = await Kit.confirm({ title: 'Delete ' + profile.label + '?', body: 'Removes the saved login. Skills using ' + profile.id + ' will need another connection.', confirm: 'Delete connection', tone: 'danger' });
         if (!yes || busy.has(profile.id)) return;
@@ -103,7 +103,7 @@ const T3CredentialsUI = (() => {
       busy.add(profile.id); results.delete(profile.id); paint();
       const response = await api('/credentials/' + action, { body: { id: profile.id, revision } });
       busy.delete(profile.id);
-      if (action === 'test') results.set(profile.id, { ok: response.ok, message: response.ok ? 'Connection succeeded' : response.error });
+      if (action === 'test') results.set(profile.id, { ok: response.ok && response.data?.result?.ok, message: response.ok ? response.data?.result?.code === 'ok' ? 'Connection succeeded' : 'Connection needs attention: ' + response.data?.result?.code : response.error });
       else if (response.ok) notify('Connection deleted');
       else notify('Could not delete connection', { tone: 'danger', detail: response.error });
       await load();

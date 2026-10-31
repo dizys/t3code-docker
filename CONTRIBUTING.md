@@ -144,7 +144,7 @@ and Chromium; set `CHROME_PATH` if needed. Screenshots go to
 `/tmp/t3-opencode-auth-ui` (`T3_AUTH_UI_OUTPUT` overrides it). These audits
 never read or change your real OpenCode credentials.
 
-For Server credentials changes, run `node --test tests/credentials*.test.mjs`
+For Credentials changes, run `node --test tests/credentials*.test.mjs`
 and `node scripts/credentials-ui-audit.mjs`. The UI audit uses a real setup
 server in a disposable home, synthetic credentials and intercepted connection
 tests. It covers add/edit/delete, masked values, failed reads, concurrent edits

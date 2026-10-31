@@ -868,8 +868,8 @@
     </div>`;
 
   /** The page a "Needs you" item lives on, and that page's link when they all share one. */
-  const NEEDS_PAGES = { agents: 'All agents', toolchains: 'All toolchains', sourcecontrol: 'Source control', ports: 'All ports', server: 'Server', storage: 'Storage', updates: 'Updates' };
-  const needsPage = (x) => x.target === 'port' ? 'ports' : x.target === 'harness' ? 'agents'
+  const NEEDS_PAGES = { agents: 'All agents', toolchains: 'All toolchains', sourcecontrol: 'Source control', ports: 'All ports', server: 'Server', storage: 'Storage', updates: 'Updates', credentials: 'Credentials' };
+  const needsPage = (x) => x.target === 'credential' ? 'credentials' : x.target === 'port' ? 'ports' : x.target === 'harness' ? 'agents'
     : x.target === 'server' ? (x.action && x.action.route) || 'server'
       : x.target === 'toolchain' && M.SOURCE_CONTROL[x.id] ? 'sourcecontrol' : 'toolchains';
 

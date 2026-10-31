@@ -1344,8 +1344,33 @@ const T3Model = (() => {
           action: { cmd: 'port.publish', id: String(p.port), label: 'Retry', icon: 'refresh-cw' } });
       }
     }
+    for (const item of s.credentials?.attention || []) {
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(item.id || '') || item.id.length > 64) continue;
+      const warn = item.code === 'host-key-untrusted' || item.code === 'host-key-changed';
+      items.push({ target: 'credential', id: item.id, key: 'credential:' + item.id, icon: 'key-round', tone: warn ? 'warn' : 'danger', severity: warn ? 1 : 0,
+        name: item.id, text: credentialProblem(item.code), action: { cmd: 'goto', route: 'credentials/' + item.id, label: 'Review' } });
+    }
     // Stable within a severity: the order each page lists them in.
     return items.map((item, i) => [item, i]).sort((a, b) => a[0].severity - b[0].severity || a[1] - b[1]).map(([item]) => item);
+  };
+
+  // Credential copy is shared by list, sheets and Overview attention.
+  const CREDENTIAL_RESULTS = {"ssh":{"ok":{"tone":"ok","row":["Connected","{when}"],"sheet":{"title":"Connected {when}","desc":"Signed in as {user}. The host key matched."},"action":"Test"},"auth-rejected":{"tone":"danger","row":["Password rejected","{when}"],"sheet":{"title":"Password rejected","desc":"{host} didn’t accept the saved password for {user}. Replace it if it changed."},"action":"Replace…"},"unreachable":{"tone":"danger","row":["Unreachable","{when}"],"sheet":{"title":"Couldn’t reach {host}","desc":"Nothing answered on port {port}. Check the address, and that the server is on and allows SSH from here."},"action":"Test"},"timeout":{"tone":"danger","row":["Timed out","{when}"],"sheet":{"title":"Timed out","desc":"{host} didn’t finish signing in within 15 seconds."},"action":"Test"},"host-key-untrusted":{"tone":"warn","row":["Host key not trusted yet","Agents can’t connect yet"],"sheet":{"title":"Host key not trusted yet","desc":"Compare {host}’s key with the server’s own, then trust it. Nothing signs in until you do."},"action":"Review…"},"host-key-changed":{"tone":"warn","row":["Host key changed","Blocked until you review it"],"sheet":{"title":"Host key changed","desc":"{host} presents a different key than the one you trusted. Agents can’t connect until you review it."},"action":"Review…"},"scan-failed":{"tone":"danger","row":["Couldn’t read the host key","{when}"],"sheet":{"title":"Couldn’t read {host}’s host key","desc":"It answered on port {port} but didn’t offer an ed25519, ECDSA or RSA key."},"action":"Test"},"failed":{"tone":"danger","row":["Failed","{when}"],"sheet":{"title":"Couldn’t sign in","desc":"SSH said: {line}"},"action":"Test"}},"api":{"ok":{"tone":"ok","row":["Connected · HTTP {status}","{when}"],"sheet":{"title":"Connected {when}","desc":"GET {path} answered HTTP {status} in {ms} ms."},"action":"Test"},"rejected":{"tone":"danger","row":["Rejected · HTTP {status}","{when}"],"sheet":{"title":"Rejected · HTTP {status}","desc":"Tested {when}. The service didn’t accept the saved {secretKind}. Replace it if it was revoked or expired."},"action":"Replace…"},"not-found":{"tone":"danger","row":["Test path not found · HTTP 404","{when}"],"sheet":{"title":"Test path not found","desc":"GET {path} answered HTTP 404. Check the test path and the base URL’s version."},"action":"Edit…"},"http-error":{"tone":"danger","row":["HTTP {status}","{when}"],"sheet":{"title":"The service answered HTTP {status}","desc":"GET {path} didn’t succeed. A test path must be an endpoint that accepts GET."},"action":"Test"},"redirect":{"tone":"danger","row":["Redirected","{when}"],"sheet":{"title":"The service redirected the request","desc":"Requests never follow redirects, so the key isn’t sent elsewhere. Use the address it redirects to as the base URL."},"action":"Edit…"},"certificate":{"tone":"danger","row":["Certificate not trusted","{when}"],"sheet":{"title":"Certificate not trusted","desc":"{host}’s HTTPS certificate didn’t verify, so the key wasn’t sent."},"action":"Test"},"unreachable":{"tone":"danger","row":["Unreachable","{when}"],"sheet":{"title":"Couldn’t reach {host}","desc":"The address didn’t resolve or didn’t answer. Check it, and this server’s network."},"action":"Test"},"timeout":{"tone":"danger","row":["Timed out","{when}"],"sheet":{"title":"Timed out","desc":"{host} didn’t answer within 15 seconds."},"action":"Test"}},"untested":{"tone":"muted","attention":false,"row":["Not tested yet",""],"sheet":{"title":"Not tested yet","desc":"Test it once to know agents can use it."},"action":"Test"},"testing":{"tone":"muted","row":["Testing…",""],"sheet":{"title":"Testing…","desc":""}}};
+  const credentialState = (profile, { busy = false, now = Date.now() } = {}) => {
+    const result = profile.test, code = busy ? 'testing' : profile.type === 'ssh' && !profile.hostKey ? 'host-key-untrusted' : result?.code || 'untested';
+    const source = CREDENTIAL_RESULTS[code] || CREDENTIAL_RESULTS[profile.type]?.[code] || CREDENTIAL_RESULTS.untested;
+    let host = profile.host || profile.baseUrl || '';
+    if (profile.type === 'api') { try { host = new URL(profile.baseUrl).host; } catch {} }
+    const values = { id: profile.id, host, port: profile.port, status: result?.detail?.status, user: profile.username || result?.detail?.user,
+      when: result?.at ? relTime(result.at, now) : '', ms: result?.ms || 0, line: result?.detail?.line || 'The connection did not complete.',
+      path: profile.testPath || 'the base URL', secretKind: profile.authType === 'bearer' ? 'token' : profile.type === 'ssh' ? 'password' : 'key' };
+    const fill = text => String(text || '').replace(/\{(\w+)\}/g, (_, name) => values[name] ?? '');
+    return { code, tone: source.tone, label: fill(source.row[0]), sub: fill(source.row[1]), title: fill(source.sheet.title), desc: fill(source.sheet.desc),
+      action: source.action || 'Test', at: result?.at || null, icon: busy ? null : source.tone === 'ok' ? 'circle-check' : source.tone === 'warn' ? 'triangle-alert' : source.tone === 'danger' ? 'circle-x' : 'circle-help' };
+  };
+  const credentialProblem = code => {
+    const text = CREDENTIAL_RESULTS.ssh[code]?.row[0] || CREDENTIAL_RESULTS.api[code]?.row[0] || 'Connection needs attention';
+    return code === 'http-error' ? 'The API request failed' : text.split(' · HTTP')[0];
   };
 
   // ------------------------------------------------------------- activity --
@@ -1449,6 +1474,7 @@ const T3Model = (() => {
       access: warn(!s.publicUrl && s.server && connectView(s).state !== 'on' && connectView(s).state !== 'linking' ? 1 : 0),
       agents: warn(agents.filter((a) => a.attention).length) || running(busy(agents)),
       instructions: null,
+      credentials: warn(s.credentials?.attention?.length || 0),
       mcp: warn((s.context?.mcp?.providers || []).filter(p => p.supported && s.harnesses?.some(a => a.id === p.provider && a.installed)).reduce((n, p) => n + (p.diverged?.length || 0) + (p.error ? 1 : 0), 0)),
       toolchains: warn(tools.filter((t) => t.state === 'failed').length) || running(busy(tools)),
       // A source control CLI someone installed and has not signed in is as
@@ -2025,7 +2051,7 @@ const T3Model = (() => {
     agentRow, agentRows, toolRow, toolchainRow, toolchainRows, sourceControlRows, managedSourceControlRows, packageRows, portRows, looksLikeDatabase,
     monogram, managedOn, isVersionSpec, isToolSpec, specPrefix, SPEC_SAMPLES, searchRegistry, resolveRelease, matchReleases, releaseIndex, heldRelease, versionOf, toolName, SUGGESTED_TOOLS,
     deviceRows, linkRows, deviceKind, deviceName,
-    readiness, readySummary, needsYou, containerItems, activity, setupBanner, setupFailures,
+    credentialState, credentialProblem, readiness, readySummary, needsYou, containerItems, activity, setupBanner, setupFailures,
     publicUrlSource, hereOffer, connectView,
     contextView, contextAgentsMdRow, contextProviderRows,
     mcpView,

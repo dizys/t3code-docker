@@ -1,153 +1,192 @@
-// Public reads return connection details only. Helpers read secrets directly,
-// so saved passwords and tokens never need to pass through an agent prompt.
-import * as fs from 'node:fs/promises';
-import { constants } from 'node:fs';
+// Secrets stay in an owner-only store. Revisions are random, independent tokens;
+// testing and trust metadata never change a credential's revision.
 import path from 'node:path';
-import { isIP } from 'node:net';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+import { createCredentialIO } from './credentials/io.mjs';
+import { createCredentialState, emptyState, cleanResult } from './credentials/state.mjs';
+import { createHostKeys, publicKey, keyFile } from './credentials/hostkeys.mjs';
+import { normalize } from './credentials/model.mjs';
+import { CredentialError, validId, object } from './credentials/errors.mjs';
+export { CredentialError, credentialFailure } from './credentials/errors.mjs';
+export { apiTarget } from './credentials/model.mjs';
 
-export class CredentialError extends Error {
-  constructor(message, status = 400) { super(message); this.status = status; }
-}
-const fail = (message, status) => { throw new CredentialError(message, status); };
-const MAX_BYTES = 512 * 1024;
-const object = value => value && typeof value === 'object' && !Array.isArray(value);
-const text = (value, max) => typeof value === 'string' && value.isWellFormed() && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value);
 export const credentialDirectory = (env = process.env) => path.join(env.T3CODE_HOME || path.join(env.HOME || '/home/t3', '.t3'), 'server-credentials');
+const revision = () => randomBytes(8).toString('hex');
+const stamp = value => typeof value === 'string' && value.length < 40 && Number.isFinite(Date.parse(value));
+const serialize = profiles => JSON.stringify({ version: 2, profiles }, null, 2) + '\n';
+const unreadable = () => new CredentialError('Saved credentials could not be read. Restore the credential file before making changes.', 500, 'store');
+const requireId = id => { if (!validId(id)) throw new CredentialError('Choose a valid credential name.'); };
 
-export function apiTarget(profile, relative) {
-  if (profile.type !== 'api') throw new CredentialError('Choose an API connection.');
-  if (typeof relative !== 'string' || relative.length > 2048 || !relative.isWellFormed() || /[\x00-\x1f\x7f]/.test(relative) || relative.startsWith('/') || relative.includes('\\') || /^[a-z][a-z0-9+.-]*:/i.test(relative)) throw new CredentialError('Use a path relative to the saved API address, such as projects/123.');
-  const base = new URL(profile.baseUrl), target = new URL(relative || '.', base);
-  if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname) || target.username || target.password || target.hash) throw new CredentialError('The request must stay inside the saved API address.');
-  return target;
-}
-
-function normalize(input, previous) {
-  if (!object(input)) fail('Enter connection details.');
-  if (!text(input.id, 64) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.id)) fail('Use up to 64 lowercase letters, numbers and single hyphens for the connection ID.');
-  if (!text(input.label, 120) || !input.label.trim()) fail('Enter a connection name of up to 120 characters.');
-  if (!['ssh', 'api'].includes(input.type)) fail('Choose SSH password or API key / token.');
-  if (previous && previous.type !== input.type) fail('Create a new connection to change its type.');
-  const secret = input.secret === undefined || input.secret === '' ? previous?.secret : input.secret;
-  if (!text(secret, 8192)) fail('Enter a password or API key of up to 8192 characters, without line breaks.');
-  const profile = { id: input.id, label: input.label.trim(), type: input.type, secret };
-  if (input.type === 'ssh') {
-    if (!text(input.host, 253) || !(isIP(input.host) || /^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(input.host))) fail('Enter a hostname or IP address, without a username or port.');
-    if (!text(input.username, 64) || !/^[a-zA-Z_][a-zA-Z0-9_.-]*\$?$/.test(input.username)) fail('Enter a valid SSH username.');
-    if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) fail('Enter an SSH port from 1 to 65535.');
-    Object.assign(profile, { host: input.host, username: input.username, port: input.port });
-  } else {
-    let url;
-    try { url = new URL(input.baseUrl); } catch { fail('Enter a complete http:// or https:// API address.'); }
-    if (!text(input.baseUrl, 2048) || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) fail('Use an HTTP or HTTPS API address without credentials, a query or a fragment.');
-    if (!url.pathname.endsWith('/')) url.pathname += '/';
-    profile.baseUrl = url.href;
-    profile.authType = input.authType ?? previous?.authType ?? 'bearer';
-    if (!['bearer', 'header', 'query'].includes(profile.authType)) fail('Choose bearer token, custom header or query parameter authentication.');
-    if (profile.authType !== 'bearer') {
-      const name = input.authName ?? previous?.authName;
-      if (!text(name, 128)) fail('Enter an authentication header or parameter name of up to 128 characters.');
-      if (profile.authType === 'header') {
-        try { new Headers({ [name]: 'placeholder' }); } catch { fail('Enter a valid HTTP header name.'); }
-        if (['host', 'content-length', 'transfer-encoding', 'connection', 'upgrade', 'expect', 'trailer', 'te', 'accept', 'content-type'].includes(name.toLowerCase())) fail('Choose an authentication header, not a request transport or content header.');
-        const prefix = input.authPrefix ?? previous?.authPrefix ?? '';
-        if (typeof prefix !== 'string' || prefix.length > 128 || /[^\x20-\x7e]/.test(prefix)) fail('Use up to 128 printable ASCII characters for the optional header prefix.');
-        profile.authPrefix = prefix.trim();
+export function createCredentialStore({ directory = credentialDirectory(), readOnly = false, home = process.env.HOME || '/home/t3', io = createCredentialIO({ directory, readOnly }), hostKeys = createHostKeys({ io, home }), clock = Date.now } = {}) {
+  const state = createCredentialState({ io });
+  const now = () => new Date(clock()).toISOString();
+  const commit = async (data, profiles, metadata, keys = new Map(), writeStore = true) => {
+    if (io.readOnly) throw new CredentialError('Helpers cannot change saved credentials.', 500, 'read-only');
+    // In-memory recovery only: never make another plaintext credential backup.
+    const previousState = await io.read('state.json').catch(() => null);
+    const previousKeys = new Map();
+    for (const id of keys.keys()) previousKeys.set(id, await io.read(keyFile(id), { maxBytes: 64 * 1024 }).catch(() => null));
+    let attemptedStore = false;
+    try {
+      for (const [id, key] of keys) { if (key) await hostKeys.write(id, key); else await hostKeys.forget(id); }
+      await state.write(metadata);
+      if (writeStore) { attemptedStore = true; await io.write('credentials.json', serialize(profiles)); }
+    } catch (error) {
+      let restored = true;
+      if (attemptedStore) {
+        try { if (data.raw === null) await io.remove('credentials.json'); else await io.write('credentials.json', data.raw); }
+        catch {
+          try { const current = await io.read('credentials.json'); restored = (current?.text ?? null) === data.raw; }
+          catch { restored = false; }
+        }
       }
-      profile.authName = name;
+      if (restored) {
+        try {
+          for (const [id, key] of previousKeys) { if (key) await io.write(keyFile(id), key.text, { maxBytes: 64 * 1024, recover: true }); else await hostKeys.forget(id); }
+          if (previousState) await io.write('state.json', previousState.text, { recover: true }); else await io.remove('state.json');
+        } catch { restored = false; }
+      }
+      if (!restored) {
+        // A failed rollback must block SSH rather than silently trusting a key.
+        for (const id of keys.keys()) await hostKeys.forget(id).catch(() => {});
+        throw new CredentialError('The credential change could not be recovered. Check the state volume before trying again.', 500, 'store');
+      }
+      throw error;
     }
-    profile.testPath = input.testPath ?? previous?.testPath ?? '';
-    apiTarget(profile, profile.testPath);
-  }
-  return profile;
-}
-
-const publicProfile = ({ secret, ...profile }) => ({ ...profile, hasSecret: true });
-const revisionOf = text => createHash('sha256').update(text).digest('hex');
-const EMPTY = JSON.stringify({ version: 1, profiles: [] });
-export const credentialFailure = error => error instanceof CredentialError
-  ? { status: error.status, body: { ok: false, error: error.message } }
-  : { status: 500, body: { ok: false, error: 'Could not access saved credentials. Check the state volume and its permissions.' } };
-
-export function createCredentialStore({ directory = credentialDirectory() } = {}) {
-  const file = path.join(directory, 'credentials.json');
-  let queue = Promise.resolve();
-  const serial = action => {
-    const result = queue.then(action);
-    queue = result.catch(() => {});
-    return result;
   };
-  const secureDirectory = async () => {
-    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-    const stat = await fs.lstat(directory);
-    if (!stat.isDirectory() || stat.uid !== process.getuid()) fail('The credential directory must belong to the container user and must not be a symbolic link.', 500);
-    await fs.chmod(directory, 0o700);
+  const migrate = async (data, file) => {
+    if (io.readOnly) throw new CredentialError('Open Setup once to finish upgrading saved credentials.', 409, 'migration');
+    const at = file.mtime, profiles = data.profiles.map(input => ({ ...normalize(input), createdAt: at, updatedAt: at, secretChangedAt: null, revision: revision() }));
+    const metadata = emptyState(), keys = new Map();
+    for (const profile of profiles.filter(row => row.type === 'ssh')) {
+      let key;
+      key = await hostKeys.legacy(profile);
+      keys.set(profile.id, key || null);
+      if (key) metadata.hostKeys[profile.id] = hostKeys.metadata(key, true);
+    }
+    await commit({ raw: file.text }, profiles, metadata, keys);
+    return { profiles, raw: serialize(profiles) };
   };
   const read = async () => {
-    await secureDirectory();
-    let handle, raw = EMPTY;
-    try {
-      handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid() || stat.size > MAX_BYTES) fail('The credential file is unsafe or exceeds its size limit. Repair it before continuing.', 500);
-      await handle.chmod(0o600);
-      raw = await handle.readFile('utf8');
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    } finally { await handle?.close(); }
+    const file = await io.read('credentials.json');
+    if (!file) return { profiles: [], raw: null };
     let data;
     try {
-      data = JSON.parse(raw);
-      if (data.version !== 1 || !Array.isArray(data.profiles) || data.profiles.length > 64) throw new Error();
-      data.profiles = data.profiles.map(profile => normalize(profile));
-      if (new Set(data.profiles.map(profile => profile.id)).size !== data.profiles.length) throw new Error();
-    } catch { fail('Saved credentials could not be read. Restore the credential file before making changes.', 500); }
-    return { profiles: data.profiles, revision: revisionOf(raw) };
+      data = JSON.parse(file.text);
+      if (!object(data) || ![1, 2].includes(data.version) || !Array.isArray(data.profiles) || data.profiles.length > 64) throw unreadable();
+      if (new Set(data.profiles.map(profile => profile?.id)).size !== data.profiles.length) throw unreadable();
+      if (data.version === 2) data.profiles = data.profiles.map(input => {
+        const profile = normalize(input);
+        if (![input.createdAt, input.updatedAt].every(stamp) || !(input.secretChangedAt === null || stamp(input.secretChangedAt)) || !/^[a-f0-9]{16}$/.test(input.revision || '')) throw unreadable();
+        return { ...profile, createdAt: input.createdAt, updatedAt: input.updatedAt, secretChangedAt: input.secretChangedAt, revision: input.revision };
+      });
+      else data.profiles.forEach(input => normalize(input));
+    } catch { throw unreadable(); }
+    if (data.version === 1) {
+      try { return await migrate(data, file); }
+      catch (error) { if (error.code === 'migration') throw error; throw unreadable(); }
+    }
+    return { profiles: data.profiles, raw: file.text };
   };
-  const write = async profiles => {
-    const raw = JSON.stringify({ version: 1, profiles }, null, 2) + '\n';
-    if (Buffer.byteLength(raw) > MAX_BYTES) fail('Saved credentials exceed the 512 KiB limit.');
-    const temporary = path.join(directory, '.' + randomUUID() + '.tmp');
-    try {
-      const handle = await fs.open(temporary, 'wx', 0o600);
-      try { await handle.writeFile(raw); await handle.sync(); } finally { await handle.close(); }
-      await fs.rename(temporary, file);
-    } finally { await fs.rm(temporary, { force: true }); }
-    return revisionOf(raw);
+  const publicProfile = async (profile, metadata) => {
+    const { secret, ...visible } = profile;
+    let key = null;
+    if (profile.type === 'ssh') { try { key = await hostKeys.read(profile.id); } catch { /* Unsafe files cannot confer trust. */ } }
+    const saved = metadata.hostKeys[profile.id], test = metadata.tests[profile.id];
+    return { ...visible, hasSecret: true, test: test && (!test.revision || test.revision === profile.revision) ? cleanResult(test, secret) : null,
+      hostKey: profile.type === 'ssh' && key ? { ...publicKey(key), trustedAt: saved?.fingerprint === key.fingerprint ? saved.trustedAt : key.trustedAt, carried: saved?.fingerprint === key.fingerprint && saved.carried === true } : null };
   };
-  const checkRevision = (expected, actual) => {
-    if (expected !== actual) fail('Connections changed in another window. Close this editor, reload the list and reopen the connection before saving again.', 409);
+  const current = async (data, id, expected) => {
+    requireId(id);
+    const profile = data.profiles.find(row => row.id === id);
+    if (!profile) throw new CredentialError('This credential was deleted in another window.', 409, 'gone');
+    if (expected !== profile.revision) throw new CredentialError('This credential changed in another window.', 409, 'changed', { current: await publicProfile(profile, await state.read(data.profiles)) });
+    return profile;
   };
-  return {
-    async list() {
-      const data = await read();
-      return { profiles: data.profiles.map(publicProfile), revision: data.revision };
-    },
-    save: ({ profile, revision, create = false }) => serial(async () => {
-      const data = await read();
-      checkRevision(revision, data.revision);
-      const index = data.profiles.findIndex(row => row.id === profile?.id);
-      if (create && index >= 0) fail('This connection ID is already in use. Choose another ID.', 409);
-      if (!create && index < 0) fail('This connection no longer exists. Reload the list.', 409);
-      const saved = normalize(profile, data.profiles[index]);
-      if (index < 0) {
-        if (data.profiles.length >= 64) fail('Save at most 64 connections.');
-        data.profiles.push(saved);
-      } else data.profiles[index] = saved;
-      return { profile: publicProfile(saved), revision: await write(data.profiles) };
-    }),
-    remove: ({ id, revision }) => serial(async () => {
-      const data = await read();
-      checkRevision(revision, data.revision);
-      if (!data.profiles.some(row => row.id === id)) fail('This connection no longer exists.', 404);
-      return { revision: await write(data.profiles.filter(row => row.id !== id)) };
-    }),
-    async forUse(id) {
-      const data = await read();
-      const profile = data.profiles.find(row => row.id === id);
-      if (!profile) fail('Saved connection not found. Add it in Setup → Server credentials.', 404);
+  const privateProfile = (data, id) => {
+    requireId(id);
+    const profile = data.profiles.find(row => row.id === id);
+    if (!profile) throw new CredentialError('Saved credential not found. Add it in Setup → Credentials.', 404, 'not-found');
+    return profile;
+  };
+  const store = {
+    io, hostKeys,
+    initialize: () => io.transaction(async () => { await read(); }),
+    list: () => io.transaction(async () => { const data = await read(), metadata = await state.read(data.profiles); return { credentials: await Promise.all(data.profiles.map(profile => publicProfile(profile, metadata))) }; }),
+    public: id => io.transaction(async () => { const data = await read(); return publicProfile(privateProfile(data, id), await state.read(data.profiles)); }),
+    draft: ({ draft, id }) => io.transaction(async () => {
+      const data = await read(), previous = id === undefined ? undefined : privateProfile(data, id), profile = normalize(draft, previous);
+      if (profile.type === 'ssh' && previous && profile.host === previous.host && profile.port === previous.port) {
+        const key = await hostKeys.read(id).catch(() => null);
+        if (key) return { ...profile, knownHostsFile: key.file, hostKeyType: key.type };
+      }
       return profile;
-    },
+    }),
+    save: ({ credential, revision: expected, create = false }) => io.transaction(async () => {
+      const data = await read();
+      requireId(credential?.id);
+      const previous = data.profiles.find(row => row.id === credential.id);
+      if (create && previous) throw new CredentialError('That name is already taken. Choose another credential name.', 409, 'taken');
+      if (!create) await current(data, credential.id, expected);
+      if (!previous && data.profiles.length >= 64) throw new CredentialError('Save at most 64 credentials.');
+      const normalized = normalize(credential, previous), at = now();
+      const saved = { ...normalized, createdAt: previous?.createdAt || at, updatedAt: at, secretChangedAt: !previous || normalized.secret !== previous.secret ? at : previous.secretChangedAt, revision: revision() };
+      const metadata = await state.read(data.profiles), keys = new Map();
+      const changed = !previous || JSON.stringify(normalize(previous)) !== JSON.stringify(normalized);
+      if (changed) delete metadata.tests[saved.id];
+      else if (metadata.tests[saved.id]) metadata.tests[saved.id].revision = saved.revision;
+      if (saved.type === 'ssh' && (!previous || saved.host !== previous.host || saved.port !== previous.port)) { keys.set(saved.id, null); delete metadata.hostKeys[saved.id]; }
+      const profiles = [...data.profiles.filter(row => row.id !== saved.id), saved];
+      await commit(data, profiles, metadata, keys);
+      return { credential: await publicProfile(saved, metadata) };
+    }),
+    remove: ({ id, revision: expected }) => io.transaction(async () => {
+      const data = await read(), profile = await current(data, id, expected), metadata = await state.read(data.profiles);
+      delete metadata.tests[id]; delete metadata.hostKeys[id];
+      await commit(data, data.profiles.filter(row => row.id !== id), metadata, profile.type === 'ssh' ? new Map([[id, null]]) : new Map());
+      return {};
+    }),
+    forUse: id => io.transaction(async () => {
+      const profile = privateProfile(await read(), id);
+      if (profile.type !== 'ssh') return profile;
+      let key = null;
+      try { key = await hostKeys.read(id); } catch { /* Helpers must stop at missing or unsafe trust. */ }
+      return { ...profile, knownHostsFile: key?.file || null, hostKeyType: key?.type || null, hostFingerprint: key?.fingerprint || null };
+    }),
+    trust: ({ id, revision: expected, key }) => io.transaction(async () => {
+      const data = await read(), profile = await current(data, id, expected);
+      if (profile.type !== 'ssh') throw new CredentialError('Choose an SSH credential.');
+      const metadata = await state.read(data.profiles);
+      metadata.hostKeys[id] = hostKeys.metadata(key); delete metadata.tests[id];
+      await commit(data, data.profiles, metadata, new Map([[id, key]]), false);
+      return publicProfile(profile, metadata);
+    }),
+    forget: id => io.transaction(async () => {
+      const data = await read(), profile = privateProfile(data, id);
+      if (profile.type !== 'ssh') throw new CredentialError('Choose an SSH credential.');
+      const metadata = await state.read(data.profiles);
+      delete metadata.hostKeys[id]; delete metadata.tests[id];
+      await commit(data, data.profiles, metadata, new Map([[id, null]]), false);
+      return publicProfile(profile, metadata);
+    }),
+    recordTest: ({ id, revision: expected, hostFingerprint, result }) => io.transaction(async () => {
+      const data = await read(), profile = data.profiles.find(row => row.id === id);
+      if (!profile || profile.revision !== expected) return false;
+      if (profile.type === 'ssh') { const key = await hostKeys.read(id).catch(() => null); if ((key?.fingerprint || null) !== hostFingerprint) return false; }
+      const metadata = await state.read(data.profiles), previous = metadata.tests[id], cleaned = cleanResult(result, profile.secret);
+      if (!cleaned) throw new CredentialError('The connection test returned an invalid result.', 500);
+      metadata.tests[id] = { ...cleaned, at: now(), revision: expected, consecutiveTimeouts: result.code === 'timeout' ? (previous?.consecutiveTimeouts || 0) + 1 : 0 };
+      await state.write(metadata); return true;
+    }),
+    summary: () => io.transaction(async () => {
+      const data = await read(), metadata = await state.read(data.profiles), credentials = await Promise.all(data.profiles.map(profile => publicProfile(profile, metadata)));
+      return { count: credentials.length, attention: credentials.flatMap(profile => {
+        let code = profile.test?.ok === false ? profile.test.code : null;
+        if (code === 'timeout' && (metadata.tests[profile.id]?.consecutiveTimeouts || 0) < 2) code = null;
+        if (profile.type === 'ssh' && !profile.hostKey) code = 'host-key-untrusted';
+        return code ? [{ id: profile.id, code }] : [];
+      }) };
+    }),
   };
+  return store;
 }

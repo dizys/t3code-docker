@@ -8,7 +8,7 @@ import { credentialsFixture } from './fixtures/credentials.mjs';
 
 test('credential HTTP boundary is authenticated, write-only and revision checked', { timeout: 20000 }, async t => {
   const f = await credentialsFixture(); t.after(f.close);
-  for (const route of ['/credentials', '/credentials/create', '/credentials/save', '/credentials/test', '/credentials/remove']) {
+  for (const route of ['/credentials', '/credentials/create', '/credentials/save', '/credentials/test', '/credentials/remove', '/credentials/scan', '/credentials/trust', '/credentials/forget-host-key']) {
     const method = route === '/credentials' ? 'GET' : 'POST';
     assert.equal((await fetch(f.base + route, { method })).status, 401);
   }
@@ -16,27 +16,27 @@ test('credential HTTP boundary is authenticated, write-only and revision checked
   assert.equal((await f.request('/credentials', {})).status, 405);
   assert.equal((await f.request('/credentials/create')).status, 405);
   const initial = await (await f.request('/credentials')).json();
-  assert.deepEqual(initial.profiles, []);
+  assert.deepEqual(initial.credentials, []);
   const secret = 'fixture-http-credential-456';
   const profile = { id: 'staging-server', label: 'Staging server', type: 'ssh', host: '192.0.2.2', username: 'root', port: 22, secret };
-  const created = await (await f.request('/credentials/create', { profile, revision: initial.revision })).json();
+  const created = await (await f.request('/credentials/create', { credential: profile })).json();
   assert.equal(created.ok, true); assert.equal(JSON.stringify(created).includes(secret), false);
   const snapshotResponse = await f.request('/credentials');
   assert.equal(snapshotResponse.headers.get('cache-control'), 'no-store');
   const snapshot = await snapshotResponse.json(); assert.equal(JSON.stringify(snapshot).includes(secret), false);
-  assert.equal(snapshot.profiles[0].hasSecret, true);
-  assert.equal((await f.request('/credentials/save', { profile, revision: initial.revision })).status, 409);
-  assert.equal((await f.request('/credentials/create', { profile, revision: snapshot.revision })).status, 409);
-  assert.equal((await f.request('/credentials/save', { profile: { ...profile, secret: '' }, revision: snapshot.revision })).status, 200);
+  assert.equal(snapshot.credentials[0].hasSecret, true);
+  assert.equal((await f.request('/credentials/save', { credential: profile, revision: 'stale' })).status, 409);
+  assert.equal((await f.request('/credentials/create', { credential: profile })).status, 409);
+  assert.equal((await f.request('/credentials/save', { credential: { ...profile, secret: '' }, revision: created.credential.revision })).status, 200);
   const malformed = await fetch(f.base + '/credentials/create', { method: 'POST', headers: { 'x-t3-setup-key': 'credential-fixture-key' }, body: '{"secret":"' + secret });
   assert.equal(malformed.status, 400); assert.equal((await malformed.text()).includes(secret), false);
   const oversized = await fetch(f.base + '/credentials/create', { method: 'POST', headers: { 'x-t3-setup-key': 'credential-fixture-key' }, body: JSON.stringify({ secret: secret.repeat(4000) }) });
   assert.equal(oversized.status, 413); assert.equal((await oversized.text()).includes(secret), false);
   assert.equal((await f.request('/credentials/create', null)).status, 400);
   const latest = await (await f.request('/credentials')).json();
-  assert.equal((await f.request('/credentials/test', { id: profile.id, revision: initial.revision })).status, 409);
-  assert.equal((await f.request('/credentials/remove', { id: profile.id, revision: latest.revision })).status, 200);
-  assert.deepEqual((await (await f.request('/credentials')).json()).profiles, []);
+  assert.equal((await f.request('/credentials/test', { id: profile.id, draft: { ...profile, id: 'different', secret: '' } })).status, 400);
+  assert.equal((await f.request('/credentials/remove', { id: profile.id, revision: latest.credentials[0].revision })).status, 200);
+  assert.deepEqual((await (await f.request('/credentials')).json()).credentials, []);
   assert.equal(f.logs().includes(secret), false);
 });
 
@@ -53,12 +53,12 @@ test('saved API token works through the CLI and connection test without returnin
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   const initial = await (await f.request('/credentials')).json();
-  const saved = await (await f.request('/credentials/create', { revision: initial.revision, profile: { id: 'project-api', label: 'Project API', type: 'api', baseUrl: 'http://127.0.0.1:' + server.address().port + '/api/', secret } })).json();
+  const saved = await (await f.request('/credentials/create', { credential: { id: 'project-api', label: 'Project API', type: 'api', baseUrl: 'http://127.0.0.1:' + server.address().port + '/api/', secret } })).json();
   const probe = await f.request('/credentials/test', { id: 'project-api', revision: saved.revision });
   assert.equal(probe.status, 200); assert.equal((await probe.text()).includes(secret), false);
   failAuth = true;
   const rejected = await f.request('/credentials/test', { id: 'project-api', revision: saved.revision });
-  assert.equal(rejected.status, 502); assert.equal((await rejected.text()).includes(secret), false);
+  assert.equal(rejected.status, 200); assert.equal((await rejected.clone().json()).result.code, 'rejected'); assert.equal((await rejected.text()).includes(secret), false);
   failAuth = false;
   const helperEnv = { ...f.env, T3_INFRA_NODE: process.execPath, T3_CREDENTIAL_CLI: fileURLToPath(new URL('../docker/setup/credentials/cli.mjs', import.meta.url)) };
   const child = spawn('/bin/bash', [fileURLToPath(new URL('../docker/bin/t3-api', import.meta.url)), 'project-api', 'POST', 'projects', '--stdin'], { env: helperEnv, stdio: ['pipe', 'pipe', 'pipe'] });

@@ -5,7 +5,7 @@ const USAGE = `Use saved credentials without putting their values in commands:
   t3-ssh CONNECTION [--] COMMAND [ARGUMENT...]
   t3-api CONNECTION METHOD RELATIVE_PATH [--stdin]
 
-Manage connections in Setup → Server credentials.
+Manage connections in Setup → Credentials.
 For JSON request bodies, use --stdin and pipe the body into t3-api.
 Examples:
   t3-ssh build-server -- uptime
@@ -16,7 +16,7 @@ Examples:
 async function main() {
   const [kind, ...args] = process.argv.slice(2);
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') { process.stdout.write(USAGE); return; }
-  const id = args.shift(), store = createCredentialStore();
+  const id = args.shift(), store = createCredentialStore({ readOnly: true });
   if (!['ssh', 'api'].includes(kind)) throw new CredentialError('Use t3-ssh or t3-api.');
   if (kind === 'ssh') {
     if (args[0] === '--') args.shift();

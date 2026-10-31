@@ -1510,3 +1510,14 @@ test("update check failures can be read for every source at once", () => {
   assert.equal(M.updateCheckView(status, null).failures.length, 2);
   assert.equal(M.updateCheckView(status, "harness").failures.length, 1);
 });
+
+test('Credentials attention feeds Overview, navigation and host badges without counting untested credentials', () => {
+  const base = { credentials: { count: 3, attention: [{ id: 'build-server', code: 'host-key-untrusted' }, { id: 'project-api', code: 'rejected' }] } };
+  assert.deepEqual(plain(M.navBadges(base).credentials), { tone: 'warn', count: 2 });
+  const items = plain(M.needsYou(base)).filter(row => row.target === 'credential');
+  assert.equal(items.length, 2); assert.equal(items[0].id, 'project-api');
+  assert.equal(items[1].action.route, 'credentials/build-server'); assert.equal(items[1].tone, 'warn');
+  assert.equal(M.navBadges({ credentials: { count: 3, attention: [] } }).credentials, null);
+  assert.equal(M.credentialState({ type: 'ssh', hostKey: null, test: { code: 'ok' } }).code, 'host-key-untrusted');
+  assert.equal(M.credentialState({ type: 'api', test: { code: 'rejected', detail: { status: 401 } } }).label, 'Rejected · HTTP 401');
+});

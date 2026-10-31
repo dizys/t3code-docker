@@ -154,7 +154,7 @@
   const skillsUI = T3SkillsUI.create({ api, getStatus: () => state.status, render: () => render(),
     readMarkdown: (file) => readMarkdownFile(file, 64 * 1024), downloadMarkdown: (...args) => downloadMarkdown(...args) });
   const mcpUI = T3McpUI.create({ api, getStatus: () => state.status, render: () => render() });
-  const credentialsUI = T3CredentialsUI.create({ api, render: () => render() });
+  const credentialsUI = T3CredentialsUI.create({ api, getStatus: () => state.status, render: () => render(), onChange: () => loadStatus(true) });
   const filesUI = T3FilesUI.create({ api, base: BASE, getStatus: () => state.status, getRoute: () => state.route, render: () => render(), go: route => go(route) });
 
   /** Whether this browser came in on its T3 Code session rather than the key, so Lock would end nothing. */
@@ -215,8 +215,9 @@
     }
   };
 
-  const loadStatus = () => {
-    if (statusLoading) return statusLoading;
+  const loadStatus = (fresh = false) => {
+    // A completed mutation must read after an older poll, not join its snapshot.
+    if (statusLoading) return fresh === true ? statusLoading.then(() => loadStatus()) : statusLoading;
     statusLoading = (async () => {
       const accessRevision = access.revision;
       const res = await api('/status');
@@ -2000,6 +2001,7 @@
     if (contextEditor.layer && !await contextEditor.requestClose()) return false;
     if (!await skillsUI.beforeNavigate()) return false;
     if (!await mcpUI.beforeNavigate()) return false;
+    if (!await credentialsUI.beforeNavigate()) return false;
     return filesUI.beforeNavigate();
   };
   let hostLeaving = false;
@@ -4089,7 +4091,7 @@
   // -------------------------------------------------------------- palette --
   const openPalette = () => {
     const layer = Kit.palette({
-      items: () => [...M.paletteItems(state.status || {}, state.ports, ui, now()), ...skillsUI.paletteItems().map(item => ({ ...item, group: 'Instructions & skills', keywords: item.desc || '' })), ...filesUI.paletteItems()],
+      items: () => [...M.paletteItems(state.status || {}, state.ports, ui, now()), ...skillsUI.paletteItems().map(item => ({ ...item, group: 'Instructions & skills', keywords: item.desc || '' })), ...filesUI.paletteItems(), ...credentialsUI.paletteItems()],
       search: M.searchPalette,
       run: (item) => {
         const { cmd, ...args } = item.cmd;
@@ -4104,7 +4106,7 @@
 
   // ------------------------------------------------------------ shortcuts --
   Kit.bind('mod+k', openPalette);
-  Kit.bind('/', () => state.route === 'files' ? filesUI.focusSearch() : state.route === 'mcp' ? mcpUI.focusSearch() : state.route === 'instructions' && state.contextTab === 'skills' ? skillsUI.focusSearch() : openPalette());
+  Kit.bind('/', () => state.route === 'files' ? filesUI.focusSearch() : state.route === 'mcp' ? mcpUI.focusSearch() : state.route === 'credentials' ? credentialsUI.focusSearch() : state.route === 'instructions' && state.contextTab === 'skills' ? skillsUI.focusSearch() : openPalette());
   for (const page of T3Routes.PAGES) {
     if (page.key) Kit.bind('g ' + page.key, () => { keyboardNav = true; go(page.route); });
   }

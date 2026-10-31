@@ -97,3 +97,9 @@ test('a future page follows the registry into metadata and empty groups disappea
   assert(!R.paletteEntries().some(p => p.route === 'internal'));
   assert(M.navIcons(icons)['hard-drive'].length > 0);
 });
+
+test('credential destinations accept only a bounded immutable name', () => {
+  const { R } = load();
+  for (const name of ['credentials/build-server', 'credentials/123', 'credentials/' + 'a'.repeat(64)]) assert.equal(R.destination(name), name);
+  for (const name of ['credentials/../server', 'credentials/a/b', 'credentials/a?secret=1', 'credentials/Bad', 'credentials/' + 'a'.repeat(65), 'credentials/a_']) assert.equal(R.destination(name), null);
+});

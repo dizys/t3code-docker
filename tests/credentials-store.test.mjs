@@ -160,3 +160,10 @@ test('state recovery replaces its directory entry without following a symlink', 
   assert.equal((await fs.lstat(file)).isSymbolicLink(), false);
   assert.equal(JSON.stringify(await store.list()).includes(api.secret), false);
 });
+
+test('replacement timestamps advance even when two writes share a clock tick', async t => {
+  const { store, create } = await fixture(t, { store: { clock: () => Date.parse('2026-10-30T10:00:00Z') } });
+  const a = (await create(api)).credential;
+  const b = (await store.save({ credential: { ...api, secret: 'a-different-synthetic-token' }, revision: a.revision })).credential;
+  assert.notEqual(a.secretChangedAt, b.secretChangedAt); assert.ok(Date.parse(b.updatedAt) > Date.parse(a.updatedAt));
+});

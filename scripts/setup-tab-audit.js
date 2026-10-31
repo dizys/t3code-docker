@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { framed, routeConsole, visit, statusFor, portsFor } = require('./lib/console-fixtures.cjs');
+const { framed, routeConsole, visit, statusFor, portsFor, routesTable } = require('./lib/console-fixtures.cjs');
 const BASE = process.argv[2] || 'http://127.0.0.1:23920/__setup/';
 const OUT = process.env.T3_TAB_UI_OUTPUT;
 (async () => {
@@ -27,7 +27,7 @@ const OUT = process.env.T3_TAB_UI_OUTPUT;
       assert.equal(await menu.getAttribute('role'),'menu');
       assert.equal(await menu.locator('[aria-current=page]').textContent().then(t=>t.trim().startsWith('Agents')),true);
       assert.equal(await menu.locator('[data-menu-cancel]').count(),0);
-      assert.equal(await menu.locator('[role=menuitemradio]').count(),12);
+      assert.equal(await menu.locator('[role=menuitemradio]').count(),routesTable().PAGES.length);
       assert.equal(await menu.locator('[aria-current=page] > svg').count(),2);
       const box=await menu.boundingBox();assert(box.x>=0&&box.x+box.width<=width+1&&box.y>=0&&box.y+box.height<=900);
       const row=await menu.locator('[role=menuitemradio]').first().boundingBox();assert.equal(row.height,width<640?44:32);

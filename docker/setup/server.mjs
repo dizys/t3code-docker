@@ -535,9 +535,10 @@ const skillsService = createSkillsService({ home: CONTEXT_HOME, env: process.env
 const mcpService = createMcpService({ home: CONTEXT_HOME, env: process.env, baseDir: STATE_DIR,
   io: await contextFs(),
 });
+let credentialInstalled = null;
 const credentials = createCredentialsService({ store: credentialStore, usage: createCredentialUsage({
   home: CONTEXT_HOME, baseDir: STATE_DIR, env: process.env, io: await contextFs(),
-  installed: async () => ((await harnessCache.snapshotCheap()).harnesses || []).filter(row => row.installed).map(row => row.id),
+  installed: async () => credentialInstalled || [...((await harnessCache.snapshotCheap()).harnesses || []).filter(row => row.installed).map(row => row.id), 'native-provider-not-yet-reported'],
 }) });
 let filesPromise, filesInstance, filesPayloads = 0;
 const loadFiles = () => filesPromise ??= loadStorage().then(storage => createFilesService({
@@ -847,6 +848,7 @@ const status = async () => {
   // console (the row says so); while T3 itself is down the page already says.
   const t3Agents = antigravityRow && (antigravityRow.available || (!antigravityRow.reachable && server?.ok)) ? [antigravityRow] : [];
   const harnesses = harnessSnap?.harnesses ?? [];
+  credentialInstalled = [...harnesses, ...t3Agents].filter(row => row.installed).map(row => row.id);
   const verdicts = new Map((scmSnap?.harnesses ?? []).map((row) => [row.id, row.auth]));
   const sourceControl = (toolchainSnap?.sourceControl ?? []).map((row) => ({ ...row, auth: verdicts.get(row.id) ?? null }));
   knownSourceControl.clear();

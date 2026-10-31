@@ -129,7 +129,7 @@ export function createCredentialStore({ directory = credentialDirectory(), readO
       if (create && previous) throw new CredentialError('That name is already taken. Choose another credential name.', 409, 'taken');
       if (!create) await current(data, credential.id, expected);
       if (!previous && data.profiles.length >= 64) throw new CredentialError('Save at most 64 credentials.');
-      const normalized = normalize(credential, previous), at = now();
+      const normalized = normalize(credential, previous), at = new Date(Math.max(clock(), previous ? Date.parse(previous.updatedAt) + 1 : 0)).toISOString();
       const saved = { ...normalized, createdAt: previous?.createdAt || at, updatedAt: at, secretChangedAt: !previous || normalized.secret !== previous.secret ? at : previous.secretChangedAt, revision: revision() };
       const metadata = await state.read(data.profiles), keys = new Map();
       const changed = !previous || JSON.stringify(normalize(previous)) !== JSON.stringify(normalized);

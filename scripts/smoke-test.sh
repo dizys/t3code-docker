@@ -831,6 +831,22 @@ mcp_editor_works() {
 }
 check "MCP controls refresh immediately and preserve editor revisions and values" mcp_editor_works
 
+credentials_browser_works() {
+  [ "$HAS_BROWSER" -eq 1 ] || return 0
+  local audit=/tmp/t3-credentials-audit
+  docker exec "$NAME" mkdir -p "$audit/scripts/lib" "$audit/scripts/fixtures" "$audit/tests/fixtures" "$audit/docker" || return 1
+  docker exec "$NAME" ln -sfn /opt/t3-setup "$audit/docker/setup" || return 1
+  docker cp scripts/credentials-ui-audit.mjs "$NAME:$audit/scripts/credentials-ui-audit.mjs" >/dev/null 2>&1 || return 1
+  docker cp scripts/lib/console-fixtures.cjs "$NAME:$audit/scripts/lib/console-fixtures.cjs" >/dev/null 2>&1 || return 1
+  docker cp scripts/fixtures/console "$NAME:$audit/scripts/fixtures/console" >/dev/null 2>&1 || return 1
+  for helper in credentials.mjs credential-keys.mjs; do
+    docker cp "tests/fixtures/$helper" "$NAME:$audit/tests/fixtures/$helper" >/dev/null 2>&1 || return 1
+  done
+  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules -e T3_CREDENTIALS_UI_WIDTHS=390,640,1280 \
+    "$NAME" node "$audit/scripts/credentials-ui-audit.mjs" >>"$UI_AUDIT_LOG" 2>&1
+}
+check "Credentials drafts, host trust, conflicts and recovery work on desktop, phone and Settings" credentials_browser_works
+
 files_browser_works() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0
   docker exec "$NAME" mkdir -p /tmp/t3-files-audit/lib /tmp/t3-files-audit/fixtures || return 1

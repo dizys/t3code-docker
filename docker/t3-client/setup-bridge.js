@@ -146,6 +146,7 @@
     { id: 'agents', route: 'agents', title: 'Agents', meta: 'Setup · sign in, install and update', terms: [] },
     { id: 'context', route: 'instructions', title: 'Instructions & skills', meta: 'Setup · global AGENTS.md and skills', terms: ['agents.md global instructions', 'context', 'skills'] },
     { id: 'mcp', route: 'mcp', title: 'MCP servers', meta: 'Setup · shared definitions and provider configuration', terms: ['mcp tools servers'] },
+    { id: 'credentials', route: 'credentials', title: 'Credentials', meta: 'Setup · SSH and API logins agents use by name', terms: ['ssh', 'api key', 'token', 'password', 'secret', 'server credentials'] },
     { id: 'pair', route: 'access', title: 'Pair a device', meta: 'Setup · Access', terms: ['devices', 'pairing'] },
     { id: 'toolchains', route: 'toolchains', title: 'Toolchains', meta: 'Setup · Go, Rust, Bun, Deno, uv and any mise tool', terms: [] },
     { id: 'sourcecontrol', route: 'sourcecontrol', title: 'Source control', meta: 'Setup · sign in to GitHub, GitLab, Forgejo, Gitea and Azure DevOps', terms: ['codeberg', 'gh glab fj tea az'] },

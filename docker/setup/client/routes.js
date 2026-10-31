@@ -31,7 +31,7 @@ const T3Routes = (() => {
       summary: 'Servers your agents can start or connect to.', doc: 'mcp-servers.md',
       palette: { meta: 'Setup · shared definitions and provider configuration', terms: ['mcp tools servers'] } },
     { route: 'credentials', title: 'Credentials', icon: 'key-round', key: 'c', group: 'agents',
-      summary: 'Saved logins your skills can use, without putting passwords or keys in chat.', doc: 'credentials.md', palette: { meta: 'Setup · SSH and API logins agents use by name', terms: ['ssh', 'api key', 'token', 'password', 'secret', 'server credentials'] } },
+      summary: 'SSH and API logins your agents use by name. Secrets stay out of chats and skills.', doc: 'credentials.md', palette: { meta: 'Setup · SSH and API logins agents use by name', terms: ['ssh', 'api key', 'token', 'password', 'secret', 'server credentials'] } },
     { route: 'files', title: 'Files', icon: 'folder', key: 'f', group: 'tools',
       summary: 'Your projects, your home folder and what fills the disk.', doc: 'files.md',
       palette: { meta: 'Setup · projects, the home folder and disk use', terms: ['upload download', 'workspace'] } },
@@ -97,7 +97,7 @@ const T3Routes = (() => {
   /** The page an address names, through its aliases; null when it names none. */
   const resolve = (name) => (BY_ROUTE.has(name) ? name : ALIASES[name] || null);
   /** The tab that holds a page on a phone. */
-  const destination = name => resolve(name) || DESTINATIONS.find(item => item.hash === name)?.hash || null;
+  const destination = name => resolve(name) || DESTINATIONS.find(item => item.hash === name)?.hash || (typeof name === 'string' && /^credentials\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) && name.slice(12).length <= 64 ? name : null);
   const tabOf = (route) => (TABS.some((tab) => tab.route === route) ? route : 'more');
   /** Pages in their sidebar groups, each group with its label. */
   const grouped = () => GROUPS.map((group) => ({ ...group, pages: PAGES.filter((p) => p.group === group.id) }));

@@ -1,114 +1,139 @@
-// Saved secrets are write-only. Only the newly typed replacement lives in
-// the dialog's input; it is never rendered, cached or copied into instructions.
+// On-demand credentials library. Polling never replaces focused inputs or a
+// draft, and an item stays pending until its saved truth has been read back.
 const T3CredentialsUI = (() => {
   'use strict';
-  const { html, raw, icon } = Kit;
+  const { html, raw, icon } = Kit, S = T3CredentialModel, M = T3Model;
   const disabled = value => value ? raw(' disabled') : '';
-  const create = ({ api, render }) => {
-    let data = null, loading = false, error = null, started = false, epoch = 0, editor = null, notice = null;
-    const busy = new Set(), results = new Map();
-    const notify = (message, options) => { notice?.close(); notice = Kit.toast(message, options); };
-    const paint = () => {
-      render();
-      const mount = document.getElementById('credential-list');
-      if (mount) Kit.patch(mount, body());
+  const create = ({ api, getStatus = () => null, render, onChange = async () => {} }) => {
+    let data = null, error = null, query = '', attentionOnly = false, started = false, loading = false, inFlight = null, epoch = 0, lastDeep = null;
+    const busy = new Map(), errors = new Map();
+    const rows = () => [...(data?.credentials || [])].sort((a, b) => a.id.localeCompare(b.id, 'en'));
+    const row = id => data?.credentials.find(row => row.id === id);
+    const usageWarnings = () => data?.usageWarnings || [];
+    const attention = () => rows().filter(profile => S.needsAttention(profile, getStatus()?.credentials?.attention));
+    const testing = () => [...busy.values()].filter(value => value.kind === 'test').length;
+    const paint = () => { render(); const mount = document.getElementById('credential-list'); if (mount) Kit.patch(mount, body()); inspector.repaint(); };
+    const load = (force = false) => {
+      if (inFlight && !force) return inFlight;
+      const version = ++epoch; started = true; loading = true; error = null; paint();
+      const work = api('/credentials').then(response => {
+        if (version !== epoch) return false;
+        if (response.ok && Array.isArray(response.data?.credentials)) { data = response.data; return true; }
+        error = response.error || 'Saved credentials could not be read. Restore the credential file before making changes.'; data = null; return false;
+      }).finally(() => { if (version === epoch) { loading = false; inFlight = null; paint(); } });
+      inFlight = work; return work;
     };
-    const load = async () => {
-      const version = ++epoch;
-      started = true; loading = true; error = null; paint();
-      const response = await api('/credentials');
-      if (version !== epoch) return;
-      if (response.ok && Array.isArray(response.data?.credentials)) data = { ...response.data, profiles: response.data.credentials.map(row => ({ ...row, label: row.id })) };
-      else error = response.error || 'Could not load saved connections.';
-      loading = false; paint();
-    };
-    const command = profile => profile.type === 'ssh' ? 't3-ssh ' + profile.id + ' -- uptime' : 't3-api ' + profile.id + ' GET ' + T3McpCommand.quote(profile.testPath || '');
-    const body = () => html`
-      <div class="tc-credential-toolbar"><span class="tc-small tc-muted">${data ? T3Model.plural(data.profiles.length, 'saved connection') : 'Saved connections'}</span><span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--sm" type="button" data-credential-action="reload"${disabled(loading)}>${icon('refresh-cw')}Reload</button><button class="tc-btn tc-btn--primary tc-btn--sm" type="button" data-credential-action="add"${disabled(!data || loading || error)}>${icon('plus')}Add connection</button></div>
-      ${error ? html`<div class="tc-notice tc-notice--danger" role="alert">${icon('circle-alert')}<div class="tc-notice-body"><strong class="tc-notice-title">Could not load connections</strong><span class="tc-notice-desc">${error} Use Reload to try again.</span></div></div>` : ''}
-      ${!data ? html`<div class="tc-group"><div class="tc-empty tc-empty--compact" role="status"><span class="tc-empty-title">${loading ? 'Loading connections…' : 'Connections unavailable'}</span></div></div>` : data.profiles.length ? html`<div class="tc-group tc-credential-list">${data.profiles.map(profile => html`
-        <article class="tc-credential-row" data-key="credential-${profile.id}">
-          <span class="tc-tile tc-tile--icon" aria-hidden="true">${icon(profile.type === 'ssh' ? 'terminal' : 'key-round')}</span>
-          <div class="tc-credential-main"><strong>${profile.label}</strong><span class="tc-small tc-muted tc-credential-address">${profile.type === 'ssh' ? profile.username + '@' + profile.host + ':' + profile.port : profile.baseUrl}</span><div class="tc-copyfield tc-credential-usage"><code class="tc-copyfield-value tc-credential-command">${command(profile)}</code><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs" type="button" data-credential-action="copy" data-id="${profile.id}" aria-label="Copy skill command for ${profile.label}" title="Copy command for a skill">${icon('copy')}</button></div><span class="tc-small tc-muted">${profile.type === 'ssh' ? 'Password saved' : profile.authType === 'header' ? 'Header key saved' : profile.authType === 'query' ? 'Query key saved' : 'Bearer token saved'} · <span aria-label="Saved value is hidden">••••••••</span></span>${results.has(profile.id) ? html`<span class="tc-small ${results.get(profile.id).ok ? 'tc-ok' : 'tc-danger'}" role="status">${results.get(profile.id).message}</span>` : ''}</div>
-          <div class="tc-credential-actions"><button class="tc-btn tc-btn--sm" type="button" data-credential-action="test" data-id="${profile.id}"${disabled(busy.has(profile.id) || loading || error)} aria-label="Test ${profile.label}">${busy.has(profile.id) ? html`<span class="tc-spinner" aria-hidden="true"></span>Testing…` : 'Test'}</button><button class="tc-btn tc-btn--sm" type="button" data-key="credential-edit-${profile.id}" data-credential-action="edit" data-id="${profile.id}"${disabled(busy.has(profile.id) || loading || error)}>Edit<span class="tc-sr"> ${profile.label}</span></button><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-credential-action="remove" data-id="${profile.id}"${disabled(busy.has(profile.id) || loading || error)} aria-label="Delete ${profile.label}">${icon('trash-2')}</button></div>
-        </article>`)}</div>` : html`<div class="tc-group"><div class="tc-empty"><span class="tc-tile tc-tile--icon tc-tile--lg" aria-hidden="true">${icon('key-round')}</span><strong class="tc-empty-title">Save a connection once</strong><p class="tc-empty-desc">Keep SSH passwords and API keys here. Your skills use the connection ID, so credentials stay out of instructions and chat.</p><button class="tc-btn tc-btn--primary" type="button" data-credential-action="add"${disabled(loading || error)}>${icon('plus')}Add connection</button></div></div>`}
-      <p class="tc-hint tc-credential-note">${icon('lock-keyhole', 'tc-icon--sm')}Saved on this server. Values are hidden from the page and filtered from helper output. Any agent with shell access can use these connections.</p>`;
-
-    const openEditor = profile => {
-      if (editor || !data || error || loading) return;
-      notice?.close(); notice = null;
-      const view = { original: profile, revision: profile?.revision, draft: profile ? { ...profile } : { id: '', label: '', type: 'ssh', host: '', username: '', port: 22, baseUrl: '', authType: 'bearer', authName: 'X-API-Key', authPrefix: '', testPath: '' }, busy: false, error: null };
-      editor = view;
-      const field = (key, label, options = {}) => html`<div class="tc-form-field" data-key="credential-field-${key}${key === 'authName' ? '-' + view.draft.authType : ''}"><label class="tc-label" for="credential-${key}">${label}</label><input class="tc-input" id="credential-${key}" data-credential-field="${key}" value="${view.draft[key] || ''}" type="${options.type || 'text'}"${options.required === false ? '' : raw(' required')}${disabled(view.busy || options.locked)}${options.max ? html` maxlength="${options.max}"` : ''}${options.type === 'number' ? raw(' min="1" max="65535"') : ''} autocomplete="off" autocapitalize="off" spellcheck="false">${options.hint ? html`<p class="tc-hint">${options.hint}</p>` : ''}</div>`;
-      const markup = () => html`<div class="tc-dialog-body">
-        <h2 class="tc-dialog-title" id="credential-title">${profile ? 'Edit connection' : 'Add connection'}</h2><p class="tc-dialog-desc">${profile ? 'Leave the secret blank to keep its saved value.' : 'Save the login here, then use its connection ID in your skills.'}</p>
-        <div class="tc-form">
-          ${field('label', 'Name', { max: 120 })}
-          ${field('id', 'Connection ID', { locked: Boolean(profile), max: 64, hint: 'Lowercase letters, numbers and hyphens. Used in helper commands.' })}
-          <div class="tc-form-field" data-key="credential-field-type"><label class="tc-label" for="credential-type">Connection type</label><select class="tc-select" id="credential-type" data-credential-field="type"${disabled(view.busy || profile)}><option value="ssh"${view.draft.type === 'ssh' ? raw(' selected') : ''}>SSH password</option><option value="api"${view.draft.type === 'api' ? raw(' selected') : ''}>API key or token</option></select></div>
-          ${view.draft.type === 'ssh' ? html`${field('host', 'Host', { max: 253 })}<div class="tc-credential-fields" data-key="credential-ssh-login">${field('username', 'Username', { max: 64 })}${field('port', 'Port', { type: 'number' })}</div>` : html`
-            ${field('baseUrl', 'API base URL', { max: 2048, hint: 'Include the API version or base path, for example https://api.example.com/v1/.' })}
-            <div class="tc-form-field" data-key="credential-field-authType"><label class="tc-label" for="credential-authType">Authentication</label><select class="tc-select" id="credential-authType" data-credential-field="authType"${disabled(view.busy)}>${[['bearer', 'Bearer token'], ['header', 'Custom header'], ['query', 'Query parameter']].map(([value, label]) => html`<option value="${value}"${(view.draft.authType || 'bearer') === value ? raw(' selected') : ''}>${label}</option>`)}</select></div>
-            ${view.draft.authType === 'header' ? html`${field('authName', 'Header name', { max: 128, hint: 'For example X-API-Key, api-key or Authorization.' })}${field('authPrefix', 'Value prefix (optional)', { max: 128, required: false, hint: 'For example Token. Leave blank to send the key as the complete header value.' })}` : view.draft.authType === 'query' ? field('authName', 'Query parameter name', { max: 128, hint: 'For APIs that require a key in the URL. Prefer a header when supported.' }) : ''}
-            ${field('testPath', 'Test path (optional)', { max: 2048, required: false, hint: 'A relative GET endpoint that requires authentication; blank uses the base URL.' })}`}
-          <div class="tc-form-field" data-key="credential-field-secret"><label class="tc-label" for="credential-secret">${view.draft.type === 'ssh' ? 'SSH password' : 'API key or token'}</label><input class="tc-input" id="credential-secret" name="secret" type="password" maxlength="8192" autocomplete="new-password" spellcheck="false" autocapitalize="off"${profile ? '' : raw(' required')}${disabled(view.busy)} aria-describedby="credential-secret-note"><p class="tc-hint" id="credential-secret-note">${profile ? 'A value is saved. Enter a replacement only if you want to change it.' : 'This value will not appear in the saved connection details.'}</p></div>
-        </div>${view.error ? html`<p class="tc-hint tc-danger" id="credential-error" role="alert" tabindex="-1">${view.error}</p>` : ''}
-      </div><div class="tc-dialog-foot"><button class="tc-btn" type="button" data-credential-cancel${disabled(view.busy)}>Cancel</button><button class="tc-btn tc-btn--primary" type="submit"${disabled(view.busy)}>${view.busy ? html`<span class="tc-spinner" aria-hidden="true"></span>Saving…` : 'Save connection'}</button></div>`;
-      const close = () => { if (!view.busy) view.layer.close(); };
-      view.layer = Kit.open({ kind: 'center', backdrop: 'ignore', focus: '#credential-label',
-        panel: { tag: 'form', class: 'tc-dialog tc-credential-editor', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'credential-title', autocomplete: 'off' },
-        render: markup, onEscape: close, onClose: () => { const input = view.layer.panel.querySelector('#credential-secret'); if (input) input.value = ''; if (editor === view) editor = null; },
-      });
-      view.layer.panel.addEventListener('input', event => {
-        const key = event.target.dataset.credentialField;
-        if (key && !view.busy) view.draft[key] = event.target.value;
-      });
-      view.layer.panel.addEventListener('change', event => {
-        if (event.target.dataset.credentialField === 'type' && !view.busy) { view.draft.type = event.target.value; view.layer.render(); }
-        if (event.target.dataset.credentialField === 'authType' && !view.busy) { view.draft.authType = event.target.value; view.draft.authName = event.target.value === 'query' ? 'api_key' : 'X-API-Key'; view.draft.authPrefix = ''; view.layer.render(); }
-      });
-      view.layer.panel.addEventListener('click', event => { if (event.target.closest('[data-credential-cancel]')) close(); });
-      view.layer.panel.addEventListener('submit', async event => {
-        event.preventDefault();
-        if (view.busy || editor !== view) return;
-        const secretInput = view.layer.panel.querySelector('#credential-secret');
-        const payload = { ...view.draft, port: Number(view.draft.port), secret: secretInput.value || undefined };
-        view.busy = true; view.error = null; view.layer.render();
-        const response = await api(profile ? '/credentials/save' : '/credentials/create', { body: { credential: payload, revision: view.revision } });
-        delete payload.secret;
-        if (response.ok) {
-          secretInput.value = ''; results.delete(view.draft.id);
-          if (editor === view) { view.busy = false; view.layer.close('saved'); }
-          notify('Connection saved'); await load();
-        } else if (editor === view) {
-          view.busy = false; view.error = response.error; view.layer.render();
-          view.layer.panel.querySelector('#credential-error')?.focus();
-        }
-      });
-    };
-    document.addEventListener('click', async event => {
-      const button = event.target.closest('[data-credential-action]');
-      if (!button || button.disabled) return;
-      const action = button.dataset.credentialAction, profile = data?.profiles.find(row => row.id === button.dataset.id);
-      if (action === 'reload') { void load(); return; }
-      if (action === 'add') { openEditor(); return; }
-      if (action === 'copy' && profile) { void Kit.copy(command(profile), button, 'Skill command copied'); return; }
-      if (!profile || busy.has(profile.id) || error) return;
-      if (action === 'edit') { openEditor(profile); return; }
-      const revision = profile.revision;
-      if (action === 'remove') {
-        const yes = await Kit.confirm({ title: 'Delete ' + profile.label + '?', body: 'Removes the saved login. Skills using ' + profile.id + ' will need another connection.', confirm: 'Delete connection', tone: 'danger' });
-        if (!yes || busy.has(profile.id)) return;
+    const request = async (id, kind, route, input, { refresh = true } = {}) => {
+      if (busy.has(id)) return null;
+      const focused = document.activeElement?.getAttribute('data-key');
+      busy.set(id, { kind }); errors.delete(id); paint();
+      let response;
+      try {
+        response = await api(route, { body: input });
+        if (!response.ok) errors.set(id, response.error || 'This action did not finish. Try again.');
+        if (refresh) await Promise.all([load(true), onChange()]);
+        return response;
+      } finally {
+        busy.delete(id); paint();
+        if (focused && document.activeElement === document.body) document.querySelector('[data-key="' + CSS.escape(focused) + '"]')?.focus({ preventScroll: true });
       }
-      busy.add(profile.id); results.delete(profile.id); paint();
-      const response = await api('/credentials/' + action, { body: { id: profile.id, revision } });
-      busy.delete(profile.id);
-      if (action === 'test') results.set(profile.id, { ok: response.ok && response.data?.result?.ok, message: response.ok ? response.data?.result?.code === 'ok' ? 'Connection succeeded' : 'Connection needs attention: ' + response.data?.result?.code : response.error });
-      else if (response.ok) notify('Connection deleted');
-      else notify('Could not delete connection', { tone: 'danger', detail: response.error });
-      await load();
-    });
-    return { content: () => html`<div id="credential-list" data-keep>${body()}</div>`, activate: (force = false) => { if (!loading && (force || !started)) void load(); } };
+    };
+    const inspect = id => { if (row(id)) inspector.open(id); };
+    const edit = async (id, replace = false) => {
+      if (id && busy.has(id) || error) return;
+      const profile = id ? row(id) : null; if (id && !profile) return;
+      inspector.close('edit'); await editor.open(profile, { replace });
+    };
+    const ctx = { api, busy, errors, rows, row, usageWarnings, loadError: () => error, refresh: () => load(true), request,
+      saved: async credential => {
+        if (data) data.credentials = [...data.credentials.filter(row => row.id !== credential.id), { ...credential, usedIn: row(credential.id)?.usedIn || [] }];
+        errors.delete(credential.id); const [loaded] = await Promise.all([load(true), onChange()]); return loaded;
+      },
+      deleted: id => {
+        if (inspector.id() === id) inspector.close('removed');
+        if (location.hash === '#credentials/' + id) history.replaceState(null, '', '#credentials');
+        paint();
+        requestAnimationFrame(() => {
+          const next = document.querySelector('#credential-list [data-cred-action="inspect"], #credential-list [data-cred-action="add"], #credential-list [data-cred-action="retry"]');
+          next?.focus({ preventScroll: true });
+        });
+      },
+      inspectorClosed: (id, reason) => { if (!['route', 'replaced'].includes(reason) && location.hash === '#credentials/' + id) { history.replaceState(null, '', '#credentials'); lastDeep = null; } },
+      action: (action, id, button) => { void actionFor(action, id, button); }, menu: (button, profile, details) => menu(button, profile, details), review: id => dialogs.review(id),
+    };
+    const inspector = T3CredentialInspector.create(ctx), editor = T3CredentialEditor.create(ctx), dialogs = T3CredentialDialogs.create(ctx);
+    const actionFor = async (action, id, button) => {
+      if (action === 'add') { if (!data && !await load()) return; return edit(); }
+      if (action === 'retry') return load(true).then(loaded => { if (loaded) return activate(); });
+      if (action === 'clear') { query = ''; attentionOnly = false; paint(); const input = document.getElementById('credential-search'); if (input) input.value = ''; return; }
+      if (action === 'attention') { attentionOnly = !attentionOnly; paint(); return; }
+      const profile = row(id); if (!profile) return;
+      if (action === 'inspect') return inspect(id);
+      if (action === 'menu') return menu(button, profile);
+      if (action === 'copy-name') return Kit.copy(profile.id, button, 'Credential name copied');
+      if (action === 'copy-command') return Kit.copy(S.commands(profile)[0], button, 'Command copied');
+      if (busy.has(id) || error) return;
+      if (action === 'edit' || action === 'replace') return edit(id, action === 'replace');
+      if (action === 'review') { if (profile.test?.code === 'host-key-changed' || !profile.hostKey && inspector.id() === id) return dialogs.review(id); return inspect(id); }
+      if (action === 'delete') return dialogs.remove(id);
+      if (action === 'forget') return dialogs.forget(id);
+      if (action === 'test') {
+        if (testing() >= 3) return Kit.announce('Three tests are already running. Wait for one to finish.');
+        const response = await request(id, 'test', '/credentials/test', { id });
+        if (response?.ok && response.data.result) Kit.announce(response.data.result.ok ? id + ' connected.' : id + ': ' + M.credentialProblem(response.data.result.code));
+      }
+    };
+    const menu = (button, profile, details = false) => Kit.menu(button, { label: 'More for ' + profile.id, head: profile.id, items: [
+      { label: 'Test', icon: 'refresh-cw', disabled: busy.has(profile.id) || testing() >= 3, run: () => actionFor('test', profile.id, button) },
+      { label: 'Edit…', icon: 'pencil', disabled: busy.has(profile.id), run: () => edit(profile.id) },
+      { label: 'Copy name', icon: 'copy', run: () => actionFor('copy-name', profile.id, button) },
+      { label: 'Copy command', icon: 'terminal', run: () => actionFor('copy-command', profile.id, button) },
+      ...(details && profile.type === 'ssh' && profile.hostKey ? [{ label: 'Forget host key…', icon: 'shield-alert', disabled: busy.has(profile.id), run: () => dialogs.forget(profile.id) }] : []),
+      { sep: true }, { label: 'Delete…', icon: 'trash-2', danger: true, disabled: busy.has(profile.id), run: () => dialogs.remove(profile.id) },
+    ] });
+    const footer = () => html`<div class="tc-card-foot tc-cred-storage">${icon('lock', 'tc-icon--sm')}<span>${Kit.isPhone() ? 'Saved in plain text on this server. Chats and skills only need the name.' : 'Saved in plain text on this server’s volume. Anything running here can read them; chats and skills only need the name.'}</span></div>`;
+    const nameBadge = profile => html`<span class="tc-badge">${profile.type === 'ssh' ? 'SSH' : 'API'}</span>`;
+    const rowState = profile => S.state(profile, { busy: busy.get(profile.id)?.kind === 'test' });
+    const dot = tone => html`<span class="tc-dot${['ok', 'warn', 'danger'].includes(tone) ? ' tc-dot--' + tone : ''}" aria-hidden="true"></span>`;
+    const primary = profile => {
+      const state = rowState(profile), action = state.action.startsWith('Review') ? 'review' : state.action.startsWith('Replace') ? 'replace' : state.action.startsWith('Edit') ? 'edit' : 'test';
+      return html`<button class="tc-btn tc-btn--sm" type="button" data-key="cred-primary-${profile.id}" data-cred-action="${action}" data-id="${profile.id}" aria-label="${state.action.replace('…', '')} ${profile.id}"${disabled(busy.has(profile.id) || action === 'test' && testing() >= 3)}>${busy.get(profile.id)?.kind === 'test' ? html`<span class="tc-spinner" aria-hidden="true"></span>Testing…` : state.action}</button>`;
+    };
+    const item = profile => {
+      const state = rowState(profile), pending = busy.has(profile.id);
+      if (Kit.isPhone()) return html`<button class="tc-prow tc-cred-prow" type="button" data-key="cred-name-${profile.id}" data-cred-action="inspect" data-id="${profile.id}" aria-label="${profile.id}: ${state.label}" aria-busy="${String(pending)}"><span class="tc-tile tc-tile--icon" aria-hidden="true">${icon(profile.type === 'ssh' ? 'terminal' : 'globe')}</span><span class="tc-prow-name">${profile.id}${nameBadge(profile)}</span><span class="tc-mcp-detail">${S.target(profile)}</span><span class="tc-cred-state-line" data-tone="${state.tone}">${pending ? html`<span class="tc-spinner" aria-hidden="true"></span>` : dot(state.tone)}<span>${state.label}${state.sub && state.at ? html` <small>· ${state.sub}</small>` : ''}</span></span>${icon('chevron-right')}</button>`;
+      return html`<div class="tc-row tc-cred-row" data-key="cred-row-${profile.id}" data-tone="${state.code === 'host-key-changed' ? 'warn' : ''}" aria-busy="${String(pending)}"><span class="tc-tile tc-tile--icon" aria-hidden="true">${icon(profile.type === 'ssh' ? 'terminal' : 'globe')}</span><div class="tc-row-main tc-cred-main"><div class="tc-cred-name"><button type="button" data-cred-action="inspect" data-id="${profile.id}" data-key="cred-name-${profile.id}">${profile.id}</button>${nameBadge(profile)}</div><span class="tc-mcp-detail" title="${S.target(profile)}">${icon(profile.type === 'ssh' ? 'server' : 'globe')}<code>${S.target(profile)}</code></span><div class="tc-cred-meta"><span class="tc-keys"><span class="tc-key" title="${S.kind(profile)}">${icon('key-round')}${S.kind(profile)}</span></span>${!usageWarnings().length || profile.usedIn?.length ? html`<span class="tc-cred-used">${icon('book-open')}<span>${profile.usedIn?.length ? html`Used in <b>${profile.usedIn.map(item => item.name).join(', ')}</b>` : 'Not in a skill yet'}</span></span>` : ''}</div>${errors.get(profile.id) ? html`<span class="tc-hint tc-danger" role="alert">${errors.get(profile.id)}</span>` : ''}</div><div class="tc-cred-state" title="${state.at ? M.absTime(state.at) : state.sub}" role="status"><span class="tc-cred-state-line" data-tone="${state.tone}">${pending ? html`<span class="tc-spinner" aria-hidden="true"></span>` : dot(state.tone)}<span>${busy.get(profile.id)?.kind === 'scan' ? 'Reading host key…' : busy.get(profile.id)?.kind === 'trust' ? 'Trusting host key…' : state.label}</span></span>${state.sub ? html`<span class="tc-cred-state-sub">${state.sub}</span>` : ''}</div><div class="tc-row-actions">${primary(profile)}<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-key="cred-menu-${profile.id}" data-cred-action="menu" data-id="${profile.id}" aria-label="More for ${profile.id}" aria-haspopup="menu" aria-expanded="${String(Kit.menuOpenFor('cred-menu-' + profile.id))}"${disabled(pending)}>${icon('ellipsis')}</button></div></div>`;
+    };
+    const toolbar = () => html`<div class="tc-sk-toolbar tc-cred-toolbar"><label class="tc-sk-search" for="credential-search">${icon('search')}<input class="tc-input" id="credential-search" data-key="credential-search" type="search" autocomplete="off" spellcheck="false" placeholder="Search ${data.credentials.length} credentials" aria-label="Search credentials" value="${query}"><kbd class="tc-kbd">/</kbd></label>${attention().length || attentionOnly ? html`<button class="tc-btn tc-btn--sm tc-sk-attention" type="button" data-key="cred-attention" data-cred-action="attention" aria-pressed="${String(attentionOnly)}">${dot('warn')}Needs attention ${attention().length}</button>` : ''}<span class="tc-spacer"></span><button class="tc-btn tc-btn--primary tc-btn--sm tc-cred-add" type="button" data-key="cred-add" data-cred-action="add" aria-label="Add credential">${icon('plus')}<span>Add credential…</span></button></div>`;
+    const empty = () => html`<div class="tc-group"><div class="tc-empty"><div class="tc-empty-media" aria-hidden="true"><span class="tc-empty-icon">${icon('key-round')}</span></div><strong class="tc-empty-title">Keep secrets out of chats and skills</strong><p class="tc-empty-desc">Save an SSH or API login here once. Agents use it by name, and never need the secret itself.</p><button class="tc-btn tc-btn--primary" type="button" data-cred-action="add" data-key="cred-add-empty">${icon('plus')}Add credential…</button></div><div class="tc-cred-how"><div><span class="tc-cred-how-num"><span>1</span>Save a login once</span><p>An SSH password or an API key, with where it goes. It stays on this server.</p></div><div><span class="tc-cred-how-num"><span>2</span>Use its name in a skill</span><p>Skills and chats only ever carry the name.</p><code>t3-ssh build-server -- uptime</code></div><div><span class="tc-cred-how-num"><span>3</span>The helper signs in</span><p><code>t3-ssh</code> and <code>t3-api</code> add the secret, and hide it if the output repeats it.</p></div></div>${footer()}</div>`;
+    const body = () => {
+      if (error) return html`<div class="tc-notice tc-notice--danger" role="alert">${icon('circle-alert')}<div class="tc-notice-body"><strong class="tc-notice-title">Couldn’t read credentials</strong><span class="tc-notice-desc">${error}</span></div><button class="tc-btn tc-btn--sm" type="button" data-cred-action="retry"${disabled(loading)}>Try again</button></div>`;
+      if (!data) return html`<div class="tc-group" role="status" aria-label="Loading credentials">${[1, 2, 3].map(index => html`<div class="tc-skel-row tc-cred-skel" data-key="cred-skeleton-${index}" aria-hidden="true"><span class="tc-skel tc-skel--tile"></span><span class="tc-skel tc-cred-skeleton-line"></span></div>`)}</div>`;
+      if (!data.credentials.length) return empty();
+      const filtered = rows().filter(profile => S.matches(profile, query) && (!attentionOnly || attention().some(row => row.id === profile.id)));
+      return html`${toolbar()}${usageWarnings().length ? html`<p class="tc-hint tc-cred-usage-warning" role="status">${icon('info', 'tc-icon--sm')}Some skills couldn’t be read. Usage may be incomplete.</p>` : ''}<div class="tc-group"><div class="tc-list tc-cred-list">${filtered.length ? filtered.map(item) : html`<div class="tc-empty tc-empty--compact"><strong class="tc-empty-title">${attentionOnly ? 'No matching credentials need attention' : 'No credentials match this search'}</strong><button class="tc-btn tc-btn--sm" type="button" data-cred-action="clear">Clear filters</button></div>`}</div>${footer()}</div>`;
+    };
+    document.addEventListener('click', event => { const button = event.target.closest('[data-cred-action]'); if (!button || button.disabled) return; void actionFor(button.dataset.credAction, button.dataset.id, button); });
+    document.addEventListener('input', event => { if (event.target.id !== 'credential-search') return; query = event.target.value; paint(); });
+    window.addEventListener('focus', () => { if (started && location.hash.replace(/^#\/?/, '').split('/')[0] === 'credentials' && !editor.isOpen()) void load(); });
+    const resize = new ResizeObserver(() => { if (started) { paint(); editor.repaint(); } });
+    resize.observe(document.documentElement);
+    const activate = async (force = false) => {
+        const id = location.hash.replace(/^#\/?/, '').split('/')[1];
+        const loaded = force || !started ? await load() : Boolean(data); if (!loaded) return; paint();
+        if (S.validName(id) && !editor.isOpen() && lastDeep !== id) {
+          lastDeep = id;
+          if (row(id)) { inspect(id); if (row(id).test?.code === 'host-key-changed') void dialogs.review(id); }
+          else Kit.toast('Credential not found', { detail: 'It may have been deleted in another window.' });
+        } else if (!id) lastDeep = null;
+      };
+    return {
+      content: () => html`<div id="credential-list" class="tc-credentials-library" data-keep>${body()}</div>`,
+      activate,
+      paletteItems: () => rows().filter(profile => !getStatus()?.credentials?.attention?.some(item => item.id === profile.id)).map(profile => ({ id: 'credential:' + profile.id, group: 'Credentials', label: profile.id, icon: 'key-round', cmd: { cmd: 'goto', route: 'credentials/' + profile.id }, keywords: 'credential ' + profile.type + ' ' + S.target(profile) + ' ' + S.kind(profile), meta: { text: rowState(profile).label } })),
+      focusSearch: () => { document.getElementById('credential-search')?.focus(); },
+      beforeNavigate: async () => { if (!dialogs.beforeNavigate()) { Kit.announce('Wait for the host-key check to finish.'); return false; } return editor.beforeNavigate(); },
+    };
   };
   return { create };
 })();

@@ -150,3 +150,12 @@ for (const [clientLine, remoteLine, status, code] of [
   } });
   assert.equal(result.code, code); assert.equal(JSON.stringify(result).includes(ssh.secret), false);
 });
+
+test('a review opened before an address change cannot show or trust keys for a new target', async t => {
+  const f = await fixture(t), original = (await f.create(ssh)).credential;
+  await f.store.save({ credential: { ...ssh, host: 'other-host' }, revision: original.revision });
+  for (const route of ['/credentials/scan', '/credentials/trust']) {
+    await assert.rejects(f.service.handle(route, { id: original.id, revision: original.revision, fingerprint: f.key.fingerprint }), { status: 409, code: 'changed' });
+  }
+  assert.equal(f.scans, 0); assert.equal(f.signins, 0); assert.equal((await f.store.public(ssh.id)).hostKey, null);
+});

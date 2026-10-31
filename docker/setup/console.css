@@ -3183,37 +3183,6 @@ body[data-console-route="files"]:has(.tc-layer) .tc-toaster { visibility: hidden
 .tc-files-zip .tc-opt small { overflow-wrap: anywhere; }
 .tc-files-archive-contents span:not(.tc-small) { max-width: 100%; min-width: 0; }
 .tc-files-archive-contents code { min-width: 0; overflow-wrap: anywhere; }
-/* Server logins use the console's existing forms and controls. Long addresses
-   wrap independently of the actions, including in the embedded phone view. */
-.tc-credential-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-.tc-credential-row { display: flex; align-items: flex-start; gap: 12px; padding: 20px; }
-.tc-credential-row + .tc-credential-row { border-top: 1px solid var(--border); }
-.tc-credential-main { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 6px; }
-.tc-credential-main strong { font-size: 14px; overflow-wrap: anywhere; }
-.tc-credential-address, .tc-credential-command { overflow-wrap: anywhere; }
-.tc-credential-command { font-size: 12px; color: var(--fg-muted); }
-.tc-credential-usage { display: flex; align-items: center; gap: 8px; }
-.tc-credential-usage .tc-copyfield-value { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
-.tc-credential-usage .tc-btn { flex: none; }
-.tc-credential-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.tc-credential-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; }
-.tc-credential-note svg { flex: 0 0 auto; margin-top: 2px; }
-.tc-layer--center > .tc-credential-editor { display: flex; flex-direction: column; width: min(520px, calc(100vw - 24px)); overflow: hidden; }
-.tc-credential-editor > .tc-dialog-body { min-height: 0; overflow-y: auto; }
-.tc-credential-editor > .tc-dialog-foot { flex: none; }
-.tc-credential-editor .tc-form { margin-top: 12px; }
-.tc-credential-fields { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 12px; }
-@media (max-width: 600px) {
-  .tc-credential-row { padding: 16px; flex-wrap: wrap; }
-  .tc-credential-main { flex-basis: calc(100% - 56px); }
-  .tc-credential-actions { margin-left: 44px; }
-  .tc-credential-toolbar > .tc-small { flex-basis: 100%; }
-}
-.tc-root[data-density="touch"] :is(.tc-credential-actions, .tc-credential-toolbar, .tc-credential-usage, .tc-credential-editor .tc-dialog-foot) .tc-btn { min-height: var(--touch); min-width: var(--touch); }
-@media (max-width: 1023.98px) {
-  .tc-layer--center > .tc-credential-editor { width: 100%; max-width: none; }
-}
-
 /* The Settings breadcrumb stays with the page while its content scrolls. */
 .tc-console-topbar { flex: none; height: var(--topbar); min-height: var(--topbar); border-bottom: 1px solid var(--border); padding-inline: var(--space-4); background: var(--bg); }
 .tc-console-topbar .tc-crumbs { gap: var(--space-3); }
@@ -3388,3 +3357,259 @@ body[data-console-route="files"]:has(.tc-layer) .tc-toaster { visibility: hidden
 @container files-card (max-width: 720px) {
   #files-browser .tc-files-selection-actions :is([data-cmd="files.compress"], [data-cmd="files.move"], [data-cmd="files.details"]) { display: none; }
 }
+/* Credentials uses the shared list, sheet, wizard, dialog and menu components.
+   Layout responds to the frame's data-compact density, including Settings. */
+
+/* ------------------------------------------------------------- the list --- */
+.tc-cred-list > .tc-row { grid-template-columns: auto minmax(0, 1fr) 14.5rem 8rem; padding-block: 0.875rem; align-items: center; }
+.tc-cred-list > .tc-row > .tc-tile { align-self: start; margin-top: 2px; }
+.tc-cred-name { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.tc-cred-name > button { appearance: none; border: 0; padding: 0; background: none; font: inherit; font-size: 0.875rem; line-height: 1.25rem; font-weight: 500; color: var(--fg);
+  cursor: pointer; text-decoration: none; }
+.tc-cred-name > button:hover { text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
+.tc-cred-name .tc-badge, .tc-cred-prow .tc-prow-name .tc-badge { height: 1.125rem; font-size: 0.6875rem; font-weight: 500; color: var(--fg-muted); background: color-mix(in srgb, var(--fg) 5%, transparent); }
+.tc-cred-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.tc-cred-main > .tc-keys { margin-top: 1px; }
+.tc-cred-state { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: 0.75rem; line-height: 1.125rem; }
+.tc-cred-state-line { display: flex; align-items: center; gap: 0.375rem; color: var(--fg); font-weight: 500; min-width: 0; }
+.tc-cred-state-line > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-cred-state-line[data-tone="warn"] { color: var(--warn-text); }
+.tc-cred-state-line[data-tone="danger"] { color: var(--danger-text); }
+.tc-cred-state-line[data-tone="muted"] { color: var(--fg-muted); font-weight: 400; }
+.tc-cred-state-sub { color: var(--fg-muted); padding-left: calc(0.375rem + 0.375rem); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-cred-used { display: inline-flex; align-items: center; gap: 0.3125rem; font-size: 0.75rem; line-height: 1.125rem; color: var(--fg-muted); min-width: 0; }
+.tc-cred-used > .tc-icon { width: 0.75rem; height: 0.75rem; flex: none; }
+.tc-cred-used b { font-weight: 500; color: var(--fg); }
+.tc-cred-used > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-cred-meta { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; min-width: 0; }
+.tc-cred-meta > .tc-keys { margin-top: 0; }
+.tc-cred-list .tc-row-actions .tc-btn--sm { min-width: 3.75rem; justify-content: center; }
+.tc-cred-list .tc-row-actions .tc-btn--icon { min-width: 0; }
+.tc-cred-row[data-tone="warn"] { background: color-mix(in srgb, var(--warn) 4%, transparent); }
+
+/* -------------------------------------------------------- empty state --- */
+.tc-cred-how { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.tc-cred-how > div { display: flex; flex-direction: column; gap: 0.375rem; padding: 1rem 1.125rem 1.125rem; min-width: 0; }
+.tc-cred-how > div + div { border-left: 1px solid var(--hairline); }
+.tc-cred-how-num { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; line-height: 1.25rem; font-weight: 500; color: var(--fg); }
+.tc-cred-how-num > span { width: 1.25rem; height: 1.25rem; border-radius: 50%; display: grid; place-items: center; background: var(--selected); font-size: 0.6875rem; font-weight: 600; }
+.tc-cred-how p { margin: 0; font-size: 0.75rem; line-height: 1.125rem; color: var(--fg-muted); }
+.tc-cred-how code { font: 400 0.6875rem/1rem var(--font-mono); color: var(--fg); background: var(--surface-sunken); border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  padding: 0.125rem 0.375rem; align-self: flex-start; }
+
+/* ------------------------------------------------------------ inspector --- */
+.tc-cred-banner { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0.75rem 0.75rem 0.875rem; border-radius: var(--radius-xl); border: 1px solid var(--border); }
+.tc-cred-banner > .tc-icon { flex: none; }
+.tc-cred-banner > div { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.tc-cred-banner strong { font-size: 0.875rem; line-height: 1.25rem; font-weight: 500; }
+.tc-cred-banner span { font-size: 0.75rem; line-height: 1.125rem; color: var(--fg-muted); }
+.tc-cred-banner code { font-size: 0.75rem; color: var(--fg); }
+.tc-cred-banner[data-tone="ok"] { border-color: color-mix(in srgb, var(--ok) 30%, transparent); background: color-mix(in srgb, var(--ok) 5%, transparent); }
+.tc-cred-banner[data-tone="ok"] > .tc-icon { color: var(--ok); }
+.tc-cred-banner[data-tone="danger"] { border-color: color-mix(in srgb, var(--danger) 30%, transparent); background: var(--danger-soft); }
+.tc-cred-banner[data-tone="danger"] > .tc-icon { color: var(--danger); }
+.tc-cred-banner[data-tone="danger"] strong { color: var(--danger-text); }
+.tc-cred-banner[data-tone="warn"] { border-color: color-mix(in srgb, var(--warn) 32%, transparent); background: var(--warn-soft); }
+.tc-cred-banner[data-tone="warn"] > .tc-icon { color: var(--warn); }
+.tc-cred-banner[data-tone="warn"] strong { color: var(--warn-text); }
+
+.tc-pathlist.tc-cred-facts { grid-template-columns: 6.5rem minmax(0, 1fr); }
+.tc-cred-facts dd .tc-spacer { flex: 1; }
+.tc-cred-facts dd .tc-btn { margin: -0.25rem -0.375rem -0.25rem 0; }
+.tc-cred-saved { display: inline-flex; align-items: center; gap: 0.375rem; color: var(--fg); }
+.tc-cred-saved > .tc-icon { width: 0.875rem; height: 0.875rem; color: var(--fg-muted); }
+.tc-cred-saved small { font-size: 0.75rem; color: var(--fg-muted); }
+.tc-cred-fp { font: 400 0.75rem/1.125rem var(--font-mono); color: var(--fg); overflow-wrap: anywhere; }
+.tc-cred-fp small { font-family: var(--font-sans); color: var(--fg-muted); margin-left: 0.375rem; }
+
+/* A command or a request, as agents will run it. */
+.tc-cred-cmds { list-style: none; margin: 0; padding: 0; }
+.tc-cred-cmds li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.5rem; padding: 0.5rem 0.5rem 0.5rem 0.875rem; }
+.tc-cred-cmds li + li { border-top: 1px solid var(--hairline); }
+.tc-cred-cmds code { font: 400 0.75rem/1.125rem var(--font-mono); color: var(--fg); overflow-wrap: anywhere; }
+.tc-cred-cmds code i { font-style: normal; color: var(--fg-subtle); }
+.tc-cred-snippet { position: relative; margin: 0; padding: 0.75rem 0.875rem; border-radius: var(--radius-lg); border: 1px solid var(--hairline); background: var(--surface-sunken);
+  font: 400 0.75rem/1.25rem var(--font-mono); color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.tc-cred-snippet i { font-style: normal; color: var(--fg-subtle); }
+.tc-cred-snippet b { font-weight: 400; color: var(--accent-text); }
+.tc-cred-snippet-head { display: flex; align-items: center; gap: 0.5rem; }
+.tc-cred-request { margin: 0; padding: 0.625rem 0.875rem; border-radius: var(--radius-lg); border: 1px solid var(--hairline); background: var(--surface-sunken);
+  font: 400 0.75rem/1.25rem var(--font-mono); color: var(--fg-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.tc-cred-request b { font-weight: 600; color: var(--fg); }
+.tc-cred-request u { text-decoration: none; color: var(--fg); }
+.tc-cred-request em { font-style: normal; color: var(--accent-text); }
+.tc-cred-skill { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 0.625rem; padding: 0.5625rem 0.875rem; font-size: 0.8125rem; line-height: 1.25rem; }
+.tc-cred-skill + .tc-cred-skill { border-top: 1px solid var(--hairline); }
+.tc-cred-skill .tc-tile { width: 1.5rem; height: 1.5rem; }
+.tc-cred-skill .tc-tile .tc-icon { width: 0.8125rem; height: 0.8125rem; }
+.tc-cred-skill strong { font-weight: 500; }
+.tc-cred-skill small { display: block; font-size: 0.75rem; line-height: 1rem; color: var(--fg-muted); }
+.tc-cred-skill code { font-size: 0.6875rem; color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------- editor --- */
+/* Desktop size only: in compact mode main's rules make it a 94dvh bottom sheet. */
+:where(:root:not([data-compact])) .tc-wizard.tc-cred-editor { width: 56rem; height: 44rem; }
+.tc-cred-editor .tc-wizard-grid { grid-template-columns: minmax(0, 1fr) 20.5rem; }
+.tc-wizard-rail .tc-cred-cmds code { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tc-wizard-rail .tc-cred-fp small { display: block; margin: 2px 0 0; }
+.tc-cred-editor .tc-wizard-main { gap: 1.125rem; }
+.tc-cred-editor .tc-form { display: flex; flex-direction: column; gap: 1rem; }
+.tc-cred-editor .tc-form-field { display: flex; flex-direction: column; gap: 0.375rem; }
+.tc-cred-editor .tc-form-field > .tc-hint { margin: 0; }
+.tc-cred-pair { display: grid; grid-template-columns: minmax(0, 1fr) 6.5rem; gap: 0.75rem; }
+.tc-cred-pair--even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.tc-cred-type .tc-seg { width: 100%; }
+.tc-cred-type .tc-seg button { flex: 1 1 0; justify-content: center; display: inline-flex; align-items: center; gap: 0.375rem; height: 2rem; font-size: 0.8125rem; }
+.tc-cred-type .tc-seg button .tc-icon { width: 0.875rem; height: 0.875rem; }
+.tc-cred-auth .tc-seg { width: 100%; }
+.tc-cred-auth .tc-seg button { flex: 1 1 0; justify-content: center; display: inline-flex; align-items: center; height: 1.75rem; font-size: 0.8125rem; }
+.tc-cred-locked { display: flex; align-items: center; gap: 0.5rem; height: 2.25rem; padding: 0 0.75rem; border-radius: var(--radius-md); border: 1px dashed var(--border);
+  background: var(--surface-sunken); font: 400 0.8125rem/1 var(--font-mono); color: var(--fg); }
+.tc-cred-locked > .tc-icon { width: 0.875rem; height: 0.875rem; color: var(--fg-muted); }
+.tc-cred-locked > span:last-child { margin-left: auto; font-family: var(--font-sans); font-size: 0.75rem; color: var(--fg-muted); }
+.tc-cred-secret { display: flex; align-items: center; gap: 0.5rem; min-height: 2.25rem; padding: 0.25rem 0.25rem 0.25rem 0.75rem; border-radius: var(--radius-md); border: 1px solid var(--border);
+  background: var(--surface); font-size: 0.8125rem; }
+.tc-cred-secret > .tc-icon { width: 0.875rem; height: 0.875rem; color: var(--ok); flex: none; }
+.tc-cred-secret > span { flex: 1; min-width: 0; color: var(--fg); }
+.tc-cred-secret small { color: var(--fg-muted); font-size: 0.75rem; }
+
+/* The rail: what agents will run, and the test, as the person types. */
+.tc-cred-rail-block { display: flex; flex-direction: column; gap: 0.5rem; }
+.tc-cred-rail-block .tc-insp-label { font-size: 0.8125rem; min-height: 0; }
+.tc-cred-test { display: flex; flex-direction: column; gap: 0.625rem; padding: 0.75rem; border-radius: var(--radius-lg); border: 1px solid var(--border); background: var(--surface); }
+.tc-cred-test-line { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; line-height: 1.25rem; font-weight: 500; }
+.tc-cred-test-line > .tc-icon { width: 1rem; height: 1rem; color: var(--ok); flex: none; }
+.tc-cred-test-line small { margin-left: auto; font-weight: 400; font-size: 0.75rem; color: var(--fg-muted); }
+.tc-cred-hostkey { display: flex; flex-direction: column; gap: 0.375rem; padding-top: 0.625rem; border-top: 1px solid var(--hairline); font-size: 0.75rem; line-height: 1.125rem; color: var(--fg-muted); }
+.tc-cred-hostkey strong { color: var(--fg); font-weight: 500; font-size: 0.75rem; }
+.tc-cred-hostkey code { display: block; font: 400 0.6875rem/1rem var(--font-mono); color: var(--fg); background: var(--surface-sunken); border: 1px solid var(--hairline); border-radius: var(--radius-sm); padding: 0.25rem 0.375rem; overflow-wrap: anywhere; }
+.tc-cred-testpath { display: flex; align-items: center; gap: 0.5rem; }
+.tc-cred-testpath > span { font: 600 0.75rem/1 var(--font-mono); color: var(--fg); }
+.tc-cred-testpath .tc-input { height: 2rem; flex: 1; min-width: 0; }
+.tc-cred-check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; color: var(--fg); }
+.tc-cred-conflict .tc-notice-body { gap: 0.375rem; }
+.tc-cred-conflict-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.25rem; }
+.tc-cred-conflict-actions .tc-btn { margin: 0 !important; }
+.tc-cred-diffline { font: 400 0.75rem/1.125rem var(--font-mono); }
+.tc-cred-diffline del { color: var(--fg-muted); }
+.tc-cred-diffline ins { text-decoration: none; color: var(--warn-text); font-weight: 600; }
+
+/* ---------------------------------------------------------- dialogs --- */
+:where(:root:not([data-compact])) .tc-dialog.tc-cred-dialog { width: min(30rem, calc(100% - 32px)); }
+.tc-cred-keys { list-style: none; margin: 0.25rem 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.tc-cred-keys li { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: 0.625rem; padding: 0.625rem 0.75rem; font-size: 0.75rem; line-height: 1.125rem; align-items: baseline; }
+.tc-cred-keys li + li { border-top: 1px solid var(--hairline); }
+.tc-cred-keys li > span { color: var(--fg-muted); }
+.tc-cred-keys li[data-tone="warn"] { background: var(--warn-soft); }
+.tc-cred-keys li[data-tone="warn"] > span { color: var(--warn-text); font-weight: 500; }
+.tc-cred-keys code { font-size: 0.75rem; color: var(--fg); overflow-wrap: anywhere; }
+
+/* ------------------------------------------------- compact: the list --- */
+/* Rows become tc-prow buttons (.tc-cred-prow), MCP's phone rows, with a tile. */
+:where(:root[data-compact]) .tc-cred-toolbar { display: flex; gap: 0.5rem; align-items: center; }
+:where(:root[data-compact]) .tc-cred-toolbar .tc-sk-search { flex: 1; min-width: 0; }
+:where(:root[data-compact]) .tc-cred-prow { grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 0.75rem; }
+:where(:root[data-compact]) .tc-cred-prow > .tc-tile { grid-row: 1 / span 3; align-self: start; margin-top: 2px; }
+:where(:root[data-compact]) .tc-cred-prow > .tc-icon { grid-column: 3; }
+:where(:root[data-compact]) .tc-cred-prow > .tc-prow-name, :where(:root[data-compact]) .tc-cred-prow > .tc-mcp-detail, :where(:root[data-compact]) .tc-cred-prow > .tc-cred-state-line { grid-column: 2; }
+:where(:root[data-compact]) .tc-cred-prow .tc-prow-name { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9375rem; }
+:where(:root[data-compact]) .tc-cred-prow .tc-cred-state-line { font-size: 0.75rem; line-height: 1.125rem; margin-top: 2px; }
+:where(:root[data-compact]) .tc-cred-state-line small { font-weight: 400; color: var(--fg-muted); }
+
+/* --------------------------------------------------------------- compact --- */
+/* main's convention (#71). The details sheet and the editor are the console's
+   bottom sheets in compact mode already (tc-skill-inspector, tc-wizard); only
+   what is particular to this page is here. */
+:where(:root[data-compact]) .tc-cred-inspector .tc-insp-head > .tc-btn:not(.tc-btn--icon) { display: none; }
+:where(:root[data-compact]) .tc-cred-banner { align-items: flex-start; }
+:where(:root[data-compact]) .tc-pathlist.tc-cred-facts { grid-template-columns: 5.5rem minmax(0, 1fr); }
+:where(:root[data-compact]) .tc-cred-saved small { display: none; }
+.tc-root[data-density="touch"] .tc-cred-editor .tc-cred-type .tc-seg button { height: 2.5rem; font-size: 0.9375rem; }
+
+/* Credentials owns its lane, including when Settings gives it less room than
+   the browser viewport. Long names and metadata never steal action space. */
+.tc-credentials-library { margin-top: -0.75rem; display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; container: credentials / inline-size; }
+.tc-cred-toolbar .tc-sk-search { min-width: 0; }
+.tc-cred-toolbar .tc-btn[aria-pressed="true"] { background: var(--warn-soft); color: var(--warn-text); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.tc-cred-toolbar .tc-btn > .tc-dot { margin-right: 0.125rem; }
+.tc-cred-name > button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.tc-cred-name > .tc-badge { flex: none; }
+.tc-cred-main .tc-mcp-detail > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; }
+.tc-cred-meta > .tc-keys { max-width: 100%; min-width: 0; }
+.tc-cred-meta .tc-key { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.tc-cred-meta .tc-key .tc-icon { flex: none; }
+.tc-cred-meta > .tc-cred-used { flex: 1 1 10rem; }
+.tc-cred-row[aria-busy="true"] .tc-cred-main { opacity: 0.65; }
+.tc-cred-storage { align-items: flex-start; line-height: 1.125rem; }
+.tc-cred-storage > .tc-icon { flex: none; margin-top: 1px; }
+.tc-cred-how { border-top: 1px solid var(--hairline); }
+.tc-cred-skeleton-line { height: 0.875rem; width: min(18rem, 70%); }
+.tc-cred-usage-warning { display: flex; align-items: flex-start; gap: 0.375rem; }
+.tc-cred-banner > .tc-cred-banner-actions { flex: none; flex-direction: row; gap: 0.375rem; flex-wrap: wrap; justify-content: flex-end; }
+.tc-cred-inspector .tc-insp-head > .tc-btn:not(.tc-btn--icon) { flex: none; }
+.tc-cred-inspector .tc-insp-body { gap: 1.75rem; }
+.tc-cred-inspector .tc-insp-label > .tc-hint { text-align: right; font-size: 0.6875rem; }
+.tc-cred-inspector .tc-cred-saved { flex-wrap: wrap; }
+.tc-cred-inspector .tc-cred-facts dd > code { min-width: 0; overflow-wrap: anywhere; }
+.tc-cred-editor .tc-cred-reveal { position: relative; display: flex; align-items: center; }
+.tc-cred-reveal > .tc-input { padding-right: 2.5rem; }
+.tc-cred-reveal > .tc-reveal { position: absolute; right: 0.375rem; }
+.tc-cred-keep { align-self: flex-start; padding: 0; min-height: 1.25rem; }
+.tc-cred-editor .tc-cred-hostkey--first { border-top: 0; padding-top: 0; }
+.tc-cred-test-line[data-tone="danger"], .tc-cred-test-line[data-tone="danger"] > .tc-icon { color: var(--danger-text); }
+.tc-cred-test-line[data-tone="warn"], .tc-cred-test-line[data-tone="warn"] > .tc-icon { color: var(--warn-text); }
+.tc-cred-editor-error { flex: none; padding: 0.625rem 1.25rem; border-top: 1px solid var(--hairline); }
+.tc-cred-editor .tc-wizard-rail-toggle > code { font-size: 0.75rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tc-cred-editor .tc-wizard-rail-toggle > .tc-icon { flex: none; }
+.tc-cred-inspector .tc-cred-request, .tc-cred-editor .tc-cred-request { max-width: 100%; }
+@container credentials (max-width: 780px) {
+  .tc-cred-list > .tc-row { grid-template-columns: auto minmax(0, 1fr) 12rem 7.25rem; column-gap: 0.625rem; }
+  .tc-cred-meta { gap: 0.25rem 0.75rem; }
+}
+@container credentials (max-width: 660px) {
+  .tc-cred-list > .tc-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .tc-cred-list > .tc-row > .tc-cred-state { grid-column: 2; grid-row: 2; margin-top: 0.25rem; }
+  .tc-cred-list > .tc-row > .tc-row-actions { grid-column: 3; grid-row: 1 / span 2; }
+}
+:where(:root[data-compact]) .tc-cred-toolbar .tc-sk-search { flex: 1 1 calc(100% - 3.5rem); order: 1; }
+:where(:root[data-compact]) .tc-cred-toolbar > .tc-spacer { display: none; }
+:where(:root[data-compact]) .tc-cred-toolbar .tc-cred-add { order: 2; flex: none; width: var(--touch); height: var(--touch); padding: 0; }
+:where(:root[data-compact]) .tc-cred-add > span { display: none; }
+:where(:root[data-compact]) .tc-cred-toolbar .tc-sk-attention { order: 3; }
+:where(:root[data-compact]) .tc-cred-prow { width: 100%; appearance: none; border: 0; background: transparent; font: inherit; text-align: left; }
+:where(:root[data-compact]) .tc-cred-prow + .tc-cred-prow { border-top: 1px solid var(--hairline); }
+:where(:root[data-compact]) .tc-cred-prow .tc-prow-name { min-width: 0; overflow-wrap: anywhere; flex-wrap: wrap; gap: 0.25rem 0.5rem; }
+:where(:root[data-compact]) .tc-cred-prow .tc-mcp-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+:where(:root[data-compact]) .tc-cred-prow .tc-cred-state-line > span:last-child { white-space: normal; }
+:where(:root[data-compact]) .tc-cred-how { grid-template-columns: minmax(0, 1fr); }
+:where(:root[data-compact]) .tc-cred-how > div + div { border-left: 0; border-top: 1px solid var(--hairline); }
+:where(:root[data-compact]) .tc-cred-banner { flex-wrap: wrap; }
+:where(:root[data-compact]) .tc-cred-banner > .tc-cred-banner-actions { width: 100%; padding-left: 1.75rem; justify-content: flex-start; }
+:where(:root[data-compact]) .tc-cred-editor .tc-wizard-foot > .tc-wizard-keyboard { display: none; }
+:where(:root[data-compact]) .tc-cred-editor .tc-wizard-grid { grid-template-columns: minmax(0, 1fr); }
+:where(:root[data-compact]) .tc-cred-test .tc-cred-check { min-height: var(--touch); }
+.tc-root[data-density="touch"] :is(.tc-cred-inspector, .tc-cred-editor, .tc-cred-dialog) .tc-btn { min-height: var(--touch); }
+.tc-cred-skel { grid-template-columns: auto minmax(0, 1fr); min-height: 4.5rem; height: auto; padding: 1rem; }
+/* The handoff puts the toolbar close to the head and leaves a full row gap
+   before the list. Only this feature owns the adjustment. */
+.tc-credentials-library:has(> .tc-cred-toolbar) { gap: 1.25rem; }
+.tc-cred-state-line[data-tone="muted"] > .tc-dot { background: var(--fg-subtle); }
+.tc-cred-hostkey > .tc-cred-fp { word-break: break-all; }
+.tc-cred-hostkey + .tc-cred-test-line { padding-top: 0.625rem; border-top: 1px solid var(--hairline); }
+.tc-cred-compare > summary { color: var(--fg-muted); cursor: pointer; min-height: 2.75rem; align-content: center; }
+.tc-cred-compare > code { margin-top: 0.25rem; }
+:where(:root:not([data-compact])) .tc-layer--sheet > .tc-cred-inspector { width: min(32.5rem, calc(100dvw - 1rem)); }
+.tc-cred-facts .tc-cred-fp { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.tc-cred-key-type { color: var(--fg-muted); font-size: 0.6875rem; }
+.tc-cred-fingerprint { display: block; font-size: 0.6875rem; line-height: 1rem; word-break: break-all; }
+.tc-cred-facts .tc-cred-fp small { display: block; margin: 0; }
+.tc-cred-snippet-detail > summary { font-size: 0.75rem; color: var(--fg-muted); cursor: pointer; }
+.tc-cred-snippet-detail > .tc-cred-snippet { margin-top: 0.5rem; }
+:where(:root[data-compact]) .tc-cred-snippet-detail > summary { min-height: 2.75rem; align-content: center; }
+
+.tc-cred-inspector .tc-insp-title h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-cred-skill > div { min-width: 0; overflow-wrap: anywhere; }
+.tc-cred-dialog .tc-dialog-title, .tc-cred-editor .tc-sheet-title { overflow-wrap: anywhere; }
+.tc-cred-result { display: flex; flex-direction: column; gap: 1.25rem; }
+.tc-cred-result > .tc-cred-banner-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+:where(:root[data-compact]) .tc-layer--sheet > .tc-cred-inspector { max-height: 84dvh; }

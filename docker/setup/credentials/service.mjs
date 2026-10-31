@@ -26,7 +26,7 @@ export function createCredentialsService({ store = createCredentialStore(), usag
   const trustSaved = async (id, expected, signal, revision) => {
     const profile = await store.public(id);
     if (profile.type !== 'ssh') throw new CredentialError('Choose an SSH credential.');
-    if (revision !== undefined && revision !== profile.revision) throw new CredentialError('This credential changed before its key could be trusted.', 409, 'changed');
+    if (revision !== undefined && revision !== profile.revision) throw new CredentialError('This credential changed before its key could be reviewed. Read the current details first.', 409, 'changed', { current: profile });
     const scanned = await scan(profile, signal);
     if (!scanned.ok) return { ok: false, code: scanned.code };
     if (scanned.key.fingerprint !== expected) throw new CredentialError('The server presented another key. Review its new fingerprint before trusting it.', 409, 'key-changed', { presented: scanned.hostKey.presented });
@@ -82,10 +82,11 @@ export function createCredentialsService({ store = createCredentialStore(), usag
       if (route === '/credentials/remove') return { ok: true, ...await store.remove(input) };
       if (route === '/credentials/forget-host-key') { await store.forget(input.id); return { ok: true }; }
       if (route === '/credentials/test') return network(signal => testInput(input, signal));
-      if (route === '/credentials/trust') { const expected = validTrust({ fingerprint: input.fingerprint }); return network(signal => trustSaved(input.id, expected, signal)); }
+      if (route === '/credentials/trust') { const expected = validTrust({ fingerprint: input.fingerprint }); return network(signal => trustSaved(input.id, expected, signal, input.revision)); }
       if (route === '/credentials/scan') return network(async signal => {
         const profile = input.id === undefined ? { host: input.host, port: input.port } : await store.public(input.id);
         if (input.id !== undefined && profile.type !== 'ssh') throw new CredentialError('Choose an SSH credential.');
+        if (input.revision !== undefined && input.revision !== profile.revision) throw new CredentialError('This credential changed before its key could be reviewed. Read the current details first.', 409, 'changed', { current: profile });
         const started = clock(), scanned = await scan(profile, signal);
         return scanned.ok ? { ok: true, hostKey: scanned.hostKey } : { ok: true, result: { ...scanned, ms: clock() - started } };
       });

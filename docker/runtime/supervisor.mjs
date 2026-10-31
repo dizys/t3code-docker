@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { refreshSetupBridge } from "./client-shell.mjs";
 import { CHANNELS, exactVersion, databaseName, validScopes, validPatchRevision, runtimePaths, readJson, writeJson, readSelection, selectedRuntime } from "./state.mjs";
 
 const sqlite = /\.(?:sqlite3?|db)(?:-wal|-shm|-journal)?$/;
@@ -226,6 +227,9 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, stop);
 
   const launch = async (runtime, update = null) => {
+    if (stopping) throw new Error("The container is stopping.");
+    const bridge = env.T3_SETUP_BRIDGE || (await exists('/usr/local/share/t3-client/setup-bridge.js') ? '/usr/local/share/t3-client/setup-bridge.js' : null);
+    await refreshSetupBridge(runtime, bridge);
     if (stopping) throw new Error("The container is stopping.");
     const process_ = spawn(runtime.binary, args, {
       env: { ...env,

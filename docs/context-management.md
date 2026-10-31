@@ -7,8 +7,19 @@ tab (`#instructions/skills`). Shared servers live on the separate
 AGENTS.md beside the per-agent source choices. The instruction editor is centered
 on desktop and opens as a bottom sheet on phones. Uploading a Markdown file
 replaces the draft; only **Save** applies it. Downloads include unsaved edits.
+The editor shares Files’ bounded syntax renderer: Markdown headings, frontmatter,
+inline code and fenced source get syntax accents with line numbers. **Find** or
+**Ctrl/Command F** searches the complete draft. Escape closes Find before asking
+to close the editor. Native selection, copy, undo and input methods remain
+available. The Skills inspector uses the same surface for reading and editing
+SKILL.md, including read-only installations.
 Closing or leaving with unsaved edits asks before discarding them. Browser reloads
 warn while edits or a save are pending, and navigation waits for a save to finish.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="media/source-editing/instructions-dark.png">
+  <img src="media/source-editing/instructions-light.png" alt="Shared AGENTS.md source editor with syntax highlighting, line numbers and Find" width="1440">
+</picture>
 
 The canonical file lives at `$T3CODE_HOME/setup/context/AGENTS.md`, on the state
 volume. Saving writes it atomically with mode `0600`; initial creation links

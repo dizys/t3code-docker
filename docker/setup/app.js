@@ -1765,6 +1765,7 @@
       if (contextEditor.layer !== layer) return false;
       layer.close('cancel'); return true;
     };
+    const editor = T3CodeEditor.create({ id: 'cx-input', label: title, describedBy: 'cx-meta', placeholder: provider ? '# ' + providerName + ' instructions\n\nWrite guidance only ' + providerName + ' should follow.' : '# Instructions\n\nWrite guidance every agent reading this file should follow.' });
     contextEditor.requestClose = close;
     const editorMeta = () => contextEditor.loading ? 'Loading…'
       : M.formatBytes(new TextEncoder().encode(contextEditor.content).length) + ' · ' + (isDirty() ? 'Unsaved changes' : contextEditor.revision ? 'Saved' : 'New file');
@@ -1773,24 +1774,26 @@
       panel: { tag: 'div', class: 'tc-sheet tc-context-sheet ' + (Kit.isPhone() ? 'tc-sheet--bottom' : 'tc-sheet--inset'), role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'cx-title' },
       returnTo: trigger,
       backdrop: 'ignore',
-      onEscape: () => { void close(); },
+      onEscape: () => { if (!editor.escape()) void close(); },
       render: () => html`
         <div class="tc-sheet-head">${provider ? tile({ mark: provider }, 'lg') : html`<span class="tc-tile tc-tile--icon tc-tile--lg" aria-hidden="true">${icon('book-open')}</span>`}<div class="tc-sheet-head-text"><h2 class="tc-sheet-title" id="cx-title">${title}</h2><span class="tc-small tc-muted">${provider ? 'Only ' + providerName + ' reads this file' : readers.length ? 'Read by ' + M.listOf(readers) : 'For every agent set to read it'}</span></div><span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-sheet="close" aria-label="Close"${contextEditor.saving ? raw(' disabled') : ''}>${icon('x')}</button></div>
         <div class="tc-sheet-body">
           ${contextEditor.error ? notice('danger', 'circle-alert', 'Could not load or save instructions', contextEditor.error) : ''}
           ${provider && contextEditor.path ? html`<span class="tc-hint tc-context-path" title="${contextEditor.path}">${contextEditor.path}</span>` : ''}
-          <div class="tc-editor-toolbar"><label class="tc-label" for="cx-input">Markdown</label><div class="tc-editor-tools"><button class="tc-btn tc-btn--ghost tc-btn--sm" type="button" data-sheet="upload" title="Replace this draft from a Markdown file"${contextEditor.loading || contextEditor.saving || contextEditor.readError ? raw(' disabled') : ''}>${icon('upload')}Upload</button><button class="tc-btn tc-btn--ghost tc-btn--sm" type="button" data-sheet="download" title="Download, including unsaved edits"${contextEditor.loading || contextEditor.saving || contextEditor.readError ? raw(' disabled') : ''}>${icon('download')}Download</button><button class="tc-btn tc-btn--ghost tc-btn--sm" type="button" data-sheet="copy"${contextEditor.loading || contextEditor.saving || contextEditor.readError ? raw(' disabled') : ''}>${icon('copy')}Copy</button></div><input id="cx-file" data-key="cx-file" type="file" accept=".md,text/markdown" aria-label="Upload instructions Markdown" hidden></div>
-          <textarea class="tc-input tc-input--area tc-editor-area" id="cx-input" data-key="cx-input" aria-describedby="cx-meta"${contextEditor.loading || contextEditor.saving || contextEditor.readError ? raw(' disabled') : ''} rows="14" spellcheck="false" placeholder="${provider ? '# ' + providerName + ' instructions\n\nWrite guidance only ' + providerName + ' should follow.' : '# Instructions\n\nWrite guidance every agent reading this file should follow.'}">${contextEditor.content}</textarea>
+          <div class="tc-editor-toolbar"><label class="tc-label" for="cx-input">${filename}</label><div class="tc-editor-tools"><button class="tc-btn tc-btn--ghost tc-btn--sm" type="button" data-sheet="upload" title="Replace this draft from a Markdown file"${contextEditor.loading || contextEditor.saving || contextEditor.readError ? raw(' disabled') : ''}>${icon('upload')}Upload</button><button class="tc-btn tc-btn--ghost tc-btn--sm" type="button" data-sheet="download" title="Download, including unsaved edits"${contextEditor.loading || contextEditor.saving || contextEditor.readError ? raw(' disabled') : ''}>${icon('download')}Download</button><button class="tc-btn tc-btn--ghost tc-btn--sm" type="button" data-sheet="copy"${contextEditor.loading || contextEditor.saving || contextEditor.readError ? raw(' disabled') : ''}>${icon('copy')}Copy</button></div><input id="cx-file" data-key="cx-file" type="file" accept=".md,text/markdown" aria-label="Upload instructions Markdown" hidden></div>
+          ${editor.markup()}
           <div class="tc-editor-meta"><span id="cx-meta" data-key="cx-meta">${editorMeta()}</span><span>${provider ? 'Saving updates this file wherever it is used. Symlinks stay in place.' : 'Agents with a file of their own keep it.'}<span class="tc-desk-only"> Ctrl/⌘ S to save.</span></span></div>
         </div>
         <div class="tc-sheet-foot"><button class="tc-btn tc-btn--ghost" type="button" data-sheet="close"${contextEditor.saving ? raw(' disabled') : ''}>Cancel</button><button class="tc-btn tc-btn--primary" type="button" data-sheet="save"${!isDirty() || contextEditor.loading || contextEditor.saving ? raw(' disabled') : ''}>${contextEditor.saving ? 'Saving…' : 'Save'}</button></div>`,
+      onRender: layer => editor.sync(layer.panel, { value: contextEditor.content, disabled: contextEditor.loading || contextEditor.saving || contextEditor.readError }),
       focus: '#cx-input',
-      onClose: () => { window.removeEventListener('beforeunload', beforeUnload); contextEditor.layer = null; contextEditor.requestClose = null; },
+      onClose: () => { editor.destroy(); window.removeEventListener('beforeunload', beforeUnload); contextEditor.layer = null; contextEditor.requestClose = null; },
     });
     const layer = contextEditor.layer;
     const panel = layer.panel;
     window.addEventListener('beforeunload', beforeUnload);
     const syncEditor = () => {
+      editor.sync(panel, { value: contextEditor.content, disabled: contextEditor.loading || contextEditor.saving || contextEditor.readError });
       const meta = panel.querySelector('#cx-meta');
       if (meta) meta.textContent = editorMeta();
       const save = panel.querySelector('[data-sheet="save"]');
@@ -1820,7 +1823,7 @@
       if (e.target.id === 'cx-input') { contextEditor.content = e.target.value; syncEditor(); }
     });
     panel.addEventListener('keydown', (e) => {
-      if (e.target.id === 'cx-input' && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      if (!e.isComposing && e.target.id === 'cx-input' && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         panel.querySelector('[data-sheet="save"]')?.click();
       }
@@ -1981,7 +1984,7 @@
     if (name === 'instructions' && sub === 'mcp') { history.replaceState(null, '', '#mcp'); return 'mcp'; }
     const route = TAB && name === 'more' ? 'overview' : T3Routes.resolve(name);
     if (route && route !== name) history.replaceState(null, '', '#' + route + (sub ? '/' + sub : ''));
-    if (route === 'instructions') state.contextTab = sub === 'skills' ? 'skills' : 'instructions';
+    if (route === 'instructions') { state.contextTab = sub === 'skills' ? 'skills' : 'instructions'; if (sub === 'skills') skillsUI.show(location.hash.split('/')[2] === 'updates' ? 'updates' : 'all'); }
     return route && PAGES[route] ? route : 'overview';
   };
   const go = (route) => {
@@ -4140,7 +4143,8 @@
         }
       }
       if (TAB && m.type === 'navigate' && typeof m.route === 'string' && m.route.length <= 100) {
-        const route = T3Routes.resolve(m.route);
+        const destination = T3Routes.destination(m.route);
+        const route = destination && T3Routes.resolve(destination.split('/')[0]);
         if (route && route !== 'more' && PAGES[route]) go(m.route);
       }
     });

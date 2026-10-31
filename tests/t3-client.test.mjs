@@ -246,3 +246,11 @@ test('future registry pages flow into navigation diffs and palette without a bri
   const items=B.readPalette([{id:'backups',route:'backups',title:'Backups',meta:'Setup · restore points',icon:'home',terms:['restore']}],next);
   assert.equal(B.paletteMatches('setup backups',items)[0].route,'backups');
 });
+
+
+test('palette subpages preserve their hash and reject malformed or cross-page destinations',()=>{
+  const nav=navFixture();nav.groups[0].pages.push({route:'files',title:'Files',icon:'folder',badge:null});
+  const item={id:'trash',route:'files',hash:'files/trash',title:'Trash',meta:'Setup',icon:'folder',terms:['trash']};
+  assert.equal(B.readPalette([item],nav)[0].hash,'files/trash');
+  for(const hash of ['access/trash','files/../access','files/trash?key=private','files/trash#x','https://example.com','files//trash','files/<script>'])assert.equal(B.readPalette([{...item,hash}],nav),null,hash);
+});

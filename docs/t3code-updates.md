@@ -81,3 +81,8 @@ permissions, as required by T3 Code itself.
 Conversely, credentials first issued on Nightly can contain signed permission
 claims Stable 0.0.45 cannot decode. Those devices need pairing again on Stable;
 their original credentials work again on Nightly unless revoked or expired.
+
+The Setup bridge in the native client belongs to the Docker image. Starting a
+retained runtime refreshes only that marked script from the image, so Setup’s
+palette entries and embedded navigation stay current without a T3 runtime
+update. Native executable files, the selected version and preferences are kept.

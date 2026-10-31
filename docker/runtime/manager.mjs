@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { unpackRelease, executableVersion } from "./releases.mjs";
 import { packageRelease, releaseForVersion } from "./distribution.mjs";
 import { PATCH_REVISION } from "./distribution-spec.mjs";
+import { injectSetupBridge } from "./client-shell.mjs";
 import { CHANNELS, channelOf, exactVersion, databaseName, validScopes, runtimePaths, readJson, writeJson, readSelection, selectedRuntime, releaseDirectory, operationBusy } from "./state.mjs";
 // The checkout and image deliberately have different infrastructure prefixes.
 const localHarness = new URL("../harness/", import.meta.url);
@@ -62,8 +63,7 @@ export async function installRelease(paths, release, { fetcher = fetch, run = ex
     const shellPath = path.join(unpacked, "client/index.html");
     const shell = await fs.readFile(shellPath, "utf8");
     const script = await fs.readFile(bridge, "utf8");
-    if (!shell.includes("</body>") || !script.includes("data-t3-setup-entry") || /<\/script/i.test(script)) throw new Error("This release cannot preserve the Setup entry. The running version was kept.");
-    await fs.writeFile(shellPath, shell.replace("</body>", `<script data-t3-setup-bridge>\n${script}\n</script>\n</body>`));
+    await fs.writeFile(shellPath, injectSetupBridge(shell, script));
     const capabilities = await discoverRuntime(binary, paths, { run, env });
     await writeJson(path.join(unpacked, ".installed.json"), { version: release.version, integrity: release.integrity, package: release.name, ...(release.patchRevision ? { patchRevision: release.patchRevision, distributionDigest: release.distributionDigest ?? null, manifestDigest: release.manifestDigest ?? null } : {}), ...capabilities });
     await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });

@@ -68,7 +68,7 @@ if (args[0] === 'cp') {
   const files=await run('','files_browser_works');
   assert.equal(files.status,0,await fs.readFile(path.join(root,'output.log'),'utf8'));
   assert.deepEqual((await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse),[
-    'files-ui-audit.js','files-change-ui-audit.js','files-space-ui-audit.js',
+    'files-ui-audit.js','files-change-ui-audit.js','files-space-ui-audit.js','console-editor-ui-audit.js',
   ]);
   assert.notEqual((await run('console-download-fixture.cjs','files_browser_works')).status,0,'native download transport must be staged');
 });

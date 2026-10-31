@@ -209,3 +209,9 @@ false is finishing its publication or removal and must be allowed to finish.
 Treat `stale` as a new review and `busy` as a wait; never replay an action after
 a lost reply. All these endpoints retain Setup authentication and same-origin
 write checks.
+
+When a selection shares space with the Details panel, the selection count stays
+readable and secondary actions move into **More selection actions**. Download
+and Move to Trash remain visible; Move to, Compress and single-item Details
+remain available in that menu. The layout follows the file-list width rather
+than the browser window.

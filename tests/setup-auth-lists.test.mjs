@@ -67,7 +67,7 @@ if(action==='list') {
     assert.equal(hello.nav.attention, hello.attention); assert.equal(hello.nav.current, null);
     const pages = hello.nav.groups.flatMap(g => g.pages);
     assert.equal(pages.length, 12); assert(hello.palette.some(p => p.route === 'files'));
-    assert.deepEqual(Object.keys(hello.icons).sort(), [...new Set(pages.map(p => p.icon))].sort());
+    assert.deepEqual(Object.keys(hello.icons).sort(), [...new Set([...pages, ...hello.palette].map(p => p.icon))].sort());
     assert(!('paths' in hello)); assert(!('server' in hello));
   }
   for (const hello of hellos.slice(1)) assert.deepEqual(hello, hellos[0], 'concurrent hosts share one cached navigation snapshot');

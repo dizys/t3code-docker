@@ -5,7 +5,10 @@ const T3SkillInspector = (() => {
   const S = T3SkillModel;
   const disabled = value => value ? raw(' disabled') : '';
   const bytes = value => T3Model.formatBytes(value || 0);
-  const code = (text, label = 'SKILL.md contents') => html`<pre class="tc-code" tabindex="0" aria-label="${label}">${String(text).split('\n').map(line => html`<span>${line || '\n'}</span>`)}</pre>`;
+  const code = (text, label = 'SKILL.md contents') => {
+    const doc = T3CodeText.documentOf(String(text), 'markdown');
+    return html`<pre class="tc-code" tabindex="0" aria-label="${label}">${doc.lines.map((line, index) => html`<span><code>${T3CodeText.tokens(line || '\n', doc.modes[index]).map(token => token.tone ? html`<span class="${token.tone}">${token.text}</span>` : token.text)}${line.slice(4000)}</code></span>`)}</pre>`;
+  };
   const create = ({ api, getLibrary, getStatus, availability, refresh, readMarkdown, downloadMarkdown }) => {
     let active = null;
     const repaint = () => { if (active && !active.layer.closed) active.layer.render(); };
@@ -20,6 +23,7 @@ const T3SkillInspector = (() => {
         target: targets.find(target => library.installed.includes(target.provider))?.value || targets[0]?.value,
         generated: true, loading: !creating, saving: false, error: null, layer: null };
       active = view;
+      const editor = T3CodeEditor.create({ id: 'skill-content', label: 'SKILL.md contents', describedBy: 'skill-editor-meta' });
       const row = () => getLibrary().rows.find(row => row.key === key) || skill;
       const detail = () => view.data || row();
       const dirty = () => view.draft !== view.original || (creating && Boolean(view.slug));
@@ -81,7 +85,7 @@ const T3SkillInspector = (() => {
         ${view.editing ? html`<button class="tc-btn tc-btn--ghost tc-btn--sm" type="button" data-inspect-upload${disabled(view.loading || view.saving)}>Upload</button><input id="skill-file" type="file" accept=".md,text/markdown" hidden>` : ''}
         <button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-inspect-copy aria-label="Copy SKILL.md"${disabled(view.loading || !view.data && !creating)}>${icon('copy')}</button>
         <button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-inspect-download aria-label="Download SKILL.md"${disabled(view.loading || !view.data && !creating)}>${icon('download')}</button></div></div>
-        ${view.loading ? html`<p class="tc-hint" role="status">Reading SKILL.md…</p>` : view.data || creating ? view.editing ? html`<textarea id="skill-content" data-key="skill-content" class="tc-input tc-input--area tc-editor-area" spellcheck="false" rows="16" aria-describedby="skill-editor-meta"${disabled(view.saving)}>${view.draft}</textarea><div class="tc-editor-meta" id="skill-editor-meta"><span data-editor-bytes>${bytes(new TextEncoder().encode(view.draft).length)}</span><span data-editor-dirty>${dirty() ? 'Unsaved changes' : 'Saved'}</span></div>` : code(view.draft) : ''}</section>`;
+        ${view.loading ? html`<p class="tc-hint" role="status">Reading SKILL.md…</p>` : view.data || creating ? html`${editor.markup()}<div class="tc-editor-meta" id="skill-editor-meta"><span data-editor-bytes>${bytes(new TextEncoder().encode(view.draft).length)}</span><span data-editor-dirty>${view.editing && dirty() ? 'Unsaved changes' : view.editing ? 'Saved' : 'Read-only'}</span></div>` : ''}</section>`;
       const footer = () => {
         const file = detail();
         if (!creating && !view.data) return html`<span class="tc-hint">${view.loading ? 'Reading skill details…' : 'Rescan to load the current installation.'}</span><span class="tc-spacer"></span><button class="tc-btn" type="button" data-inspect-rescan${disabled(view.loading)}>Rescan library</button>`;
@@ -93,8 +97,9 @@ const T3SkillInspector = (() => {
       };
       view.layer = Kit.open({ kind: 'sheet', returnTo: document.activeElement,
         panel: { class: 'tc-sheet tc-skill-inspector' + (Kit.isPhone() ? ' tc-sheet--bottom' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'skill-view-title' },
-        focus: '[data-inspect-close]', backdrop: 'ignore', onEscape: () => { void view.close('escape'); },
-        onClose: () => { window.removeEventListener('beforeunload', beforeUnload); if (active === view) active = null; },
+        focus: '[data-inspect-close]', backdrop: 'ignore', onEscape: () => { if (!editor.escape()) void view.close('escape'); },
+        onRender: layer => editor.sync(layer.panel, { value: view.draft, disabled: view.loading || view.saving, readOnly: !view.editing }),
+        onClose: () => { editor.destroy(); window.removeEventListener('beforeunload', beforeUnload); if (active === view) active = null; },
         render: () => html`<div class="tc-insp-head"><span class="tc-tile tc-tile--icon" aria-hidden="true">${icon('file-text')}</span><div class="tc-insp-title"><h2 id="skill-view-title">${creating ? 'New skill' : skill.name}</h2><div class="tc-insp-meta">${creating ? 'Write instructions for your agents' : html`${skill.groupLabel}<span>·</span>${detail()?.canEdit ? 'Editable' : 'Read-only'}${view.data?.files ? html`<span>·</span>${T3Model.plural(view.data.files.length, 'file')}` : ''}${view.data ? html`<span>·</span>${bytes(view.data.bytes)}` : ''}`}</div></div><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-inspect-close aria-label="Close skill inspector"${disabled(view.saving)}>${icon('x')}</button></div>
           <div class="tc-insp-body" aria-busy="${String(view.loading || view.saving)}">
             ${view.error ? html`<div class="tc-notice tc-notice--danger" role="alert">${icon('circle-alert')}<div><strong>${view.data || creating ? 'Couldn’t complete this change' : 'Couldn’t read this skill'}</strong><p>${view.error}</p></div></div>` : ''}
@@ -103,6 +108,7 @@ const T3SkillInspector = (() => {
           </div><div class="tc-sheet-foot tc-insp-foot">${footer()}</div>` });
       window.addEventListener('beforeunload', beforeUnload);
       const syncEditor = () => {
+        editor.sync(view.layer.panel, { value: view.draft, disabled: view.loading || view.saving, readOnly: !view.editing });
         const save = view.layer.panel.querySelector('[data-inspect-save]');
         if (save) save.disabled = view.loading || view.saving || (creating && !view.slug.trim());
         const size = view.layer.panel.querySelector('[data-editor-bytes]'); if (size) size.textContent = bytes(new TextEncoder().encode(view.draft).length);
@@ -127,7 +133,7 @@ const T3SkillInspector = (() => {
         const field = view.layer.panel.querySelector('#skill-content'); if (field) field.value = view.draft;
       });
       view.layer.panel.addEventListener('keydown', event => {
-        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's' && view.editing) { event.preventDefault(); view.layer.panel.querySelector('[data-inspect-save]')?.click(); }
+        if (!event.isComposing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's' && view.editing) { event.preventDefault(); view.layer.panel.querySelector('[data-inspect-save]')?.click(); }
       });
       const act = async (action, button) => {
         if (action === 'data-inspect-hooks' && !view.saving && !view.loading) { getLibrary().reviewHooks(row()?.byProvider?.codex?.pluginId); return; }

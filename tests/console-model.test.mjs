@@ -1444,8 +1444,10 @@ test("every page is named once, in the table the shell, router and palette read"
     assert.ok(!page.summary.endsWith(" "), page.route);
   }
   const goTo = plain(M.paletteItems(statusWith(), null, ui(), NOW)).filter((i) => i.group === "Go to");
-  assert.deepEqual(goTo.map((i) => i.cmd.route), routes, "the palette reaches every page, in the sidebar's order");
-  assert.ok(goTo.every((i) => /^G [A-Z]$/.test(i.shortcut)));
+  assert.deepEqual(goTo.map((i) => i.cmd.route), [...routes, ...plain(R.DESTINATIONS.map(item => item.hash))], "the palette reaches every page, in the sidebar's order");
+  assert.ok(goTo.slice(0, routes.length).every((i) => /^G [A-Z]$/.test(i.shortcut)));
+  for (const item of R.DESTINATIONS) assert.equal(R.destination(item.hash), item.hash);
+  for (const invalid of ['files/../access', 'instructions/unknown', 'files/home?token=private']) assert.equal(R.destination(invalid), null);
   // Tabs: the rest of the pages are under More.
   for (const tab of R.TABS) assert.equal(R.tabOf(tab.route), tab.route);
   assert.equal(R.tabOf("environment"), "more");

@@ -249,7 +249,7 @@ const Kit = (() => {
     el.appendChild(panel);
     layer.el = el;
     layer.panel = panel;
-    layer.render = () => { if (!layer.closed) patch(panel, opts.render()); };
+    layer.render = () => { if (!layer.closed) { patch(panel, opts.render()); opts.onRender?.(layer); } };
     layer.close = (reason) => {
       if (layer.closed) return;
       layer.closed = true;

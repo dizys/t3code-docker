@@ -952,6 +952,11 @@ html.tc-locked { overflow: hidden; }
 .tc-code { margin: 0; padding: 0.75rem 0; border-radius: var(--radius-lg); border: 1px solid var(--border); background: var(--surface-sunken); font: 400 0.75rem/1.25rem var(--font-mono); color: var(--fg); overflow: hidden; counter-reset: ln; }
 .tc-code > span { display: grid; grid-template-columns: var(--touch) minmax(0, 1fr); padding: 0 0.875rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tc-code > span::before { counter-increment: ln; content: counter(ln); padding-right: 0.75rem; text-align: right; color: var(--fg-subtle); user-select: none; }
+.tc-code > span > code { font: inherit; min-width: 0; }
+.tc-code .m { color: var(--fg-muted); }
+.tc-code .s { color: var(--ok-text); }
+.tc-code .k { color: var(--accent-text); }
+.tc-code .h, .tc-code .b { font-weight: 600; }
 .tc-code-fade { position: relative; }
 .tc-code-fade::after { content: ""; position: absolute; left: 1px; right: 1px; bottom: 1px; height: 3.5rem; border-radius: 0 0 var(--radius-lg) var(--radius-lg); background: linear-gradient(to bottom, transparent, var(--surface-sunken)); pointer-events: none; }
 
@@ -2311,10 +2316,10 @@ button.tc-dv-hunk { width: 100%; border-left: 0; border-right: 0; cursor: pointe
   background: color-mix(in srgb, var(--accent) 6%, var(--surface)); border-radius: calc(var(--radius-xl) - 1px) calc(var(--radius-xl) - 1px) 0 0; }
 [data-theme="dark"] .tc-fl-selbar { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
 .tc-fl-selbar > .tc-checkbox { flex: none; }
-.tc-files-selection-summary { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.5rem; min-width: 0; font-size: 0.8125rem; }
+.tc-files-selection-summary { display: flex; flex: 1 0 10rem; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.5rem; min-width: min(10rem, 100%); font-size: 0.8125rem; }
 .tc-files-selection-summary strong { font-weight: 500; white-space: nowrap; }
 .tc-files-selection-summary span { color: var(--fg-muted); font-size: 0.78125rem; }
-.tc-files-selection-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.25rem; max-width: 100%; margin-left: auto; }
+.tc-files-selection-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.375rem; max-width: 100%; margin-left: auto; }
 
 /* Footer of the list: counts, hidden items, scan time. */
 .tc-fl-foot { display: flex; align-items: center; gap: 0.5rem; min-height: 2.5rem; padding: 0 0.75rem 0 1rem; border-top: 1px solid var(--border); font-size: 0.75rem; color: var(--fg-muted);
@@ -2826,15 +2831,17 @@ button.tc-fd-item:hover { background: var(--hover); }
 .tc-files-editor-workspace { position: relative; flex: 1; min-height: 11.25rem; overflow: hidden; background: var(--surface-sunken); }
 .tc-files-editor-mirror, .tc-files-editor-input { position: absolute; inset: 0; margin: 0; padding: 0.75rem 1rem 0.75rem 0; font: 400 0.8125rem/1.375rem var(--font-mono); tab-size: 2; letter-spacing: 0; border: 0; border-radius: 0; }
 .tc-files-editor-mirror { overflow: hidden; pointer-events: none; white-space: pre; color: var(--fg); }
-.tc-files-editor-line { display: block; position: relative; min-width: 100%; width: max-content; height: 1.375rem; padding-left: 3rem; }
-.tc-files-editor-line > i { position: sticky; left: 0; display: inline-block; width: 2.625rem; margin-left: -3rem; padding-right: 0.75rem; font-style: normal; text-align: right; color: var(--fg-subtle); user-select: none; background: var(--surface-sunken); }
+.tc-files-editor-line { display: block; position: relative; min-width: 100%; width: max-content; height: 1.375rem; padding-left: var(--code-gutter, 3rem); }
+.tc-files-editor-line > i { position: sticky; left: 0; display: inline-block; width: calc(var(--code-gutter, 3rem) - 0.375rem); margin-left: calc(-1 * var(--code-gutter, 3rem)); padding-right: 0.75rem; font-style: normal; text-align: right; color: var(--fg-subtle); user-select: none; background: var(--surface-sunken); }
 .tc-files-editor-line[data-cur] { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .tc-files-editor-line[data-cur] > i { color: var(--fg); background: color-mix(in srgb, var(--accent) 6%, var(--surface-sunken)); }
 .tc-files-editor-line code { font: inherit; padding-left: 0.375rem; }
-.tc-files-editor-line .c { color: var(--fg-muted); }
+.tc-files-editor-line .c, .tc-files-editor-line .m { color: var(--fg-muted); }
 .tc-files-editor-line .s { color: var(--ok-text); }
 .tc-files-editor-line .k { color: var(--accent-text); }
-.tc-files-editor-input { padding-left: 3rem; width: 100%; height: 100%; resize: none; color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--accent); background: transparent; overflow: auto; outline: none; white-space: pre; }
+.tc-files-editor-line .h { color: var(--fg); font-weight: 600; }
+.tc-files-editor-line .b { font-weight: 600; }
+.tc-files-editor-input { padding-left: calc(var(--code-gutter, 3rem) + 0.375rem); width: 100%; height: 100%; resize: none; color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--accent); background: transparent; overflow: auto; outline: none; white-space: pre; }
 .tc-files-editor-input::selection { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .tc-files-editor-input:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
 .tc-files-editor-status { flex: none; border-top: 1px solid var(--hairline); border-bottom: 0; }
@@ -2854,6 +2861,24 @@ button.tc-fd-item:hover { background: var(--hover); }
 .tc-files-compare-limit { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 0.75rem; padding: 1rem; }
 .tc-files-compare-limit textarea { flex: 1; min-height: 11.25rem; resize: none; }
 .tc-files-compare-limit p { margin: 0; font-size: 0.8125rem; color: var(--fg-muted); }
+/* Shared source surfaces keep native input and a bounded syntax mirror. */
+.tc-source-editor { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunken); }
+.tc-source-tools, .tc-source-status { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.375rem 0.75rem; font-size: 0.6875rem; color: var(--fg-muted); }
+.tc-source-tools { border-bottom: 1px solid var(--hairline); background: var(--surface); }
+.tc-source-editor .tc-files-editor-workspace { flex: none; height: clamp(14rem, 40dvh, 32rem); }
+.tc-source-status { border-top: 1px solid var(--hairline); }
+.tc-source-find { display: flex; align-items: center; gap: 0.25rem; padding: 0.375rem; border-bottom: 1px solid var(--hairline); }
+.tc-source-find[hidden] { display: none; }
+.tc-source-find > .tc-input { flex: 1; min-width: 0; }
+.tc-source-find > span { font-size: 0.6875rem; color: var(--fg-muted); white-space: nowrap; }
+.tc-source-editor textarea:disabled { opacity: 0.6; cursor: progress; }
+.tc-source-editor:has(textarea:disabled) [data-source-canvas] { opacity: 0.6; }
+.tc-source-editor .tc-files-editor-input::placeholder { color: var(--fg-subtle); -webkit-text-fill-color: var(--fg-subtle); }
+.tc-context-sheet .tc-source-editor .tc-files-editor-workspace { height: clamp(14rem, 42dvh, 32rem); }
+@media (forced-colors: active) {
+  .tc-files-editor-mirror { visibility: hidden; }
+  .tc-files-editor-input { color: CanvasText; -webkit-text-fill-color: CanvasText; caret-color: CanvasText; }
+}
 @media (max-width: 639.98px) {
   .tc-layer--sheet > .tc-sheet--editor { width: 100%; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; }
   .tc-files-editor .tc-ed-head { padding-top: max(0.875rem, env(safe-area-inset-top)); }
@@ -3325,4 +3350,11 @@ body[data-console-route="files"]:has(.tc-layer) .tc-toaster { visibility: hidden
   :root[data-host="tab"] .tc-wizard-rail { min-height: 0; padding: 0 1rem 1rem; }
   :root[data-host="tab"] .tc-wizard-rail-wrap:not([data-open]) > .tc-wizard-rail { display: none; }
   :root[data-host="tab"] .tc-wizard-rail-wrap[data-open] .tc-wizard-rail-toggle > .tc-icon { transform: rotate(180deg); }
+}
+
+/* The selection lane can be much narrower than the console when Details is
+   open. Keep common actions visible and move secondary actions into More. */
+#files-browser .tc-fcard { container: files-card / inline-size; }
+@container files-card (max-width: 720px) {
+  #files-browser .tc-files-selection-actions :is([data-cmd="files.compress"], [data-cmd="files.move"], [data-cmd="files.details"]) { display: none; }
 }

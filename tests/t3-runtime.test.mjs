@@ -269,7 +269,28 @@ process.on('SIGTERM', () => process.exit(143));
 setInterval(() => {}, 1000);
 `;
   await fs.writeFile(path.join(dir, "t3"), code, { mode: 0o755 });
+  await fs.mkdir(path.join(dir, "client"), { recursive: true });
+  await fs.writeFile(path.join(dir, "client/index.html"), "<body>Fixture native client</body>");
 }
+
+test("starting a retained runtime refreshes only its image-owned Setup bridge", async t => {
+  const {root,env,paths} = await world(t);
+  await fakeRuntime(paths, NIGHTLY);
+  const directory = releaseDirectory(paths,{version:NIGHTLY});
+  const shell = path.join(directory,'client/index.html');
+  const script = '// data-t3-setup-entry\nconst currentNavigation = true;';
+  env.T3_SETUP_BRIDGE = path.join(root,'image-bridge.js');
+  await fs.writeFile(env.T3_SETUP_BRIDGE,script);
+  await fs.writeFile(shell,'<body><script data-t3-setup-bridge>obsoleteModal()</script></body>');
+  const selection = {schema:1,channel:'nightly',version:NIGHTLY,updateId:'keep-update-identity'};
+  await writeJson(paths.selection,selection);
+  const binaryBefore = await fs.readFile(path.join(directory,'t3'));
+  await supervisor(t,env);
+  assert((await fs.readFile(shell,'utf8')).includes(script));
+  assert(!(await fs.readFile(shell,'utf8')).includes('obsoleteModal'));
+  assert.deepEqual(await readSelection(paths),selection);
+  assert.deepEqual(await fs.readFile(path.join(directory,'t3')),binaryBefore);
+});
 
 async function supervisor(t, env, timeout = 2000, authenticationTimeoutMs) {
   const options = { preparedTimeoutMs: timeout, ...(authenticationTimeoutMs === undefined ? {} : { authenticationTimeoutMs }) };

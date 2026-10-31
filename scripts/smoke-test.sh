@@ -828,6 +828,7 @@ files_browser_works() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0
   docker exec "$NAME" mkdir -p /tmp/t3-files-audit/lib /tmp/t3-files-audit/fixtures || return 1
   docker cp scripts/files-ui-audit.js "$NAME:/tmp/t3-files-audit/files-ui-audit.js" >/dev/null 2>&1 || return 1
+  docker cp scripts/console-editor-ui-audit.js "$NAME:/tmp/t3-files-audit/console-editor-ui-audit.js" >/dev/null 2>&1 || return 1
   docker cp scripts/files-change-ui-audit.js "$NAME:/tmp/t3-files-audit/files-change-ui-audit.js" >/dev/null 2>&1 || return 1
   docker cp scripts/files-space-ui-audit.js "$NAME:/tmp/t3-files-audit/files-space-ui-audit.js" >/dev/null 2>&1 || return 1
   for helper in console-fixtures.cjs files-fixtures.cjs skills-fixtures.cjs mcp-fixtures.cjs console-download-fixture.cjs; do
@@ -839,7 +840,9 @@ files_browser_works() {
   docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
     "$NAME" node /tmp/t3-files-audit/files-change-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
   docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
-    "$NAME" node /tmp/t3-files-audit/files-space-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
+    "$NAME" node /tmp/t3-files-audit/files-space-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
+  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    "$NAME" node /tmp/t3-files-audit/console-editor-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
 }
 check "Files browsing, selection, previews, Sizes and recovery work in every layout" files_browser_works
 

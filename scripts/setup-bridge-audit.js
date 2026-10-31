@@ -292,7 +292,22 @@ const run = async base => {
       await search(query);
       const result=page.locator('[data-t3-setup-item="'+id+'"]');
       await result.waitFor();
-      expect(await result.count()===1,'registry palette search finds '+route);
+      if(id==='files-trash') {
+        // Native asynchronous results can replace the list after our first
+        // row appears. Exercise that redraw instead of assuming the first
+        // observation remains valid until the next browser call.
+        const removed=await page.evaluate(()=>{
+          document.querySelector('[data-t3-setup-palette]')?.remove();
+          return document.querySelectorAll('[data-t3-setup-item="files-trash"]').length===0;
+        });
+        expect(removed,'native list redraw removes the injected palette results');
+      }
+      await page.waitForFunction(({id,query})=>{
+        const input=document.querySelector('[data-command-palette=true] input[role=combobox]');
+        const rows=document.querySelectorAll('[data-t3-setup-item="'+id+'"]');
+        return input?.value===query&&rows.length===1&&rows[0].getBoundingClientRect().height>0;
+      },{id,query});
+      ok('registry palette search finds '+id+' after native results settle');
       await page.waitForFunction(id=>{const icon=document.querySelector('[data-t3-setup-item="'+id+'"] > svg');return icon&&Math.abs(icon.getBoundingClientRect().width-16)<0.2;},id);
       expect(await result.locator('svg').evaluate(el=>Math.abs(el.getBoundingClientRect().width-16)<0.2&&Math.abs(el.getBoundingClientRect().height-16)<0.2),'palette icons stay bounded at 16px');
       await result.click();await page.locator('.t3-setup-pane[data-ready]').waitFor();frame=page.frames().find(f=>f.url().includes('/__setup/'));

@@ -983,6 +983,17 @@ sys.exit(0 if all(h[i]["runnable"] and h[i]["version"] for i in ("claude", "code
 # Retried: the card's facts refresh on the poll after the last install lands.
 check "every agent is runnable at a recorded version" "retry 10 agents_runnable"
 
+# Setup writes Pi's auth.json itself (Pi has no command that saves a key), so
+# the installed Pi must read those keys back, beside a /login subscription.
+pi_auth_native() {
+  local executable
+  docker cp scripts/pi-auth-smoke.mjs "$NAME:/tmp/pi-auth-smoke.mjs" >/dev/null 2>&1 || return 1
+  executable="$(status_json | jq -r '.harnesses[] | select(.id == "pi") | .executable')"
+  [ -n "$executable" ] && [ "$executable" != null ] || { printf 'No managed executable returned for pi\n'; return 1; }
+  docker exec -u t3 -e T3_HARNESS_MODULE=/opt/t3-harness/index.mjs "$NAME" node /tmp/pi-auth-smoke.mjs "$executable"
+}
+check "keys saved for Pi sit beside subscriptions and the installed Pi reads them" "pi_auth_native >>\"$UI_AUDIT_LOG\" 2>&1"
+
 # Exercise the modules actually copied into this image with its exact managed
 # executables. All provider settings/skills live in each script's scratch home;
 # no credential, prompt or model request is needed.
@@ -1182,6 +1193,21 @@ opencode_key_stored() {
   '
 }
 check "an API key is saved to the selected OpenCode credential store" opencode_key_stored
+
+# Pi's row asks Pi for its models, so a saved key turns the verdict around,
+# and removing it turns it back. The key never needs to be valid.
+pi_signed_in() { status_json | jq -e '.harnesses[] | select(.id == "pi") | .signedIn == true' >/dev/null; }
+pi_signed_out() { status_json | jq -e '.harnesses[] | select(.id == "pi") | .signedIn == false' >/dev/null; }
+pi_key_signs_in() {
+  pi_signed_out || return 1
+  auth_post '{"agent":"pi","provider":"openrouter","key":"sk-or-smoke-test-key"}' /auth/apikey | jq -e '.ok' >/dev/null || return 1
+  retry 10 pi_signed_in || return 1
+  docker exec -u t3 "$NAME" sh -c 'cat "$HOME/.pi/agent/auth.json"' |
+    jq -e '.openrouter == {"type": "api_key", "key": "sk-or-smoke-test-key"}' >/dev/null || return 1
+  auth_post '{"agent":"pi","provider":"openrouter"}' /auth/apikey/remove | jq -e '.removed == true' >/dev/null || return 1
+  retry 10 pi_signed_out
+}
+check "a provider key signs Pi in, and removing it signs Pi out" pi_key_signs_in
 
 check "an unknown agent is refused" \
   "auth_post '{\"agent\":\"bogus\",\"key\":\"x\"}' /auth/apikey | grep -q error"

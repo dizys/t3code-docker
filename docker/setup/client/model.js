@@ -20,7 +20,8 @@ const T3Model = (() => {
     grok: { name: 'Grok Build', mark: 'grok', mono: 'GB', hue: '--id-grok', how: 'device code', flow: 'device', command: 'grok login --device-auth' },
     cursor: { name: 'Cursor', mark: 'cursor', mono: 'CU', hue: '--id-cursor', how: 'browser sign-in', flow: 'browser', command: 'cursor-agent login' },
     muse: { name: 'Muse Code', mark: 'muse', mono: 'MC', hue: '--id-toolchain', how: 'device code', flow: 'device', command: 'muse login', keyCommand: 'muse auth set --api-key-stdin', requiresNightly: true },
-    pi: { name: 'Pi', mono: 'Pi', hue: '--id-toolchain', how: 'terminal /login', flow: 'terminal', command: 't3-login pi' },
+    // Keys per provider from Setup; subscriptions with /login inside Pi.
+    pi: { name: 'Pi', mark: 'pi', mono: 'Pi', hue: '--id-toolchain', how: 'API key or subscription', flow: 'key', subscription: true, command: 't3-login pi' },
     // Installed and signed in by T3 Code itself (managedBy: 't3').
     antigravity: { name: 'Antigravity', mark: 'antigravity', mono: 'AG', hue: '--id-toolchain', how: 'Google sign-in', flow: 'redirect', command: null },
   };
@@ -412,22 +413,24 @@ const T3Model = (() => {
     } else if (h.signedIn === false) {
       row.state = 'signin';
       row.attention = true;
-      row.status = { dot: 'warn', text: isKey ? 'No provider key yet' : 'Not signed in' };
+      row.status = { dot: 'warn', text: isKey && !meta.subscription ? 'No provider key yet' : 'Not signed in' };
+      // Pi's sheet takes a key or explains its subscription sign-in.
       row.action = isKey
-        ? { cmd: 'harness.apikey', label: 'Add key', icon: 'key-round', variant: 'primary' }
+        ? { cmd: 'harness.apikey', label: meta.subscription ? 'Sign in' : 'Add key', icon: meta.subscription ? 'log-in' : 'key-round', variant: 'primary' }
         : { cmd: 'harness.signin', label: 'Sign in', icon: 'log-in', variant: 'primary' };
     } else if (h.signedIn !== true) {
       row.state = 'unknown';
       row.status.text = h.id === 'muse' && h.credentialsPresent
         ? 'Credentials saved, checked when you first use it' : 'Couldn’t check its sign-in';
-      if (h.id === 'pi') row.status.text = 'Run t3-login pi, then /login; enable Pi in T3 Settings';
       if ((h.id === 'muse' || h.id === 'pi') && updateAvailable) row.action = { cmd: 'harness.update', label: 'Update' };
     } else {
       row.state = updateAvailable ? 'update' : 'ok';
       // The version beside the name says when there is a newer one; the
       // status says only how it is signed in.
-      const names = (ui && ui.providerNames) || [];
-      row.status.text = isKey && names.length ? (names.length === 1 ? 'Key saved for ' : 'Keys saved for ') + listOf(names) : signedInAs(h);
+      const names = (ui && (h.id === 'pi' ? ui.piNames : ui.providerNames)) || [];
+      row.status.text = !isKey || !names.length ? signedInAs(h)
+        : meta.subscription ? 'Signed in to ' + listOf(names)
+          : (names.length === 1 ? 'Key saved for ' : 'Keys saved for ') + listOf(names);
       if (updateAvailable) row.action = { cmd: 'harness.update', label: 'Update' };
       else if (isKey) row.action = { cmd: 'harness.apikey', label: 'Add key', icon: 'key-round' };
     }
@@ -437,7 +440,8 @@ const T3Model = (() => {
     // Everything else is one press away in the menu.
     if (updateAvailable) row.menu.push({ cmd: 'harness.update', label: 'Update to ' + latest, icon: 'circle-arrow-up' });
     row.menu.push({ cmd: 'harness.version', label: 'Install a specific version…', icon: 'history' });
-    if (h.canSetKey) row.menu.push({ cmd: 'harness.apikey', label: isKey ? 'Add a provider key…' : 'Use an API key…', icon: 'key-round' });
+    if (h.canSetKey) row.menu.push({ cmd: 'harness.apikey', label: meta.subscription ? 'Sign-ins and keys…' : isKey ? 'Add a provider key…' : 'Use an API key…', icon: 'key-round' });
+    if (h.canSetKey && meta.subscription) row.menu.push({ cmd: 'harness.subscription', label: 'Sign in with a subscription…', icon: 'log-in' });
     if (h.canSignIn && h.runnable && row.state !== 'signin') row.menu.push({ cmd: 'harness.signin', label: 'Sign in again', icon: 'log-in' });
     row.menu.push({ sep: true });
     row.menu.push({ cmd: 'harness.uninstall', label: 'Uninstall…', icon: 'trash-2', danger: true });
@@ -1676,7 +1680,7 @@ const T3Model = (() => {
     // Words people reach for that the label does not use ("login", "expose",
     // "log out"): a query matching only these still finds the item.
     const KEYWORDS = {
-      'harness.signin': 'login log in auth authenticate', 'harness.apikey': 'api key token credential provider',
+      'harness.signin': 'login log in auth authenticate', 'harness.apikey': 'api key token credential provider', 'harness.subscription': 'login log in subscription claude chatgpt copilot',
       'harness.install': 'add download', 'harness.uninstall': 'remove delete', 'harness.update': 'upgrade',
       'toolchain.install': 'add download', 'toolchain.uninstall': 'remove delete', 'toolchain.update': 'upgrade', 'scm.updateAll': 'upgrade',
       'package.add': 'install new tool package mise registry', 'package.install': 'add download', 'package.uninstall': 'remove delete',
@@ -1727,7 +1731,8 @@ const T3Model = (() => {
         if (m.sep || m.cmd === 'harness.update') continue;
         const label = m.cmd === 'harness.signin' ? 'Sign in ' + a.name + ' again'
           : m.cmd === 'harness.version' ? 'Install a specific version of ' + a.name + '…'
-            : m.cmd === 'harness.apikey' ? (a.id === 'opencode' ? 'Add a provider key for OpenCode…' : 'Use an API key for ' + a.name + '…')
+            : m.cmd === 'harness.apikey' ? (a.id === 'opencode' ? 'Add a provider key for OpenCode…' : a.id === 'pi' ? 'Pi sign-ins and keys…' : 'Use an API key for ' + a.name + '…')
+              : m.cmd === 'harness.subscription' ? 'Sign in to ' + a.name + ' with a subscription…'
               : m.cmd === 'harness.uninstall' ? 'Uninstall ' + a.name + '…' : m.label + ' ' + a.name;
         if (items.some((i) => i.label === label)) continue;
         add('Agents', label, m.icon, { cmd: m.cmd, id: a.id }, { meta: m.cmd === 'harness.uninstall' ? null : hint });

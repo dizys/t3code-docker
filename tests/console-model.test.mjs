@@ -1524,15 +1524,45 @@ test('Credentials attention feeds Overview, navigation and host badges without c
   assert.equal(M.credentialState({ type: 'api', test: { code: 'rejected', detail: { status: 401 } } }).label, 'Rejected · HTTP 401');
 });
 
-test("Pi offers an optional install and updates with terminal login guidance", () => {
-  const at = (overrides) => row(statusWith({ harnesses: [harness("pi", { canSignIn: false, canSetKey: false, signedIn: null, ...overrides })] }), "pi");
-  const missing = at({ installed: false, runnable: false, version: null, installedVersion: null });
+test("Pi signs in with a key per provider or a subscription, from one sheet", () => {
+  const status = (overrides) => statusWith({ harnesses: [harness("pi", { canSignIn: false, canSetKey: true, keyKind: "pi", ...overrides })] });
+  const at = (overrides, extra) => row(status(overrides), "pi", extra);
+  const missing = at({ installed: false, runnable: false, version: null, installedVersion: null, signedIn: null });
   assert.equal(missing.name, "Pi");
+  assert.equal(missing.mark, "pi");
   assert.equal(missing.action.cmd, "harness.install");
   assert.equal(missing.attention, false);
-  const installed = at({ installedVersion: "1.4.0", latestVersion: "1.4.1" });
-  assert.equal(installed.action.cmd, "harness.update");
-  assert.match(installed.status.text, /t3-login pi.*\/login/);
-  assert.ok(installed.menu.some(item => item.cmd === "harness.uninstall"));
-  assert.ok(!installed.menu.some(item => item.cmd === "harness.signin" || item.cmd === "harness.apikey"));
+
+  // Signed out: one primary Sign in that opens the key and subscription sheet.
+  const signedOut = at({ signedIn: false });
+  assert.equal(signedOut.state, "signin");
+  assert.equal(signedOut.status.text, "Not signed in");
+  assert.deepEqual([signedOut.action.cmd, signedOut.action.label, signedOut.action.variant], ["harness.apikey", "Sign in", "primary"]);
+  assert.ok(signedOut.menu.some(item => item.cmd === "harness.apikey" && item.label === "Sign-ins and keys…"));
+  assert.ok(signedOut.menu.some(item => item.cmd === "harness.subscription"));
+  assert.ok(signedOut.menu.some(item => item.cmd === "harness.uninstall"));
+  assert.ok(!signedOut.menu.some(item => item.cmd === "harness.signin"), "Pi has no sign-in command Setup can drive");
+
+  // Signed in: names the providers, saved or from the environment.
+  const signedIn = at({ signedIn: true }, { piNames: ["Anthropic", "OpenRouter"] });
+  assert.equal(signedIn.status.text, "Signed in to Anthropic and OpenRouter");
+  assert.equal(signedIn.action.cmd, "harness.apikey");
+  assert.equal(at({ signedIn: true }).status.text, "Signed in", "models.json or an extension can sign Pi in without a named provider");
+  assert.equal(at({ signedIn: true, latestVersion: "1.1.0" }).action.cmd, "harness.update");
+
+  // A probe that could not answer is not "signed out".
+  const unknown = at({ signedIn: null, latestVersion: "1.1.0" });
+  assert.equal(unknown.state, "unknown");
+  assert.equal(unknown.status.text, "Couldn’t check its sign-in");
+  assert.equal(unknown.attention, false);
+  assert.equal(unknown.action.cmd, "harness.update");
+  assert.equal(at({ signedIn: null }).action, null);
+
+  // OpenCode keeps its own wording.
+  assert.equal(row(statusWith({ harnesses: [harness("opencode", { signedIn: false, canSetKey: true })] }), "opencode").status.text, "No provider key yet");
+
+  const labels = plain(M.paletteItems(status({ signedIn: false }), null, ui(), NOW)).map((item) => item.label);
+  assert.ok(labels.includes("Sign in to Pi"));
+  assert.ok(labels.includes("Pi sign-ins and keys…"));
+  assert.ok(labels.includes("Sign in to Pi with a subscription…"));
 });

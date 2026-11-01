@@ -31,6 +31,7 @@ export async function probeVersion(ctx, entry, executable) {
 export { openCodeMajor, parseAuthList as parseOpenCodeAuthList, storedCredentials as openCodeStoredCredentials,
   storedIntegrationIds as openCodeStoredIntegrationIds, hasStoredCredentials as openCodeHasStoredCredentials } from './opencode-auth.mjs';
 import { openCodeMajor, parseAuthList, hasStoredCredentials, readLegacyAuth } from './opencode-auth.mjs';
+import { parsePiModelList } from './pi-auth.mjs';
 
 /** Which credential sources exist for a harness: environment keys and files. */
 export async function credentialSurface(ctx, entry) {
@@ -111,6 +112,17 @@ export async function detectAuth(ctx, entry, { executable, runnable, version = n
         return null;
       }
     }
+    case "pi": {
+      // Pi has no sign-in status command before 0.84.1, and that one needs a
+      // provider. Its model list covers every source: saved keys, /login
+      // subscriptions, the environment, models.json and extensions. T3 Code
+      // uses the same list to decide Pi can start a turn. Offline, so the
+      // probe never refreshes Pi's model catalogue.
+      if (!runnable) return false;
+      const result = await probeCommand(ctx, executable, ["--list-models"], { PI_OFFLINE: "1" });
+      if (result.error) return null;
+      return parsePiModelList(result.combined).available;
+    }
     default:
       return null;
   }
@@ -120,9 +132,9 @@ function hasEnv(ctx, key) {
   return Boolean(ctx.env[key]?.trim?.());
 }
 
-async function probeCommand(ctx, executable, args) {
+async function probeCommand(ctx, executable, args, env = null) {
   const result = await ctx.run([executable, ...args], {
-    env: ctx.env,
+    env: env ? { ...ctx.env, ...env } : ctx.env,
     cwd: ctx.home,
     timeoutMs: ctx.timeouts.probe,
   });

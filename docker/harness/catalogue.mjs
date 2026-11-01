@@ -3,6 +3,7 @@
 // credential surface, and minimum version the manager enforces comes from
 // here, so the module, the setup console, and the CLI all describe the same
 // tools.
+import { PI_CREDENTIAL_ENV } from "./pi-providers.mjs";
 
 /**
  * T3 refuses to serve OpenCode below this version, so a managed install must
@@ -172,9 +173,10 @@ export const CATALOGUE = Object.freeze([
     versionPattern: "(\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?)",
     minimumVersion: "0.80.5",
     architectures: ["x64", "arm64"],
-    credentials: { env: [], paths: [".pi/agent/auth.json"] },
-    // Pi signs in interactively with /login; saved credentials cannot prove auth.
-    auth: null,
+    // Keys and /login subscriptions live in auth.json (PI_CODING_AGENT_DIR
+    // moves it); Pi also reads each provider's key from the environment.
+    credentials: { env: PI_CREDENTIAL_ENV, paths: [".pi/agent/auth.json"] },
+    auth: "pi",
   },
 ]);
 

@@ -16,6 +16,14 @@ const output = process.env.T3_SKILLS_UI_OUTPUT || '/tmp/t3-skills-ui-audit';
 fs.mkdirSync(output, { recursive: true });
 const deferred = (timeoutMs = 15000) => { let resolve; const promise = new Promise((done, reject) => { const timer = setTimeout(() => reject(new Error('Timed out waiting for a fixture gate')), timeoutMs); timer.unref(); resolve = () => { clearTimeout(timer); done(); }; }); return { promise, resolve }; };
 const visible = (target, selector) => target.locator(selector).filter({ visible: true });
+// The Cards/Table switch collapses to zero size on phones (cards-first
+// product UI). Click it directly when visible, otherwise fire the control so
+// the view assertions still exercise both renderings.
+const switchLayout = async (target, id) => {
+  const toggle = target.locator(`[data-key=skills-layout-${id}]`);
+  if (await toggle.isVisible()) await toggle.click();
+  else await toggle.evaluate(el => el.click());
+};
 const checkNoticeContrast = async notice => {
   const ratio = await notice.evaluate(element => {
     const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
@@ -59,6 +67,10 @@ const checkSelect = async (page, select, theme) => {
       console.log('Starting', theme, width);
       const page = await browser.newPage({ viewport: { width, height }, colorScheme: theme, reducedMotion: 'reduce' });
       await page.addInitScript(mode => localStorage.setItem('t3-console-theme', mode), theme);
+      // Phones hide the Cards/Table switch (cards-first product UI) and each
+      // combo starts with a fresh profile, so seed Table view: the matrix and
+      // phone-list assertions below need it rendered.
+      await page.addInitScript(() => { try { localStorage.setItem('t3-console-skill-view', 'table'); } catch {} });
       const api = createSkillsFixtures(), status = statusFor('skills'), errors = [], writes = [], gets = {};
       // Keep the longstanding draft/reinstall cases about a local skill. The
       // dedicated update audit covers the four tracked-source fixture states.
@@ -147,13 +159,14 @@ const checkSelect = async (page, select, theme) => {
         await firstPolicy.focus();
         const focusClear = await firstPolicy.evaluate(button => button.getBoundingClientRect().left >= button.closest('.tc-mx-row').querySelector('.tc-mx-skill').getBoundingClientRect().right - 1);
         assert(focusClear,'keyboard focus scrolls policy controls clear of the fixed skill column');
-        await target.locator('[data-key=skills-agents-chip]').click();
+        await visible(target, '[data-cmd="skills.agents-all"]').click();
         await shot('agent-columns-toggle');
         await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent').length === 5);
       };
       await navigate('instructions/skills');
       // Cards are the default; the matrix assertions below need Table view.
-      await target.locator('[data-key=skills-layout-table]').click();
+      // The switch itself is hidden on phones, where the seeded view applies.
+      await switchLayout(target, 'table');
       await target.locator('.tc-mx-row').first().waitFor({ state: 'attached' });
       await target.waitForFunction(() => !document.querySelector('.tc-mx-agent-kind')?.textContent.includes('Reading'));
       assert.equal(await target.locator('.tc-mx-row').count(), 20);
@@ -512,7 +525,7 @@ const checkSelect = async (page, select, theme) => {
       // Folder management stays available for undetected tools, including on phones.
       // The agent scope is an inline toggle now, so no menu popover is involved.
       await target.evaluate(() => window.scrollTo(0, 0));
-      await visible(target, '[data-key="skills-agents-chip"]').click();
+      await visible(target, '[data-cmd="skills.agents-all"]').click();
       await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent[data-uninstalled]').length === 2);
       assert.equal(await target.locator('.tc-sk-provider-notice').filter({ hasText: 'isn’t detected' }).count(), 0);
       await shot('undetected-agent');
@@ -526,17 +539,24 @@ const checkSelect = async (page, select, theme) => {
       // Showing all agents loads the undetected providers above; wait out
       // those paints before toggling back.
       await target.waitForFunction(() => ![...document.querySelectorAll('.tc-mx-agent-kind')].some(el => el.textContent.includes('Reading')));
-      await visible(target, '[data-key="skills-agents-chip"]').click();
+      await visible(target, '[data-cmd="skills.agents-all"]').click();
       await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent[data-uninstalled]').length === 0);
       // Cards are the default view: one card per skill, details in the inspector.
+      // Table view collapses system groups by default while cards render every
+      // skill, so expand all groups before comparing the two views.
+      for (;;) {
+        const collapsed = visible(target, '[data-cmd="skills.group"][aria-expanded="false"]');
+        if (!(await collapsed.count())) break;
+        await collapsed.first().click();
+      }
       const cards = await target.locator('.tc-mx-row').count();
-      await target.locator('[data-key="skills-layout-cards"]').click();
+      await switchLayout(target, 'cards');
       await target.locator('.tc-skill-card').first().waitFor();
       assert.equal(await target.locator('.tc-skill-card').count(), cards);
       assert.equal(await target.locator('.tc-skill-card [data-cmd="skills.view"]').count(), cards);
       await shot('cards');
-      await target.locator('[data-key="skills-layout-table"]').click();
-      await target.locator('.tc-mx-row').first().waitFor();
+      await switchLayout(target, 'table');
+      await target.locator('.tc-mx-row').first().waitFor({ state: 'attached' });
       await navigate('instructions');
       await target.locator('.tc-doc-preview .tc-code').waitFor();
       assert.equal(await target.locator('.tc-reads-row').count(), 3);

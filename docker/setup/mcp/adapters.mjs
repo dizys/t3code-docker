@@ -5,6 +5,7 @@ import { parse, parseTree, modify, applyEdits } from "../vendor/jsonc.mjs";
 import { parseMcpToml, applyMcpToml } from "./toml.mjs";
 import { readConfig, changeConfig } from "./files.mjs";
 import { validateMcpServer } from "./store.mjs";
+import { opencodeConfigRoot, stripLegacySkills } from "../opencode-config.mjs";
 
 const problem = (code, message) => Object.assign(new Error(message), { code });
 const object = (value) => value && typeof value === "object" && !Array.isArray(value);
@@ -14,7 +15,7 @@ export const claudeMcpPath = (home, env) => env.CLAUDE_CONFIG_DIR?.trim()
 export const codexMcpPath = (home, env) => path.join(path.resolve(homeOf(home, env), env.CODEX_HOME || ".codex"), "config.toml");
 export const cursorMcpPath = (home, env) => path.join(homeOf(home, env), ".cursor", "mcp.json");
 export const openCodeConfigPath = async (io, home, env) => {
-  const root = path.resolve(homeOf(home, env), env.OPENCODE_CONFIG_DIR || path.join(env.XDG_CONFIG_HOME || ".config", "opencode"));
+  const root = opencodeConfigRoot(homeOf(home, env), env);
   const jsonc = path.join(root, "opencode.jsonc");
   try { await io.lstat(jsonc); return { file: jsonc, jsonc: true }; }
   catch (e) { if (e.code !== "ENOENT") throw e; return { file: path.join(root, "opencode.json"), jsonc: false }; }
@@ -152,7 +153,12 @@ export async function writeProviderMcpEntry(io, provider, { home, env = {} }, na
       nextEntry = { ...rest, disabled: enabled === false };
     }
     if (!entry && !Object.hasOwn(container.entries, name)) return raw;
-    return applyEdits(raw || "{}\n", modify(raw || "{}\n", [...container.keys, name], nextEntry ?? undefined,
-      { formattingOptions: { insertSpaces: true, tabSize: 2, eol: raw.includes("\r\n") ? "\r\n" : "\n" } }));
+    const eol = (raw || "").includes("\r\n") ? "\r\n" : "\n";
+    let next = applyEdits(raw || "{}\n", modify(raw || "{}\n", [...container.keys, name], nextEntry ?? undefined,
+      { formattingOptions: { insertSpaces: true, tabSize: 2, eol } }));
+    // Remove only the legacy invalid array; valid OpenCode 1 skills settings
+    // and all unrelated provider settings must survive an MCP save.
+    if (provider === "opencode") next = stripLegacySkills(next);
+    return next;
   });
 }

@@ -10,6 +10,8 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 USER_ENV="$ROOT/docker/user-env.sh"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
 
 pass=0
 fail=0
@@ -27,12 +29,14 @@ OLD_PATH=/usr/local/bun/bin:/usr/local/deno/bin:/usr/local/cargo/bin:/usr/local/
 probe() {
   local shell="$1"; shift
   env -i HOME=/tmp/t3-user-env-test "$@" "$shell" -c '
+    if [ -n "${T3_TEST_UID:-}" ]; then id() { printf "%s\n" "$T3_TEST_UID"; }; fi
     . "$0"
     printf "legacy=%s\n" "${T3_LEGACY_ENV-}"
     for name in GOROOT RUSTUP_HOME CARGO_HOME BUN_INSTALL DENO_INSTALL CURSOR_HOME GOPATH; do
       eval "printf \"%s=%s\\n\" $name \"\${$name-<unset>}\""
     done
     printf "path=%s\n" "$PATH"
+    printf "opencode=%s\n" "${OPENCODE_CONFIG_DIR-}"
     printf "leftovers=%s\n" "$(set | grep -c "^t3_" || true)"
   ' "$USER_ENV"
 }
@@ -73,6 +77,15 @@ for shell in dash bash; do
 
   out="$(probe "$shell" PATH=/usr/bin:/bin)"
   is "a clean environment reports nothing" "" "$(field "$out" legacy)"
+
+  mkdir -p "$WORK/run"
+  printf '%s\n' '/state/path with spaces/opencode' > "$WORK/run/opencode-config-dir"
+  out="$(probe "$shell" PATH=/usr/bin:/bin T3_TEST_UID=1000 T3_RUN_DIR="$WORK/run")"
+  is "CLI shells use the entrypoint's chosen OpenCode config" '/state/path with spaces/opencode' "$(field "$out" opencode)"
+  out="$(probe "$shell" PATH=/usr/bin:/bin T3_TEST_UID=1000 T3_RUN_DIR="$WORK/run" OPENCODE_CONFIG_DIR=/custom/opencode)"
+  is "an explicit CLI override takes precedence" '/custom/opencode' "$(field "$out" opencode)"
+  out="$(probe "$shell" PATH=/usr/bin:/bin T3_TEST_UID=0 T3_RUN_DIR="$WORK/run")"
+  is "root never reads the user's runtime config" '' "$(field "$out" opencode)"
 done
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

@@ -3,6 +3,7 @@
 // and links are preserved; existing files change only on an explicit save.
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
+import { opencodeConfigRoot } from "./opencode-config.mjs";
 
 export function contextDirFor(baseDir) {
   return path.join(baseDir, "setup", "context");
@@ -16,11 +17,14 @@ export function agentsMdPathFor(baseDir) {
 export function agentsMdTargets(env = {}, home = "/home/t3") {
   const claudeDir = String(env.CLAUDE_CONFIG_DIR ?? "").trim() || path.join(home, ".claude");
   const codexHome = String(env.CODEX_HOME ?? "").trim() || path.join(home, ".codex");
-  const configHome = String(env.XDG_CONFIG_HOME ?? "").trim() || path.join(home, ".config");
+  // OpenCode reads its config dir through OPENCODE_CONFIG_DIR; the entrypoint
+  // points it at a real folder on the state volume, so instructions belong
+  // there rather than under a symlinked ~/.config/opencode.
+  const openCodeHome = opencodeConfigRoot(home, env);
   return [
     { provider: "claude", path: path.join(claudeDir, "CLAUDE.md") },
     { provider: "codex", path: path.join(codexHome, "AGENTS.md") },
-    { provider: "opencode", path: path.join(configHome, "opencode", "AGENTS.md") },
+    { provider: "opencode", path: path.join(openCodeHome, "AGENTS.md") },
   ];
 }
 

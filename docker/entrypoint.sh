@@ -44,6 +44,7 @@ T3_HOME=/home/t3
 # Provider integration: maps the harness manager's selection onto T3's
 # per-provider `binaryPath`.
 : "${T3_PROVIDER_CLI:=/opt/t3-provider/cli.mjs}"
+: "${T3_OPENCODE_CONFIG_CLI:=/opt/t3-setup/opencode-config.mjs}"
 export T3CODE_HOME T3CODE_HOST T3CODE_PORT T3_WORKSPACE T3_SETUP_PORT T3_SINGLE_PORT T3_RUN_DIR
 export T3_INFRA_NODE T3_INFRA_BINARY T3_INFRA_LAUNCHER T3_PROVIDER_CLI T3_PREINSTALL
 
@@ -266,7 +267,14 @@ register_projects
 # Whatever you mounted, signing in once stays signed in. The same goes for the
 # source control CLIs T3 Code opens pull requests through: gh, glab, tea, fj
 # and az keep their sign-ins in these.
-AGENT_DIRS=".claude .codex .cursor .grok .pi .config/opencode .local/share/opencode .config/muse .local/share/muse .agents/skills .local/state/skills .gemini/config/skills .gemini/antigravity-cli/skills"
+#
+# OpenCode's config directory is intentionally absent here. OPENCODE_CONFIG_DIR
+# points at a real folder on the state volume (see above), so there is no
+# symlinked config dir for OpenCode 2.x's inotify watcher to trip over, and
+# everything there already survives a recreate. Shared skills stay
+# discoverable through ~/.agents/skills natively. ensure_opencode_config()
+# below owns that layout.
+AGENT_DIRS=".claude .codex .cursor .grok .pi .local/share/opencode .config/muse .local/share/muse .agents/skills .local/state/skills .gemini/config/skills .gemini/antigravity-cli/skills"
 AGENT_DIRS="$AGENT_DIRS .config/gh .config/glab-cli .config/tea .local/share/forgejo-cli .azure"
 # And git's own settings, plus Claude's global account/MCP config outside its
 # config directory. Git and Claude's native writer preserve these file links.
@@ -319,6 +327,60 @@ persist_agent_credentials() {
     esac
     ln -sfn "$dst" "$src"
   done
+  ensure_opencode_config
+}
+
+# Resolve relative overrides against the home, as Setup's native adapters do.
+opencode_config_root() {
+  local root
+  root="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-${T3_HOME}/.config}/opencode}"
+  case "$root" in /*) ;; *) root="${T3_HOME}/$root" ;; esac
+  realpath -ms -- "$root"
+}
+
+# Keep host-mounted native config in use. Otherwise the default is a real
+# directory on the state volume, avoiding OpenCode 2's directory-link watcher
+# failure. Explicit overrides and disabled persistence keep their native path.
+configure_opencode_config() {
+  local native
+  native="$(OPENCODE_CONFIG_DIR='' opencode_config_root)"
+  if [ -z "${OPENCODE_CONFIG_DIR:-}" ] && [ "$T3_PERSIST_AGENT_CREDENTIALS" = "1" ] &&
+    [ "$(covering_mount "$native")" = "$(covering_mount "$T3_HOME")" ]; then
+    OPENCODE_CONFIG_DIR="${T3CODE_HOME}/agents/.config_opencode"
+  fi
+  OPENCODE_CONFIG_DIR="$(opencode_config_root)"
+  export OPENCODE_CONFIG_DIR
+  # docker exec starts with the container's original environment. Login shells
+  # and CLI helpers read this runtime value through t3-user-env.sh as plain data.
+  mkdir -p "$T3_RUN_DIR"
+  (umask 077; printf '%s\n' "$OPENCODE_CONFIG_DIR" > "$T3_RUN_DIR/opencode-config-dir")
+}
+
+ensure_opencode_config() {
+  [ "$T3_PERSIST_AGENT_CREDENTIALS" = "1" ] || return 0
+  local root native root_mount output
+  local args=()
+  root="$(opencode_config_root)"
+  native="$(OPENCODE_CONFIG_DIR='' opencode_config_root)"
+  root_mount="$(covering_mount "$root")"
+  # The default lives on the *state* mount, which need not be the home mount.
+  # Only an independent config mount is host-managed and left untouched.
+  if [ "$root_mount" != "$(covering_mount "$T3_HOME")" ]; then
+    if [ "$root" != "${T3CODE_HOME}/agents/.config_opencode" ] ||
+      [ "$root_mount" != "$(covering_mount "$T3CODE_HOME")" ]; then
+      log "leaving OpenCode config where it is: it is mounted from elsewhere"
+      return 0
+    fi
+  fi
+  if [ "$root" = "${T3CODE_HOME}/agents/.config_opencode" ] &&
+    [ "$(covering_mount "$native")" = "$(covering_mount "$T3_HOME")" ]; then
+    args+=(--legacy-root "$native")
+  fi
+  if [ -x "${T3_INFRA_NODE:-}" ] && [ -r "$T3_OPENCODE_CONFIG_CLI" ]; then
+    if ! output="$("$T3_INFRA_NODE" "$T3_OPENCODE_CONFIG_CLI" --fix --home "$T3_HOME" "${args[@]}" 2>&1)"; then
+      log "WARNING: could not finish migrating OpenCode config: $output"
+    fi
+  fi
 }
 
 # Field 4 of mountinfo is the mount's source, which is the only way from inside
@@ -370,6 +432,7 @@ report_persistence() {
   esac
 }
 
+configure_opencode_config
 persist_agent_credentials
 report_persistence
 

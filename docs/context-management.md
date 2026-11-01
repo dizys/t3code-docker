@@ -29,7 +29,7 @@ missing native files:
 | --- | --- | --- |
 | Claude Code | `~/.claude/CLAUDE.md` | `CLAUDE_CONFIG_DIR` |
 | Codex | `~/.codex/AGENTS.md` | `CODEX_HOME` |
-| OpenCode | `~/.config/opencode/AGENTS.md` | `XDG_CONFIG_HOME` (config root) |
+| OpenCode | `$OPENCODE_CONFIG_DIR/AGENTS.md` | `OPENCODE_CONFIG_DIR`; native fallback uses `XDG_CONFIG_HOME` |
 
 The shared file's header says which agents read it. Its actions menu offers
 upload, download and delete; the preview refreshes when its revision changes or
@@ -301,7 +301,7 @@ Imports create independent local copies in these native global locations:
 | --- | --- | --- |
 | Claude Code | `~/.claude/skills` | `CLAUDE_CONFIG_DIR` |
 | Codex | `~/.codex/skills` | `CODEX_HOME` |
-| OpenCode | `~/.config/opencode/skills` | `OPENCODE_CONFIG_DIR`, `XDG_CONFIG_HOME` |
+| OpenCode | `$OPENCODE_CONFIG_DIR/skills` | `OPENCODE_CONFIG_DIR`; native fallback uses `XDG_CONFIG_HOME` |
 | Cursor | `~/.cursor/skills` | — |
 | Grok Build | `~/.grok/skills` | `GROK_HOME` |
 | Muse Code | `~/.config/muse/skills` | `XDG_CONFIG_HOME` |
@@ -313,7 +313,24 @@ remains a separate, read-only source in the console. Grok inventory includes
 Cursor compatibility skills as well as its Claude/shared roots. See
 [T3’s native Antigravity skill paths](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/provider/Drivers/AntigravitySkills.ts).
 
-Provider folders can already be symlinked onto shared storage. Review resolves
+Provider folders can already be symlinked onto shared storage, except OpenCode's
+config directory. OpenCode 2.x watches its config with inotify: a symlinked
+`~/.config/opencode` fails with `Not a directory`, and symlinked
+`skills`/`agents` subdirs are classified as files, so global skills/agents stay
+invisible. The entrypoint therefore exports `OPENCODE_CONFIG_DIR` pointing at
+`$T3CODE_HOME/agents/.config_opencode`, a real folder on the state volume.
+An explicit `OPENCODE_CONFIG_DIR` or a host mount at the native config directory
+remains in use; disabling credential persistence leaves the native path in use.
+Login shells and CLI helpers use the same selected path as Setup and T3 Code.
+Startup copies the complete legacy config, including skills, agents, plugins,
+instructions and backups, before replacing directory links. Shared skill links
+to `~/.agents/skills` or `~/.claude/skills` need no copy because OpenCode discovers
+them natively. Other linked skill/agent folders keep their contents. A migrated
+real home directory remains at `opencode.t3-migrated` until that home is replaced;
+original symlink targets stay intact. Only the invalid legacy `"skills": [...]`
+array is removed from JSON/JSONC, including on MCP saves. Valid OpenCode 1
+`skills` objects, comments, permissions and unrelated settings are preserved.
+Review resolves
 these paths, combines destinations pointing at the same physical folder, and
 refuses retargeted roots. Compatibility discovery can expose a selected provider's
 skills to other providers too. Imports leave provider settings alone: existing

@@ -1122,12 +1122,11 @@ html.tc-locked { overflow: hidden; }
 .tc-skill-card-desc { margin: 0; font-size: 0.8125rem; line-height: 1.25rem; color: var(--fg-muted); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; min-height: 2.5rem; }
 .tc-skill-card-agents { display: flex; align-items: center; gap: 0.5rem; font-size: 0.75rem; line-height: 1rem; color: var(--fg-muted); min-width: 0; }
 .tc-skill-card-agents > span:last-child { min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-.tc-src-status { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; font-size: 0.8125rem; }
-.tc-src-status .tc-hint { margin: 0; }
-.tc-src-auto { display: flex; align-items: flex-start; gap: 0.75rem; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--hairline); }
-.tc-src-auto-row { display: flex; align-items: flex-start; gap: 0.625rem; flex: 1 1 auto; min-width: 0; cursor: pointer; font-size: 0.8125rem; }
-.tc-src-auto-row > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.tc-src-auto-row small { color: var(--fg-muted); font-size: 0.75rem; line-height: 1.125rem; }
+/* Auto-update: a settings row like the status row above it, with a switch. */
+.tc-src-auto { display: flex; align-items: center; gap: 0.75rem; padding: 0.625rem 0.875rem; border-top: 1px solid var(--hairline); }
+.tc-src-auto .tc-row-main { flex: 1; }
+.tc-src-auto-name { font-size: 0.8125rem; line-height: 1.25rem; font-weight: 500; }
+.tc-src-auto-desc { color: var(--fg-muted); font-size: 0.75rem; line-height: 1.125rem; }
 .tc-src-link { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.875rem 1rem; }
 .tc-src-link > .tc-hint, .tc-src-link > .tc-label { margin: 0; }
 .tc-src-link .tc-hint--err { color: var(--danger-text); }

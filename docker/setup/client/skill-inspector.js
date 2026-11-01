@@ -64,7 +64,7 @@ const T3SkillInspector = (() => {
           if (!current?.canEdit) return '';
           return html`<section class="tc-insp-section"><div class="tc-insp-label">Source<span class="tc-spacer"></span><span class="tc-hint">Optional</span></div><div class="tc-group"><div class="tc-src-link"><p class="tc-hint">Link the repository this skill came from to check it for updates. Linking changes no files.</p><label class="tc-label" for="skill-link-source">Repository, skill link or owner/repo</label><div class="tc-source-input">${icon('link')}<input class="tc-input tc-mono" id="skill-link-source" data-key="skill-link-source" placeholder="owner/repo or https://…" maxlength="2048" autocapitalize="none" spellcheck="false"${disabled(view.loading || view.saving || view.linking)}><button class="tc-btn tc-btn--sm" type="button" data-inspect-link-source${disabled(view.loading || view.saving || view.linking)}>${view.linking ? 'Linking…' : 'Link source'}</button></div>${view.linkError ? html`<p class="tc-hint tc-hint--err" role="alert">${view.linkError}</p>` : ''}</div></div></section>`;
         }
-        return html`<section class="tc-insp-section"><div class="tc-insp-label">Source<span class="tc-spacer"></span><span class="tc-hint">${current.origin.manual ? 'Linked by you' : 'Tracked for updates'}</span></div><div class="tc-group"><dl class="tc-pathlist"><dt>Repository</dt><dd>${icon('git-branch', 'tc-icon--sm')}<code>${current.origin.source}</code><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs" type="button" data-inspect-copy-source aria-label="Copy repository address">${icon('copy')}</button></dd>${current.update ? html`<dt>Branch</dt><dd><code>${current.update.ref || 'Default branch'}</code></dd>` : ''}<dt>Skill</dt><dd><code>${current.origin.name}</code><span class="tc-hint">in that repository</span></dd></dl><div class="tc-src-status"><span class="tc-dot${current.update?.status === 'error' ? ' tc-dot--warn' : ''}"${current.update?.status === 'available' ? raw(' data-accent') : ''}></span><strong>${updateStatus(current)}</strong>${current.update?.checkedAt ? html`<span class="tc-hint" title="${T3Model.absTime(current.update.checkedAt)}">· checked ${T3Model.relTime(current.update.checkedAt, Date.now())}</span>` : ''}<span class="tc-spacer"></span>${sourceCheck()}</div><div class="tc-src-auto"><label class="tc-src-auto-row"><input class="tc-checkbox" type="checkbox" data-inspect-auto-update${current.origin.autoUpdate ? raw(' checked') : ''}${disabled(view.loading || view.saving)}><span><strong>Auto-update this skill</strong><small>${current.origin.reviewFirst ? 'Your copy differed from the source when you linked it, so review its first update yourself. After that, ' : ''}${current.origin.reviewFirst ? 'new' : 'New'} versions install without asking while the server is idle, once Skills is on under Automatic updates. Skipped while the skill has local edits.</small></span></label><span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-inspect-unlink-source${disabled(view.loading || view.saving)}>Unlink source</button></div></div><p class="tc-hint">Updates replace this folder for every agent that reads it. Local edits stay until then. Unlinking keeps the files and stops checks.</p></section>`;
+        return html`<section class="tc-insp-section"><div class="tc-insp-label">Source<span class="tc-spacer"></span><span class="tc-hint">${current.origin.manual ? 'Linked by you' : 'Tracked for updates'}</span></div><div class="tc-group"><dl class="tc-pathlist"><dt>Repository</dt><dd>${icon('git-branch', 'tc-icon--sm')}<code>${current.origin.source}</code><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs" type="button" data-inspect-copy-source aria-label="Copy repository address">${icon('copy')}</button>${Kit.isPhone() ? '' : html`<span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-inspect-unlink-source${disabled(view.loading || view.saving)}>Unlink…</button>`}</dd>${current.update ? html`<dt>Branch</dt><dd><code>${current.update.ref || 'Default branch'}</code></dd>` : ''}<dt>Skill</dt><dd><code>${current.origin.name}</code><span class="tc-hint">in that repository</span></dd></dl><div class="tc-src-status"><span class="tc-dot${current.update?.status === 'error' ? ' tc-dot--warn' : ''}"${current.update?.status === 'available' ? raw(' data-accent') : ''}></span><strong>${updateStatus(current)}</strong>${current.update?.checkedAt ? html`<span class="tc-hint" title="${T3Model.absTime(current.update.checkedAt)}">· checked ${T3Model.relTime(current.update.checkedAt, Date.now())}</span>` : ''}<span class="tc-spacer"></span>${sourceCheck()}</div><div class="tc-src-auto"><div class="tc-row-main"><span class="tc-src-auto-name" id="skill-auto-name">Auto-update</span><span class="tc-src-auto-desc" id="skill-auto-desc">${current.origin.reviewFirst ? 'Your copy differed from the source when you linked it, so review its first update yourself.' : 'Installs new versions while the server is idle, when Skills is on in Automatic updates. Skips skills with local edits.'}</span></div><label class="tc-switch-hit" for="skill-auto-toggle"><button class="tc-switch" id="skill-auto-toggle" data-key="skill-auto-toggle" type="button" role="switch" aria-checked="${String(Boolean(current.origin.autoUpdate))}" aria-labelledby="skill-auto-name" aria-describedby="skill-auto-desc" data-inspect-auto-update${view.saving ? raw(' aria-busy="true"') : ''}${disabled(view.loading || view.saving)}></button></label></div></div><p class="tc-hint">Updates replace this folder for every agent that reads it. Local edits stay until then.</p></section>`;
       };
       const renderPlugin = () => {
         const id = row()?.byProvider.codex?.pluginId;
@@ -128,17 +128,6 @@ const T3SkillInspector = (() => {
       });
       view.layer.panel.addEventListener('change', async event => {
         if (event.target.id === 'skill-target') view.target = event.target.value;
-        if (event.target.hasAttribute?.('data-inspect-auto-update')) {
-          const current = row();
-          if (!current?.origin || view.saving || view.loading) { event.target.checked = Boolean(current?.origin?.autoUpdate); return; }
-          view.saving = true; repaint();
-          const response = await api('/context/skills/auto', { body: { provider: current.provider, id: current.byProvider[current.provider].id, autoUpdate: event.target.checked } });
-          view.saving = false;
-          if (!response.ok) { view.error = response.error; repaint(); return; }
-          Kit.toast(event.target.checked ? 'Auto-update on for ' + current.name : 'Auto-update off for ' + current.name + '. Manual checks still work.');
-          await refresh();
-          return;
-        }
         if (event.target.id !== 'skill-file' || !event.target.files?.[0]) return;
         const file = event.target.files[0]; event.target.value = '';
         view.loading = true; view.error = null; repaint();
@@ -153,6 +142,19 @@ const T3SkillInspector = (() => {
       const act = async (action, button) => {
         if (action === 'data-inspect-hooks' && !view.saving && !view.loading) { getLibrary().reviewHooks(row()?.byProvider?.codex?.pluginId); return; }
         if (action === 'data-inspect-check-source') { if (!view.loading && !view.saving) await getLibrary().checkOne(row().key); return; }
+        if (action === 'data-inspect-auto-update') {
+          const current = row();
+          if (!current?.origin || view.saving || view.loading) return;
+          const on = !current.origin.autoUpdate;
+          view.saving = true; view.error = null; repaint();
+          const response = await api('/context/skills/auto', { body: { provider: current.provider, id: current.byProvider[current.provider].id, autoUpdate: on } });
+          view.saving = false;
+          if (!response.ok) { view.error = response.error; repaint(); return; }
+          Kit.toast(on ? 'Auto-update on for ' + current.name : 'Auto-update off for ' + current.name + '. Manual checks still work.');
+          await refresh();
+          view.layer.panel.querySelector('#skill-auto-toggle')?.focus({ preventScroll: true });
+          return;
+        }
         if (action === 'data-inspect-copy-source') { Kit.copy(row().origin.source, button, 'Repository address copied'); return; }
         if (action === 'data-inspect-rescan') { if (await view.close('refresh')) await refresh(); return; }
         if (action === 'data-inspect-link-source') {
@@ -191,6 +193,7 @@ const T3SkillInspector = (() => {
             { label: 'Copy path', icon: 'copy', run: () => act('data-inspect-copy-path') },
             { label: 'Download SKILL.md', icon: 'download', run: download },
             { label: row()?.origin ? row().update?.status === 'available' ? 'Review update…' : 'Review source…' : 'Reinstall from source…', icon: 'download', run: () => act(row()?.origin ? 'data-inspect-review-source' : 'data-inspect-reinstall') },
+            ...(row()?.origin && detail()?.canEdit ? [{ label: 'Unlink source…', icon: 'link', run: () => act('data-inspect-unlink-source') }] : []),
             ...(detail()?.canRemove ? [{ sep: true }, { label: 'Remove…', icon: 'trash-2', danger: true, run: () => act('data-inspect-remove') }] : []),
           ] }); return;
         }

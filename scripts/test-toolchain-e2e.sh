@@ -501,7 +501,7 @@ if [ "$VARIANT" = "browser" ]; then
   is "codex config records the mcp server" "true" \
     "$(dex sh -c "grep -q '^\\[mcp_servers.playwright\\]' /home/t3/.codex/config.toml && echo true || echo false")"
   is "opencode config records the mcp server" "true" \
-    "$(dex jq -e '.mcp.playwright.enabled' /home/t3/.config/opencode/opencode.json >/dev/null && echo true || echo false)"
+    "$(dex bash -lc 'jq -e ".mcp.playwright.enabled" "${OPENCODE_CONFIG_DIR:?}/opencode.json"' >/dev/null && echo true || echo false)"
   claude_mcp="$(dex sh -c 'grep -l playwright /home/t3/.claude.json 2>/dev/null | head -1 || true')"
   if [ -n "$claude_mcp" ]; then ok "claude user config records the mcp server"; else no "claude user config does not record the mcp server"; fi
 

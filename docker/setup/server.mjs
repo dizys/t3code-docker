@@ -34,6 +34,7 @@ import { createT3Sessions } from "./t3-session.mjs";
 import { createDeviceLabels } from "./device-labels.mjs";
 import * as Context from "./context.mjs";
 import { createOpenCodeAuth } from "./opencode-auth.mjs";
+import { createPiAuth, PI_KEY_PROVIDERS, piProviderName } from "./pi-auth.mjs";
 import { createSkillsService } from "./skills.mjs";
 import { autoInstallable } from "./skills/update-review.mjs";
 import { createMcpService } from "./mcp.mjs";
@@ -1374,6 +1375,9 @@ const AGENTS = {
     apiKey: { kind: "stdin", argv: ["muse", "auth", "set", "--api-key-stdin"] },
     signin: { argv: ["muse", "login"], pty: false } },
   opencode: { name: "OpenCode", apiKey: { kind: "opencode" } },
+  // A key per provider in Pi's auth.json. Subscriptions sign in with /login
+  // inside Pi itself, which has no command Setup could drive.
+  pi: { name: "Pi", apiKey: { kind: "pi" } },
   // Signed in through T3's own Google flow (startAntigravitySignin).
   antigravity: { name: "Antigravity" },
 };
@@ -1598,7 +1602,7 @@ const publicSession = (s) => ({
   tail: s.output.trim().split("\n").slice(-4).join("\n"),
 });
 
-const setApiKey = async (agentId, key, providerId) => {
+const setApiKey = async (agentId, key, providerId, { replaceSubscription = false } = {}) => {
   const agent = AGENTS[agentId];
   if (!agent?.apiKey) throw new Error(`${agentId} does not take a stored API key`);
   if (!key || key.length > 500) throw new Error("Enter a key");
@@ -1630,6 +1634,12 @@ const setApiKey = async (agentId, key, providerId) => {
     return result;
   }
 
+  if (agent.apiKey.kind === "pi") {
+    const result = await piAuth.saveKey(providerId, key, { replaceSubscription });
+    recordEvent("signin.ok", `Saved a ${piProviderName(providerId)} key for Pi`);
+    return result;
+  }
+
   throw new Error("unsupported");
 };
 
@@ -1639,10 +1649,37 @@ const openCodeAuth = createOpenCodeAuth({
   onChange: async () => { openCodeCredentials.invalidate(); await refreshSignInState("opencode"); },
 });
 
+// Pi's auth.json, written under Pi's own lock. A change drops the cached
+// sign-in verdict, so the next poll asks Pi again.
+const piAuth = createPiAuth({
+  home: process.env.HOME || "/home/t3", env: process.env,
+  onChange: () => refreshSignInState("pi"),
+});
+
 /** Remove all saved sign-ins for one provider; other providers stay. */
 const removeApiKey = async (agentId, providerId) => {
+  if (agentId === "pi") {
+    const result = await piAuth.removeProvider(providerId);
+    if (result.removed) recordEvent("signin.out", `Removed the ${piProviderName(providerId)} sign-in from Pi`);
+    return result;
+  }
   if (agentId !== "opencode") throw new Error(`${agentId} keeps no per-provider keys here`);
   return openCodeAuth.removeProvider(providerId);
+};
+
+// Pi's key sheet: the providers it takes a key for, and what is saved now.
+// Only provider ids and credential kinds leave the server, never a secret.
+const piProviders = async () => {
+  let saved = [], env = [], error = null;
+  try { ({ saved, env } = await piAuth.list()); }
+  catch (failure) { error = String(failure?.message ?? failure); }
+  return {
+    providers: PI_KEY_PROVIDERS.map(({ id, name }) => ({ id, name })),
+    configured: saved.map((entry) => entry.provider),
+    names: Object.fromEntries([...saved, ...env].map((entry) => [entry.provider, piProviderName(entry.provider)])),
+    credentials: { available: error === null, refreshing: false, stale: false, error, saved, env },
+    cache: { at: null, stale: false, source: "pi", refreshing: false },
+  };
 };
 
 const send = (res, code, body, headers = {}) => {
@@ -2967,6 +3004,9 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    if (req.method === "GET" && route === "/providers" && raw.searchParams.get("agent") === "pi") {
+      return sendJson(res, 200, await piProviders());
+    }
     if (req.method === "GET" && route === "/providers") {
       const snap = await providersSnapshot();
       if (raw.searchParams.get("refresh") === "1") openCodeCredentials.invalidate();
@@ -2993,9 +3033,9 @@ const server = createServer(async (req, res) => {
     if (req.method === "POST" && route === "/auth/apikey") {
       try {
         const input = JSON.parse((await readBody(req)) || "{}");
-        return sendJson(res, 200, await setApiKey(input.agent, input.key, input.provider));
+        return sendJson(res, 200, await setApiKey(input.agent, input.key, input.provider, { replaceSubscription: input.replace === true }));
       } catch (error) {
-        return sendJson(res, 400, { error: String(error?.message ?? error) });
+        return sendJson(res, 400, { error: String(error?.message ?? error), ...(error?.code === "subscription-exists" ? { code: error.code } : {}) });
       }
     }
 

@@ -34,7 +34,7 @@ http.createServer(async (req, res) => {
   catch { res.writeHead(400); res.end(); return; }
   const result = await credentials.respond(req.method, url, input) || await files.respond(req.method, url, input) || await mcp.respond(req.method, url, input) || storage.respond(req.method, url, input) || api.respond(req.method, url, input) || (url.pathname.endsWith('/status') ? { body: { ...statusFor('skills'), credentials: credentials.status(), storage: storage.status(), context: { ...statusFor('skills').context, mcp: mcp.status() } } }
     : url.pathname.endsWith('/ports') ? { body: portsFor('ready') }
-      : url.pathname.endsWith('/providers') ? { body: fixture('providers.json') }
+      : url.pathname.endsWith('/providers') ? { body: fixture(url.searchParams.get('agent') === 'pi' ? 'pi-providers.json' : 'providers.json') }
         : { status: 404, body: { ok: false, error: 'This is a read-only fixture preview. No live API is connected.' } });
   if (result.body?.etag && req.headers['if-none-match'] === result.body.etag) { res.writeHead(304, { ETag: result.body.etag }); res.end(); return; }
   res.writeHead(result.status || 200, { 'content-type': 'application/json', 'cache-control': 'no-store', ...result.headers });

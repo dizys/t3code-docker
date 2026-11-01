@@ -126,7 +126,7 @@ const routeConsole = async (page, { status, ports, skillOptions, downloadHTTP = 
     if (request.method() === "POST" && !at("/login")) return route.fulfill({ json: { ok: true } });
     if (at("/status")) return route.fulfill({ json: status() });
     if (at("/ports")) return route.fulfill({ json: ports() });
-    if (at("/providers")) return route.fulfill({ json: fixture("providers.json") });
+    if (at("/providers")) return route.fulfill({ json: fixture(url.searchParams.get("agent") === "pi" ? "pi-providers.json" : "providers.json") });
     if (at("/credentials")) return route.fulfill({ json: fixture("credentials.json") });
     // Allow a native-shell substitution at the context level to run too.
     return route.fallback();

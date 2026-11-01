@@ -155,6 +155,13 @@ and Chromium; set `CHROME_PATH` if needed. Screenshots go to
 `/tmp/t3-opencode-auth-ui` (`T3_AUTH_UI_OUTPUT` overrides it). These audits
 never read or change your real OpenCode credentials.
 
+For Pi credential changes, run `node scripts/pi-auth-smoke.mjs /absolute/path/to/pi`
+against both 0.80.5 (the supported floor) and the current release. It uses an
+isolated home and fake keys, and checks that saved keys sit beside a `/login`
+subscription, that Pi lists their providers' models, and removal, without a
+login or model request. The image smoke suite runs it against the installed
+release, then signs Pi in and out through the Setup API.
+
 For Credentials changes, run `node --test tests/credential*.test.mjs`
 and `node scripts/credentials-ui-audit.mjs`. The browser audit starts a real
 Setup API in a disposable home and a loopback API server. It tests drafts,

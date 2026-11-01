@@ -94,9 +94,9 @@ OpenCode, Cursor, Grok Build, Muse Code and Antigravity agents. Each physical
 `SKILL.md` is one card, joined by resolved path. A name appearing in two
 different folders remains two installations. Click a card for where it lives,
 which agents can use it, its files and its source tracking.
-**View** is an inline Cards/Table toggle beside the filters — no dropdown.
-Cards is the default; Table keeps one column per agent for side-by-side
-comparison. Agent scope is an inline `+N`/All agents toggle next to it (chips
+**Layout** is an inline Cards/Table toggle beside the filters — no dropdown and
+no View menu. Cards is the default; Table keeps one column per agent for
+side-by-side comparison. Agent scope is an inline `+N`/All agents toggle next to it (chips
 on phones): installed agents, or all agents including ones not detected here.
 Bundled Codex system skills have their own inline Bundled toggle. All three
 remember their choice in this browser.
@@ -150,15 +150,15 @@ and runtime metadata, as described below. Cursor, Grok, Muse and Antigravity sho
 **Found** with a discovery-only explanation. Plugin inventories and configured extra locations
 are outside the basic known-folder inventory.
 
-**View → Show bundled skills** controls entries identified as system skills,
+The inline **Bundled** toggle controls entries identified as system skills,
 such as those shipped with Codex. They start shown in a collapsed group. Hiding
 only filters this list; agents can still use them. A quiet row lists the hidden
 skills and offers **Show**. User, administrator and plugin installations stay
 visible unless the provider identifies them as system skills.
 
-The same **View** menu chooses **Installed agents** or **All agents**. Both
-choices are remembered in this browser. On phones, the View icon is beside
-search and controls the agent chips.
+The agents scope toggle next to it chooses **Installed agents** or **All agents**. Both
+choices are remembered in this browser. On phones, the agent chips sit beside
+search and filter the same way.
 
 Inventories load in parallel when the Skills tab opens. **Rescan** refreshes all
 installed agents after external changes. One failed provider leaves the others usable. Concurrent requests share a lookup and results
@@ -168,7 +168,7 @@ the project skill folder where one is verified (Codex, Cursor, OpenCode and
 Antigravity share `.agents/skills` inside a project), and whether the tool
 itself is detected. Detection never gates management: an undetected column
 says **Not detected**, and adding, editing and importing still work. Use the
-`+N` header button or **View → All agents** to include these folders. The installer
+`+N` header button or the **All agents** toggle to include these folders. The installer
 only uses an undetected agent’s folder after you explicitly select that agent.
 Bodies load separately through authenticated, discovered-installation IDs.
 `GET /context/skills/read` adds `files: [{ name, bytes, executable, linked }]`
@@ -365,7 +365,7 @@ Successful checks retain the branch, commit and check time until the Setup
 service restarts; source tracking survives restarts. **Check again** always
 fetches fresh repository contents. Current skills have no badge in the library.
 
-Choose **Review update…** from a card, its menu or its inspector. **Review N
+Choose **Review update…** from a card, a table row’s menu, or its inspector. **Review N
 updates** works through available cards in order, with a skip action and the next
 review after each result. Closing ends the queue. Each review shows its exact
 folder and detected readers, file counts, and a file list. Select a file to read
@@ -410,7 +410,7 @@ replays an uncertain update.
 
 ![Reviewing a repository skill update](media/skill-updates/desktop-light.png)
 
-Use **View → Remove** to delete an imported local skill. Files tracked
+Use **Remove…** in the skill’s inspector menu to delete an imported local skill. Files tracked
 in the upstream skills CLI lock remain read-only here, including during import;
 manage those packages with their package manager. Unreadable locks, known plugin/system
 roots (including Grok/Antigravity plugin folders and Codex admin skills), linked

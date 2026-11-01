@@ -110,3 +110,9 @@ export function createSkillUpdateReview({ home, io, policyFor, readInstalled, re
   };
   return { bind, inspect, review };
 }
+
+// Idle auto-installs must never silently overwrite local edits the way an
+// explicit "Replace my local edits" confirmation does. The update stays
+// available and flagged in Updates for a manual review instead. Both review
+// fields are always present; anything else is not installable.
+export const autoInstallable = preview => preview?.canUpdate === true && preview?.localChanges === false;

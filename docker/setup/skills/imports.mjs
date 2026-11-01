@@ -2,7 +2,7 @@
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { resolveSkillSource } from "./sources.mjs";
-import { ORIGIN_FILE, skillFingerprint } from "./origins.mjs";
+import { ORIGIN_FILE, skillFingerprint, readSkillOrigin } from "./origins.mjs";
 import { removalPlan, serialized } from "./files.mjs";
 import { createSkillUpdateReview } from "./update-review.mjs";
 
@@ -132,7 +132,20 @@ export function createSkillImporter({ home, env, io, metadata, policyFor, invali
       }
       if (snapshot.sourceType === "git" || snapshot.sourceType === "url") {
         // A source cannot supply or overwrite the console's provenance file.
-        await io.writeFile(path.join(staging, ORIGIN_FILE), JSON.stringify({ version: 1, source: snapshot.source, name: skill.name, fingerprint: skillFingerprint(skill), autoUpdate: false, manual: false, linkedAt: Date.now() }) + "\n", { flag: "wx", mode: 0o600 });
+        // Replacing a tracked skill carries its opt-in flags over so an
+        // automatic update never silently unticks "Auto-update this skill".
+        let previous = entry.installation?.origin || null;
+        if (!previous && entry.action === "replace") {
+          const probe = path.join(entry.directory, "SKILL.md");
+          const resolved = await io.realpath(probe).catch(() => null);
+          if (resolved) {
+            try {
+              previous = await readSkillOrigin(io, { path: probe, resolvedPath: resolved, scope: "user", source: "Provider" }, home);
+            } catch { previous = null; }
+          }
+        }
+        await io.writeFile(path.join(staging, ORIGIN_FILE), JSON.stringify({ version: 1, source: snapshot.source, name: skill.name, fingerprint: skillFingerprint(skill),
+          autoUpdate: previous ? previous.autoUpdate : false, manual: previous ? previous.manual : false, linkedAt: previous?.linkedAt ?? Date.now() }) + "\n", { flag: "wx", mode: 0o600 });
       }
       // Recheck after staging too, so supporting-file edits invalidate replacement.
       for (const provider of [entry.provider, ...entry.also]) {

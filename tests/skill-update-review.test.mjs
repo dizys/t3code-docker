@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createSkillsService } from "../docker/setup/skills.mjs";
 import { ORIGIN_FILE } from "../docker/setup/skills/origins.mjs";
+import { autoInstallable } from "../docker/setup/skills/update-review.mjs";
 
 async function fixture(t, provider = "claude", io = fs) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "t3-update-review-"));
@@ -229,4 +230,22 @@ test("retargeting the selected skill link after review preserves both targets", 
   await fs.unlink(alias); await fs.symlink(other, alias);
   await assert.rejects(commit(f, view), { code: "conflict" });
   for (const directory of [moved, other]) assert.equal(await fs.readFile(path.join(directory, "SKILL.md"), "utf8"), f.markdown);
+});
+
+test("idle auto-installs require an update without local edits", async t => {
+  assert.equal(autoInstallable(null), false);
+  assert.equal(autoInstallable({}), false);
+  assert.equal(autoInstallable({ canUpdate: true }), false);
+  assert.equal(autoInstallable({ canUpdate: false, localChanges: false }), false);
+  const f = await fixture(t);
+  const seen = async () => { const view = await review(f); const result = autoInstallable(view); await f.service.discardImport(view.previewId); return result; };
+  assert.equal(await seen(), false, "nothing to install yet");
+  f.change();
+  const clean = await review(f);
+  assert.equal(clean.localChanges, false);
+  assert.equal(autoInstallable(clean), true);
+  await f.service.discardImport(clean.previewId);
+  // Local edits block the idle pass but stay reviewable manually.
+  await fs.writeFile(path.join(path.dirname((await f.row()).path), "guide.md"), "Local edits");
+  assert.equal(await seen(), false);
 });

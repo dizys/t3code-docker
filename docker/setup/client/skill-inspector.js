@@ -74,7 +74,7 @@ const T3SkillInspector = (() => {
         const restricted = installedAgents.filter(id => current.byProvider[id] && ['off', 'deny', 'disabled', 'ask', 'name-only', 'user-invocable-only'].includes(current.byProvider[id].state));
         const policies = readers.map(id => S.nameOf(id) + ': ' + S.state(current.byProvider[id]).label).join(', ') || 'No agent can use this skill yet';
         const files = view.data?.files?.length ?? current.fileCount ?? null;
-        return html`<section class="tc-insp-section"><div class="tc-insp-label">Access & usage</div><div class="tc-group"><dl class="tc-pathlist"><dt>Agents</dt><dd><span class="tc-agent-stack" aria-hidden="true">${readers.map(id => html`<span class="tc-tile tc-tile--mark tc-tile--xs" aria-hidden="true">${raw(T3C.agentMark(id))}</span>`)}</span><span>${T3Model.plural(readers.length, 'agent')} can use${restricted.length ? ' · ' + restricted.map(id => S.state(current.byProvider[id]).label + ' in ' + S.nameOf(id)).join(', ') : ''}</span></dd><dt>Policies</dt><dd><span class="tc-hint">${policies}</span></dd>${files !== null ? html`<dt>Files</dt><dd>${T3Model.plural(files, 'file')}${view.data ? html`<span class="tc-hint">· ${bytes(view.data.bytes)}</span>` : ''}</dd>` : ''}${current.origin ? html`<dt>Auto</dt><dd>${current.origin.autoUpdate ? 'On for this skill' : 'Manual only'}<span class="tc-hint">· server Skills auto-update controls installs</span></dd>` : ''}</dl></div><p class="tc-hint">Models inherit the agent’s skill: when an agent can use it, its models can too. Turn an agent off to hide it from all its models. Usage here is availability, not a call count — agents don’t report runs.</p></section>`;
+        return html`<section class="tc-insp-section"><div class="tc-insp-label">Access & usage</div><div class="tc-group"><dl class="tc-pathlist"><dt>Agents</dt><dd><span class="tc-agent-stack" aria-hidden="true">${readers.map(id => html`<span class="tc-tile tc-tile--mark tc-tile--xs" aria-hidden="true">${raw(T3C.agentMark(id))}</span>`)}</span><span>${T3Model.plural(readers.length, 'agent')} can use${restricted.length ? ' · ' + restricted.map(id => S.state(current.byProvider[id]).label + ' in ' + S.nameOf(id)).join(', ') : ''}</span></dd><dt>Policies</dt><dd><span class="tc-hint">${policies}</span></dd>${files !== null ? html`<dt>Files</dt><dd>${T3Model.plural(files, 'file')}${view.data ? html`<span class="tc-hint">· ${bytes(view.data.bytes)}</span>` : ''}</dd>` : ''}${current.origin ? html`<dt>Auto</dt><dd>${current.origin.autoUpdate ? 'On for this skill' : 'Manual only'}<span class="tc-hint">· server Skills auto-update controls installs</span></dd>` : ''}</dl></div><p class="tc-hint">Models inherit the agent’s skill: when an agent can use it, its models can too. Turn an agent off to hide it from all its models. Usage here is availability, not a call count. Agents don’t report runs.</p></section>`;
       };
       const renderPlugin = () => {
         const id = row()?.byProvider.codex?.pluginId;
@@ -145,7 +145,7 @@ const T3SkillInspector = (() => {
           const response = await api('/context/skills/auto', { body: { provider: current.provider, id: current.byProvider[current.provider].id, autoUpdate: event.target.checked } });
           view.saving = false;
           if (!response.ok) { view.error = response.error; repaint(); return; }
-          Kit.toast(event.target.checked ? 'Auto-update on for ' + current.name : 'Auto-update off for ' + current.name + ' — manual checks still work');
+          Kit.toast(event.target.checked ? 'Auto-update on for ' + current.name : 'Auto-update off for ' + current.name + '. Manual checks still work.');
           await refresh();
           return;
         }
@@ -171,7 +171,13 @@ const T3SkillInspector = (() => {
           if (!source) { view.linkError = 'Enter a repository, skill link or owner/repo.'; repaint(); field?.focus(); return; }
           view.linking = true; view.linkError = null; repaint();
           const current = row();
-          const response = await api('/context/skills/link', { body: { provider: current.provider, id: current.byProvider[current.provider].id, source, autoUpdate: true } });
+          const link = async body => api('/context/skills/link', { body: { provider: current.provider, id: current.byProvider[current.provider].id, source, ...body } });
+          let response = await link({});
+          if (!response.ok && response.code === 'mismatch') {
+            const yes = await Kit.confirm({ title: 'Link a differently named skill?', body: response.error, confirm: 'Link anyway', tone: 'primary' });
+            if (yes && active === view) response = await link({ allowNameMismatch: true });
+            else { view.linking = false; if (active === view) repaint(); return; }
+          }
           view.linking = false;
           if (!response.ok) { view.linkError = response.error; repaint(); return; }
           Kit.toast('Linked ' + current.name + ' to its source');

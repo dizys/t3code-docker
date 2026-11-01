@@ -35,6 +35,7 @@ import { createDeviceLabels } from "./device-labels.mjs";
 import * as Context from "./context.mjs";
 import { createOpenCodeAuth } from "./opencode-auth.mjs";
 import { createSkillsService } from "./skills.mjs";
+import { autoInstallable } from "./skills/update-review.mjs";
 import { createMcpService } from "./mcp.mjs";
 import { clientAddress } from "./client-address.mjs";
 import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
@@ -2326,7 +2327,10 @@ const autoTick = async () => {
             if (check?.update?.status !== "available") continue;
             try {
               const preview = await skillsService.previewUpdate(entry.provider, entry.id);
-              if (!preview?.canUpdate) continue;
+              // Manual updates require ticking "Replace my local edits" first;
+              // the idle pass must never silently overwrite them. The update
+              // stays available and flagged in Updates for an explicit review.
+              if (!autoInstallable(preview)) continue;
               const result = await skillsService.installUpdate(preview.previewId, preview.planId, true);
               if (result?.results?.[0]?.status === "installed") {
                 installed++;
@@ -2841,7 +2845,7 @@ const server = createServer(async (req, res) => {
         const result = route === "/context/skills/update/preview" ? await skillsService.previewUpdate(input.provider, input.id)
           : route === "/context/skills/update" ? await skillsService.installUpdate(input.previewId, input.planId, input.replace)
           : route === "/context/skills/hooks/state" ? await skillsService.setHook(input.id, input.revision, input.action)
-          : route === "/context/skills/link" ? await skillsService.linkSource(input.provider, input.id, input.source, { autoUpdate: input.autoUpdate })
+          : route === "/context/skills/link" ? await skillsService.linkSource(input.provider, input.id, input.source, { autoUpdate: input.autoUpdate, allowNameMismatch: input.allowNameMismatch })
           : route === "/context/skills/unlink" ? await skillsService.unlinkSource(input.provider, input.id)
           : route === "/context/skills/auto" ? await skillsService.setSourceAuto(input.provider, input.id, input.autoUpdate)
           : route === "/context/skills/check-update" ? input.skills === undefined ? await skillsService.checkUpdate(input.provider, input.id) : await skillsService.checkUpdates(input.skills)
@@ -2857,7 +2861,7 @@ const server = createServer(async (req, res) => {
         if (!["/context/skills/check-update", "/context/skills/source", "/context/skills/update/preview", "/context/skills/plan", "/context/skills/discard"].includes(route)) recordEvent("context.saved", route === "/context/skills/update" ? "Updated a repository skill; review the installation result" : route === "/context/skills/link" ? "Linked a skill to its repository source" : route === "/context/skills/unlink" ? "Unlinked a skill source" : route === "/context/skills/auto" ? "Changed a skill's auto-update setting" : route === "/context/skills/hooks/state" ? "Changed a Codex plugin hook setting" : route === "/context/skills/install" ? "Imported local skills; review individual installation results" : route === "/context/skills/remove" ? "Removed a local skill installation" : route === "/context/skills/state" ? "Changed native skill availability" : "Saved a local skill");
         return sendJson(res, 200, result);
       } catch (error) {
-        const status = { invalid: 400, missing: 404, ENOENT: 404, conflict: 409, EEXIST: 409, too_large: 413, unsupported: 403, EACCES: 403, EPERM: 403 }[error?.code] || (error instanceof SyntaxError ? 400 : 500);
+        const status = { invalid: 400, missing: 404, mismatch: 409, ENOENT: 404, conflict: 409, EEXIST: 409, too_large: 413, unsupported: 403, EACCES: 403, EPERM: 403 }[error?.code] || (error instanceof SyntaxError ? 400 : 500);
         return sendJson(res, status, { ok: false, code: error?.code || "unavailable", error: String(error?.message || "The skill operation failed.").slice(0, 500) });
       }
     }

@@ -213,3 +213,34 @@ test("duplicate-source precedence is preserved through tracked update checks and
   assert.equal(await fs.readFile(path.join(path.dirname(row.path), "guide.md"), "utf8"), "Updated published guide");
   assert.equal((await service.checkUpdate("claude", row.id)).update.status, "current");
 });
+
+test("links default to manual-only; tracked replacements carry opt-in flags over", async (t) => {
+  const f = await fixture(t), row = await f.row();
+  assert.equal(row.origin.autoUpdate, false);
+  assert.equal(row.origin.manual, false);
+  await f.service.linkSource("claude", row.id, f.source);
+  assert.equal((await f.row()).origin.autoUpdate, false, "links default to manual-only");
+  assert.equal((await f.row()).origin.manual, true);
+  await f.service.linkSource("claude", row.id, f.source, { autoUpdate: true });
+  assert.equal((await f.row()).origin.autoUpdate, true, "explicit opt-in sticks");
+  f.change();
+  const view = await f.service.previewUpdate("claude", row.id);
+  assert.equal(view.localChanges, false);
+  await f.service.installUpdate(view.previewId, view.planId, true);
+  const updated = await f.row();
+  assert.equal(updated.origin.autoUpdate, true, "a tracked update carries the opt-in over");
+  assert.equal(updated.origin.manual, true);
+});
+
+test("linking a single differently named skill requires confirmation", async (t) => {
+  const f = await fixture(t), row = await f.row();
+  const skills = (name) => [{ name, description: name, content: `---\nname: ${name}\ndescription: ${name}\n---\n`,
+    files: [{ name: "SKILL.md", data: Buffer.from(`---\nname: ${name}\ndescription: ${name}\n---\n`), mode: 0o600 }] }];
+  const service = (list) => createSkillsService({ home: f.home, env: {}, resolveSource: async () =>
+    ({ source: "example/other", sourceType: "git", sourceInfo: null, warnings: [], skills: list }) });
+  await assert.rejects(service(skills("other")).linkSource("claude", row.id, "example/other"), { code: "mismatch" });
+  await assert.rejects(service([skills("a")[0], skills("b")[0]]).linkSource("claude", row.id, "example/other"), { code: "missing" });
+  const linked = await service(skills("other")).linkSource("claude", row.id, "example/other", { allowNameMismatch: true });
+  assert.equal(linked.origin.name, "other");
+  assert.equal(linked.origin.autoUpdate, false, "confirmed links still default to manual-only");
+});

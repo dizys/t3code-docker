@@ -347,14 +347,14 @@ export function createSkillsService({ home, env = process.env, io = fs, nativeCo
   // and auto-updated like an import. Stores the current on-disk fingerprint so
   // the next check correctly reports available vs current, plus an autoUpdate
   // flag the background updater honours. Manual links are editable/removable.
-  const linkSource = async (provider, id, source, { autoUpdate = true } = {}) => {
+  const linkSource = async (provider, id, source, { autoUpdate = false, allowNameMismatch = false } = {}) => {
     if (!Object.hasOwn(PROVIDERS, provider)) throw problem("invalid", "Unknown skill provider.");
     if (typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id)) throw problem("invalid", "Invalid skill identifier.");
     if (typeof source !== "string" || !source.trim() || source.length > 2048) throw problem("invalid", "Enter a repository, skill URL or owner/repo to link.");
     let kind;
     try { kind = parseSkillSource(source.trim(), home).type; }
     catch (error) { throw problem(error.code || "invalid", summaryError(error)); }
-    if (!["git", "url"].includes(kind)) throw problem("invalid", "Link a repository or skill URL so it can be checked for updates. Container folders can't auto-update — use Install from source for those.");
+    if (!["git", "url"].includes(kind)) throw problem("invalid", "Link a repository or skill URL so it can be checked for updates. Container folders can't auto-update; use Install from source for those.");
     const row = await read(provider, id);
     const policy = await fileManager.policyFor(provider);
     if (!policy.capabilities(row).canEdit) throw problem("unsupported", policy.capabilities(row).readOnlyReason || "This skill cannot be linked for updates.");
@@ -364,8 +364,11 @@ export function createSkillsService({ home, env = process.env, io = fs, nativeCo
     try { snapshot = await (resolveSource || resolveSkillSource)(source.trim(), { home, env, metadata: skillMetadata }); }
     catch (error) { throw problem(error.code || "unavailable", summaryError(error)); }
     if (snapshot.links) throw problem("invalid", "Choose a repository or skill link from that page, not the listing page itself.");
-    if (!["git", "url"].includes(snapshot.sourceType)) throw problem("invalid", "Link a repository or skill URL so it can be checked for updates. Container folders can't auto-update — use Install from source for those.");
-    const match = (snapshot.skills || []).find(skill => skill.name === row.name) || (snapshot.skills?.length === 1 ? snapshot.skills[0] : null);
+    if (!["git", "url"].includes(snapshot.sourceType)) throw problem("invalid", "Link a repository or skill URL so it can be checked for updates. Container folders can't auto-update; use Install from source for those.");
+    const exact = (snapshot.skills || []).find(skill => skill.name === row.name);
+    const single = snapshot.skills?.length === 1 ? snapshot.skills[0] : null;
+    if (!exact && single && single.name !== row.name && !allowNameMismatch) throw problem("mismatch", `This source contains a single skill named "${single.name}", not "${row.name}". Confirm to track "${single.name}" from this installation anyway.`);
+    const match = exact || single;
     if (!match) throw problem("missing", snapshot.skills?.length ? `This source has ${snapshot.skills.length} skills but none named ${row.name}. Use its skill folder link or pick the matching name.` : "No skills were found in this source.");
     if (match.files.some(file => file.name === ".t3-skill-source.json")) throw problem("conflict", "This source contains reserved skill tracking metadata.");
     const fingerprint = await fingerprintInstalledDir(io, directory);

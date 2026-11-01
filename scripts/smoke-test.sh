@@ -743,6 +743,15 @@ context_editor_works() {
 }
 check "the Context editor retains drafts and handles loading and failed saves" context_editor_works
 
+overlay_motion_works() {
+  [ "$HAS_BROWSER" -eq 1 ] || return 0
+  docker cp scripts/layers-ui-audit.js "$NAME:/tmp/layers-ui-audit.js" >/dev/null 2>&1 || return 1
+  docker exec -e CHROME_PATH=/usr/bin/chromium -e T3_SETUP_DIR=/opt/t3-setup \
+    -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    "$NAME" node /tmp/layers-ui-audit.js >>"$UI_AUDIT_LOG" 2>&1
+}
+check "dialogs close without flashing, releasing focus or undimming Settings early" overlay_motion_works
+
 skills_editor_works() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0
   docker cp scripts/skills-ui-audit.js "$NAME:/tmp/skills-ui-audit.js" >/dev/null 2>&1 || return 1

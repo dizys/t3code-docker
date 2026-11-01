@@ -1,0 +1,181 @@
+{
+ "providers": [
+  {
+   "id": "anthropic",
+   "name": "Anthropic"
+  },
+  {
+   "id": "openai",
+   "name": "OpenAI"
+  },
+  {
+   "id": "google",
+   "name": "Google Gemini"
+  },
+  {
+   "id": "openrouter",
+   "name": "OpenRouter"
+  },
+  {
+   "id": "deepseek",
+   "name": "DeepSeek"
+  },
+  {
+   "id": "xai",
+   "name": "xAI"
+  },
+  {
+   "id": "mistral",
+   "name": "Mistral"
+  },
+  {
+   "id": "groq",
+   "name": "Groq"
+  },
+  {
+   "id": "cerebras",
+   "name": "Cerebras"
+  },
+  {
+   "id": "fireworks",
+   "name": "Fireworks"
+  },
+  {
+   "id": "together",
+   "name": "Together AI"
+  },
+  {
+   "id": "huggingface",
+   "name": "Hugging Face"
+  },
+  {
+   "id": "vercel-ai-gateway",
+   "name": "Vercel AI Gateway"
+  },
+  {
+   "id": "opencode",
+   "name": "OpenCode Zen"
+  },
+  {
+   "id": "opencode-go",
+   "name": "OpenCode Go"
+  },
+  {
+   "id": "zai",
+   "name": "Z.AI Coding Plan"
+  },
+  {
+   "id": "zai-coding-cn",
+   "name": "Z.AI Coding Plan (China)"
+  },
+  {
+   "id": "kimi-coding",
+   "name": "Kimi For Coding"
+  },
+  {
+   "id": "moonshotai",
+   "name": "Moonshot AI"
+  },
+  {
+   "id": "moonshotai-cn",
+   "name": "Moonshot AI (China)"
+  },
+  {
+   "id": "minimax",
+   "name": "MiniMax"
+  },
+  {
+   "id": "minimax-cn",
+   "name": "MiniMax (China)"
+  },
+  {
+   "id": "nvidia",
+   "name": "NVIDIA NIM"
+  },
+  {
+   "id": "baseten",
+   "name": "Baseten"
+  },
+  {
+   "id": "meta",
+   "name": "Meta"
+  },
+  {
+   "id": "qwen-token-plan",
+   "name": "Qwen Token Plan"
+  },
+  {
+   "id": "qwen-token-plan-individual",
+   "name": "Qwen Token Plan (Individual)"
+  },
+  {
+   "id": "qwen-token-plan-cn",
+   "name": "Qwen Token Plan (China)"
+  },
+  {
+   "id": "xiaomi",
+   "name": "Xiaomi MiMo"
+  },
+  {
+   "id": "xiaomi-token-plan-cn",
+   "name": "Xiaomi MiMo Token Plan (China)"
+  },
+  {
+   "id": "xiaomi-token-plan-ams",
+   "name": "Xiaomi MiMo Token Plan (Amsterdam)"
+  },
+  {
+   "id": "xiaomi-token-plan-sgp",
+   "name": "Xiaomi MiMo Token Plan (Singapore)"
+  },
+  {
+   "id": "radius",
+   "name": "Radius"
+  },
+  {
+   "id": "typesafe",
+   "name": "TypeSafe"
+  },
+  {
+   "id": "ant-ling",
+   "name": "Ant Ling"
+  }
+ ],
+ "configured": [
+  "anthropic",
+  "openrouter"
+ ],
+ "names": {
+  "anthropic": "Anthropic",
+  "openrouter": "OpenRouter",
+  "github-copilot": "GitHub Copilot"
+ },
+ "credentials": {
+  "available": true,
+  "refreshing": false,
+  "stale": false,
+  "error": null,
+  "saved": [
+   {
+    "provider": "anthropic",
+    "type": "oauth"
+   },
+   {
+    "provider": "openrouter",
+    "type": "api_key"
+   }
+  ],
+  "env": [
+   {
+    "provider": "github-copilot",
+    "variable": "COPILOT_GITHUB_TOKEN"
+   }
+  ]
+ },
+ "cache": {
+  "at": null,
+  "stale": false,
+  "source": "pi",
+  "refreshing": false
+ }
+}

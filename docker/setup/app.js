@@ -131,6 +131,10 @@
     portsBusy,
     expandedPorts,
     providerNames: [],
+    // Pi's providers with a credential, saved or from the environment, and
+    // how many of them auth.json holds.
+    piNames: [],
+    piSaved: 0,
     signingIn: null,
     // A source control CLI being signed out, while its request runs.
     signingOut: null,
@@ -230,6 +234,7 @@
         storageUI.observe(res.data.storage);
         trackPairing(res.data);
         loadProvidersOnce();
+        loadPiProvidersOnChange();
         tellAttention();
         checkHere();
         if (state.route === 'instructions' && state.contextTab === 'skills') skillsUI.activate();
@@ -328,6 +333,41 @@
     if (!oc || !oc.installed) return;
     providersAsked = true;
     loadProviders().then(render);
+  };
+
+  // Pi's row names the providers it is signed in to, and its sheet lists
+  // them. A /login in a terminal changes them without Setup, so read them
+  // again whenever the sign-in verdict changes.
+  let piPending = null, piSeen, piRead = 0;
+  // A read started before a save or removal must not land after it.
+  const loadPiProviders = ({ fresh = false } = {}) => {
+    if (piPending && !fresh) return piPending;
+    const read = ++piRead;
+    piPending = (async () => {
+      const res = await api('/providers?agent=pi');
+      if (read !== piRead) return state.piProviders;
+      piPending = null;
+      if (res.ok) {
+        state.piProviders = res.data;
+        const names = res.data.names || {};
+        const credentials = res.data.credentials || {};
+        const ids = [...new Set([...(credentials.saved || []).map((entry) => entry.provider), ...(credentials.env || []).map((entry) => entry.provider)])];
+        ui.piNames = ids.map((id) => names[id] || id).sort((a, b) => a.localeCompare(b));
+        ui.piSaved = (credentials.saved || []).length;
+      } else {
+        state.piProviders = { ...(state.piProviders || {}), credentials: { ...(state.piProviders?.credentials || {}), error: res.error || 'Pi’s saved sign-ins could not be read.' } };
+      }
+      return state.piProviders;
+    })();
+    return piPending;
+  };
+  const loadPiProvidersOnChange = () => {
+    const pi = harness('pi');
+    const seen = pi && pi.installed ? String(pi.signedIn) + ':' + (pi.installedVersion || pi.version || '') : null;
+    if (seen === piSeen) return;
+    piSeen = seen;
+    if (seen === null) { ui.piNames = []; ui.piSaved = 0; return; }
+    loadPiProviders().then(() => { render(); renderKeySheet(); });
   };
 
   // ------------------------------------------------------------ operations --
@@ -2426,6 +2466,12 @@
 
   // ------------------------------------------------------------- API keys --
   const keySheet = { layer: null, agent: null, query: '', provider: null, other: false, reveal: false, saving: false, removing: null, error: null, active: 0 };
+  // OpenCode and Pi take a key per provider, from their own catalogues; the
+  // other agents take one key on stdin.
+  const perProvider = (agent) => agent === 'opencode' || agent === 'pi';
+  const keyCatalog = () => (keySheet.agent === 'pi' ? state.piProviders : state.providers) || {};
+  const keyProviderName = (id) => ((keyCatalog().providers || []).find((p) => p.id === id) || {}).name || (keyCatalog().names || {})[id] || id;
+  const piSavedType = (id) => ((keyCatalog().credentials?.saved || []).find((entry) => entry.provider === id) || {}).type || null;
   const HUES = ['--id-claude', '--id-codex', '--id-opencode', '--id-grok', '--id-cursor'];
   const hueOf = (id) => HUES[[...String(id)].reduce((a, c) => (a + c.charCodeAt(0)) % HUES.length, 0)];
   const initials = (name) => {
@@ -2433,7 +2479,7 @@
     return (words.length > 1 ? words[0][0] + words[1][0] : String(name).slice(0, 1)).toUpperCase();
   };
   const providerMatches = () => {
-    const list = (state.providers && state.providers.providers) || [];
+    const list = keyCatalog().providers || [];
     const q = keySheet.query.trim().toLowerCase();
     if (!q) return list.slice(0, 40).map((p) => ({ p, at: -1 }));
     const scored = [];
@@ -2450,22 +2496,29 @@
 
   const keySheetBody = () => {
     const meta = M.AGENTS[keySheet.agent] || {};
-    const isOpenCode = keySheet.agent === 'opencode';
-    const providers = state.providers || {};
+    const isOpenCode = keySheet.agent === 'opencode', isPi = keySheet.agent === 'pi';
+    const providers = keyCatalog();
     const configured = new Set(providers.configured || []);
     const names = new Map((providers.providers || []).map((p) => [p.id, p.name]));
     const chosen = keySheet.provider;
-    const credentials = providers.credentials || (state.providers ? {} : { available: false, refreshing: true });
+    const loaded = isPi ? state.piProviders : state.providers;
+    const credentials = providers.credentials || (loaded ? {} : { available: false, refreshing: true });
     const addsAccount = isOpenCode && /^v?2\./.test(harness('opencode')?.version || '');
+    const chosenType = isPi && chosen ? piSavedType(chosen) : null;
+    const keyHint = addsAccount ? 'Adds and selects a new saved account. Other accounts are kept.'
+      : chosenType === 'oauth' ? 'Replaces your ' + keyProviderName(chosen) + ' subscription sign-in.'
+        : chosenType ? 'Replaces the saved ' + keyProviderName(chosen) + ' key.'
+          : isPi ? 'Saved for Pi only. New Pi sessions use it.' : 'Stored on the state volume, never in the image.';
     const disabled = keySheet.saving ? raw(' disabled') : '';
     const keyStep = (n, active) => html`<div class="tc-sheet-step"${active ? raw(' data-state="active"') : ''}><span class="tc-step-mark">${String(n)}</span><div class="tc-sheet-step-body"><label class="tc-sheet-step-title" for="apikey">API key</label>
       <div class="tc-inputwrap"><input id="apikey" name="key" class="tc-input tc-input--mono"${disabled} type="${keySheet.reveal ? 'text' : 'password'}" placeholder="sk-…" autocomplete="off" spellcheck="false" autocapitalize="off"><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs" type="button" data-sheet="reveal"${disabled} aria-label="${keySheet.reveal ? 'Hide' : 'Show'} API key" aria-pressed="${String(keySheet.reveal)}">${icon(keySheet.reveal ? 'eye-off' : 'eye')}</button></div>
-      ${keySheet.error ? html`<p class="tc-hint tc-hint--err" role="alert" id="key-error" tabindex="-1">${keySheet.error}</p>` : html`<span class="tc-hint">${addsAccount ? 'Adds and selects a new saved account. Other accounts are kept.' : 'Stored on the state volume, never in the image.'}</span>`}</div></div>`;
+      ${keySheet.error ? html`<p class="tc-hint tc-hint--err" role="alert" id="key-error" tabindex="-1">${keySheet.error}</p>` : html`<span class="tc-hint">${keyHint}</span>`}</div></div>`;
     let steps;
-    if (isOpenCode) {
+    if (isOpenCode || isPi) {
       const matches = providerMatches();
       const cache = providers.cache || {};
-      const freshness = cache.source === 'fallback' || !cache.at
+      const freshness = isPi ? (providers.providers || []).length + ' providers that take a key. Choose Other for one Pi added later.'
+        : cache.source === 'fallback' || !cache.at
         ? 'A built-in list; the full catalog loads once models.dev is reachable'
         : ((providers.providers || []).length + ' providers from models.dev · catalog cached ' + M.relTime(cache.at, now()));
       const options = matches.map(({ p, at }, i) => {
@@ -2479,22 +2532,43 @@
             <div class="tc-palette-input">${icon('search', 'tc-muted')}<input id="prov" role="combobox"${disabled} aria-expanded="true" aria-controls="provl" aria-autocomplete="list" aria-activedescendant="prov-opt-${keySheet.active}" placeholder="Search providers" autocomplete="off" spellcheck="false" autocapitalize="off"></div>
             <ul class="tc-listbox" id="provl" role="listbox" aria-label="Providers">${options}</ul>
           </div><span class="tc-hint">${chosen ? html`Selected: <strong>${names.get(chosen) || chosen}</strong> <span class="tc-mono">${chosen}</span>` : freshness}</span>`;
+      const savedRow = (id, meta, action) => html`
+            <div class="tc-row tc-row--compact tc-row--key" data-key="saved-${id}"><span class="tc-tile tc-tile--sm" style="--_tile: var(${hueOf(id)})" aria-hidden="true">${initials(keyProviderName(id))}</span><div class="tc-row-main"><span class="tc-row-name">${keyProviderName(id)}</span>${meta ? html`<span class="tc-small tc-muted">${meta}</span>` : ''}</div>${action || ''}</div>`;
+      const removeButton = (id) => html`<button class="tc-btn tc-btn--ghost tc-btn--ghost-muted tc-btn--xs" type="button" data-sheet="remove" data-provider="${id}" aria-label="Remove the ${keyProviderName(id)} sign-in"${keySheet.saving || credentials.error || credentials.available === false ? raw(' disabled') : ''}>${keySheet.removing === id ? 'Removing…' : 'Remove'}</button>`;
+      // Pi: what auth.json holds, then keys Pi reads from the environment
+      // for providers without one. Neither ever includes the secret.
+      const piSaved = () => {
+        const saved = credentials.saved || [], savedIds = new Set(saved.map((entry) => entry.provider));
+        const fromEnv = (credentials.env || []).filter((entry) => !savedIds.has(entry.provider));
+        return html`<div class="tc-stack tc-saved-keys-wrap"><span class="tc-small tc-muted">Signed in to</span>
+          ${credentials.refreshing ? html`<span class="tc-hint tc-saved-read" role="status"><span class="tc-spinner" aria-hidden="true"></span>Reading Pi’s sign-ins…</span>` : ''}
+          ${credentials.error ? html`<div class="tc-hint" role="status">${credentials.error} <button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-sheet="retry-providers"${disabled}>Try again</button></div>` : ''}
+          ${saved.length || fromEnv.length ? html`<div class="tc-group"><div class="tc-list">${saved.map((entry) => savedRow(entry.provider, entry.type === 'oauth' ? 'Subscription' : 'API key', removeButton(entry.provider)))}${fromEnv.map((entry) => savedRow(entry.provider, html`From <code>${entry.variable}</code>`))}</div></div>`
+            : credentials.available !== false && !credentials.refreshing && !credentials.error ? html`<span class="tc-hint">No sign-ins yet.</span>` : ''}
+        </div>`;
+      };
+      // Subscriptions sign in inside Pi's own terminal app; Pi has no
+      // command for it that Setup could run.
+      const piSubscription = () => html`<div class="tc-stack tc-saved-keys-wrap" id="pi-subscription"><span class="tc-small tc-muted">Or sign in with a subscription</span>
+          <span class="tc-hint">Claude Pro or Max, ChatGPT Plus or Pro, GitHub Copilot and other subscriptions sign in inside Pi. In a terminal on this server, such as T3 Code’s, run this command, then type <code>/login</code> and choose your subscription.</span>
+          ${copyField(meta.command || 't3-login pi', { actions: copyButton(meta.command || 't3-login pi', 'Copy command', { iconOnly: true }) })}
+        </div>`;
       steps = html`
         <div class="tc-sheet-step" data-state="${chosen ? 'done' : 'active'}"><span class="tc-step-mark">${chosen ? icon('check') : '1'}</span><div class="tc-sheet-step-body"><label class="tc-sheet-step-title" for="${keySheet.other ? 'prov-other' : 'prov'}">Provider</label>${providerStep}</div></div>
         ${keyStep(2, Boolean(chosen))}
-        <div class="tc-stack tc-saved-keys-wrap"><span class="tc-small tc-muted">Saved sign-ins</span>
+        ${isPi ? html`${piSubscription()}${piSaved()}` : html`<div class="tc-stack tc-saved-keys-wrap"><span class="tc-small tc-muted">Saved sign-ins</span>
           ${credentials.refreshing ? html`<span class="tc-hint tc-saved-read" role="status"><span class="tc-spinner" aria-hidden="true"></span>Checking saved sign-ins…</span>` : ''}
           ${credentials.error ? html`<div class="tc-hint" role="status">Could not check saved sign-ins. ${credentials.available ? 'The last checked providers are shown.' : ''}<button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-sheet="retry-providers"${disabled}>Try again</button></div>` : ''}
           ${configured.size ? html`<div class="tc-group"><div class="tc-list">${[...configured].map((id) => html`
             <div class="tc-row tc-row--compact tc-row--key" data-key="saved-${id}"><span class="tc-tile tc-tile--sm" style="--_tile: var(${hueOf(id)})" aria-hidden="true">${initials(names.get(id) || id)}</span><div class="tc-row-main"><span class="tc-row-name">${names.get(id) || id}</span>${credentials.counts?.[id] ? html`<span class="tc-small tc-muted">${credentials.counts[id]} saved ${credentials.counts[id] === 1 ? 'account' : 'accounts'}</span>` : ''}</div><button class="tc-btn tc-btn--ghost tc-btn--ghost-muted tc-btn--xs" type="button" data-sheet="remove" data-provider="${id}" aria-label="Remove saved sign-ins for ${names.get(id) || id}"${keySheet.saving || credentials.error || credentials.available === false ? raw(' disabled') : ''}>${keySheet.removing === id ? 'Removing…' : 'Remove'}</button></div>`)}</div></div>` : credentials.available !== false && !credentials.refreshing && !credentials.error ? html`<span class="tc-hint">No saved sign-ins yet.</span>` : ''}
           <span class="tc-hint">Remove clears every saved account for that provider.</span>
-        </div>`;
+        </div>`}`;
 
     } else {
       steps = keyStep(1, true);
     }
     return html`
-      <div class="tc-sheet-head">${tile(meta, 'lg')}<div class="tc-sheet-head-text"><h2 class="tc-sheet-title" id="key-title" tabindex="-1">${isOpenCode ? 'Add a provider key' : 'Use an API key'}</h2><span class="tc-small tc-muted">${isOpenCode ? html`Stored with OpenCode on the volume` : html`Runs <code>${meta.keyCommand}</code>; the key goes in on stdin`}</span></div><span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-sheet="close" aria-label="Close"${disabled}>${icon('x')}</button></div>
+      <div class="tc-sheet-head">${tile(meta, 'lg')}<div class="tc-sheet-head-text"><h2 class="tc-sheet-title" id="key-title" tabindex="-1">${isOpenCode ? 'Add a provider key' : isPi ? 'Sign in to Pi' : 'Use an API key'}</h2><span class="tc-small tc-muted">${isOpenCode ? html`Stored with OpenCode on the volume` : isPi ? html`Keys are saved in Pi’s <code>auth.json</code>` : html`Runs <code>${meta.keyCommand}</code>; the key goes in on stdin`}</span></div><span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-sheet="close" aria-label="Close"${disabled}>${icon('x')}</button></div>
       <div class="tc-sheet-body" aria-busy="${String(keySheet.saving)}">${steps}</div>
       <div class="tc-sheet-foot"><button class="tc-btn tc-btn--ghost" type="button" data-sheet="close"${disabled}>Cancel</button><button class="tc-btn tc-btn--primary" type="submit" data-key="key-save" disabled>${keySheet.saving ? html`<span class="tc-spinner" aria-hidden="true"></span>${keySheet.removing ? 'Removing…' : 'Saving…'}` : 'Save key'}</button></div>`;
   };
@@ -2505,7 +2579,7 @@
     if (!panel) return;
     const key = panel.querySelector('#apikey');
     const other = panel.querySelector('#prov-other');
-    const provider = keySheet.agent !== 'opencode' || (keySheet.other ? other && other.value.trim() : keySheet.provider);
+    const provider = !perProvider(keySheet.agent) || (keySheet.other ? other && other.value.trim() : keySheet.provider);
     const save = panel.querySelector('[data-key="key-save"]');
     if (save) save.disabled = keySheet.saving || !(key && key.value.trim() && provider);
   };
@@ -2528,7 +2602,7 @@
       return;
     }
     keySheet.provider = id;
-    const p = ((state.providers && state.providers.providers) || []).find((x) => x.id === id);
+    const p = (keyCatalog().providers || []).find((x) => x.id === id);
     const input = keySheet.layer.panel.querySelector('#prov');
     if (input && p) input.value = p.name;
     keySheet.query = p ? p.name : '';
@@ -2538,7 +2612,7 @@
     if (key) key.focus();
   };
 
-  const openKeySheet = async (id, trigger) => {
+  const openKeySheet = async (id, trigger, { subscription = false } = {}) => {
     if (keySheet.layer) return;
     Object.assign(keySheet, { agent: id, query: '', provider: null, other: false, reveal: false, saving: false, removing: null, error: null, active: 0 });
     keySheet.layer = Kit.open({
@@ -2547,13 +2621,24 @@
       returnTo: trigger,
       backdrop: 'ignore',
       render: keySheetBody,
-      focus: id === 'opencode' ? '#prov' : '#apikey',
+      focus: perProvider(id) ? '#prov' : '#apikey',
       onEscape: () => { if (!keySheet.saving) keySheet.layer?.close('cancel'); },
       onClose: () => { keySheet.layer = null; },
     });
     syncKeySave();
     const layer = keySheet.layer, panel = layer.panel;
     if (id === 'opencode') void loadProviders().then(() => { if (keySheet.layer === layer) renderKeySheet(); });
+    // "Sign in with a subscription" opens on its terminal steps, and stays
+    // there when the sign-ins arrive and the sheet renders again.
+    const showSubscription = () => {
+      const part = subscription && panel.querySelector('#pi-subscription');
+      if (!part) return;
+      part.querySelector('[data-cmd="copy"]')?.focus({ preventScroll: true });
+      part.scrollIntoView({ block: 'nearest' });
+    };
+    if (id === 'pi') void loadPiProviders().then(() => { if (keySheet.layer === layer) { renderKeySheet(); showSubscription(); } });
+    showSubscription();
+    panel.addEventListener('pointerdown', () => { subscription = false; }, { once: true });
     panel.addEventListener('input', (e) => {
       if (e.target.id === 'prov') {
         keySheet.query = e.target.value;
@@ -2592,21 +2677,27 @@
       if (what === 'close') keySheet.layer.close('cancel');
       else if (what === 'reveal') { keySheet.reveal = !keySheet.reveal; renderKeySheet(); }
       else if (what === 'list') { keySheet.other = false; renderKeySheet(); }
-      else if (what === 'retry-providers') { await loadProviders(true); if (keySheet.layer === layer) renderKeySheet(); }
+      else if (what === 'retry-providers') { await (keySheet.agent === 'pi' ? loadPiProviders({ fresh: true }) : loadProviders(true)); if (keySheet.layer === layer) renderKeySheet(); }
       else if (what === 'remove') {
         const provider = action.getAttribute('data-provider');
-        const label = ((state.providers.providers || []).find((p) => p.id === provider) || {}).name || provider;
-        const ok = await Kit.confirm({
+        const label = keyProviderName(provider);
+        const agent = keySheet.agent;
+        const ok = await Kit.confirm(agent === 'pi' ? {
+          title: 'Remove the ' + label + ' sign-in?',
+          body: (piSavedType(provider) === 'oauth' ? 'Signs Pi out of your ' + label + ' subscription on this server.' : 'Deletes the saved ' + label + ' key from Pi.')
+            + ' Other providers and keys in the environment stay in place.',
+          confirm: 'Remove sign-in',
+        } : {
           title: 'Remove ' + label + ' sign-ins?',
           body: 'Removes all saved OpenCode accounts for ' + label + ', including API keys and browser sign-ins. Other providers and environment credentials stay in place.',
           confirm: 'Remove sign-ins',
         });
         if (!ok || keySheet.layer !== layer) return;
         keySheet.saving = true; keySheet.removing = provider; renderKeySheet();
-        const res = await api('/auth/apikey/remove', { body: { agent: 'opencode', provider } });
-        if (!res.ok) Kit.toast('Could not remove saved sign-ins', { tone: 'danger', detail: res.error });
-        else Kit.toast('Removed saved ' + label + ' sign-ins');
-        await loadProviders(true); loadStatus();
+        const res = await api('/auth/apikey/remove', { body: { agent, provider } });
+        if (!res.ok) Kit.toast(agent === 'pi' ? 'Could not remove the sign-in' : 'Could not remove saved sign-ins', { tone: 'danger', detail: res.error });
+        else Kit.toast(agent === 'pi' ? 'Removed the ' + label + ' sign-in from Pi' : 'Removed saved ' + label + ' sign-ins');
+        await (agent === 'pi' ? loadPiProviders({ fresh: true }) : loadProviders(true)); loadStatus();
         if (keySheet.layer !== layer) return;
         keySheet.saving = false; keySheet.removing = null; renderKeySheet();
       }
@@ -2617,13 +2708,31 @@
       const agent = keySheet.agent;
       const key = panel.querySelector('#apikey').value.trim();
       const other = panel.querySelector('#prov-other');
-      const provider = keySheet.agent === 'opencode' ? (keySheet.other ? other && other.value.trim() : keySheet.provider) : undefined;
-      if (!key || (keySheet.agent === 'opencode' && !provider)) return;
+      const provider = perProvider(agent) ? (keySheet.other ? other && other.value.trim() : keySheet.provider) : undefined;
+      if (!key || (perProvider(agent) && !provider)) return;
+      // Pi keeps one sign-in per provider: a key replaces a subscription.
+      const confirmReplace = () => Kit.confirm({
+        title: 'Replace the ' + keyProviderName(provider) + ' subscription?',
+        body: 'Pi keeps one sign-in per provider. Saving this key signs Pi out of your ' + keyProviderName(provider) + ' subscription on this server.',
+        confirm: 'Replace with key',
+      });
+      let replace = false;
+      if (agent === 'pi' && piSavedType(provider) === 'oauth') {
+        if (!(await confirmReplace()) || keySheet.layer !== layer) return;
+        replace = true;
+      }
       keySheet.saving = true;
       keySheet.error = null;
       renderKeySheet();
-      const res = await api('/auth/apikey', { body: { agent, key, provider } });
+      let res = await api('/auth/apikey', { body: { agent, key, provider, ...(replace ? { replace } : {}) } });
+      // A /login elsewhere since the sheet opened: ask now, then save.
+      if (!res.ok && res.data?.code === 'subscription-exists' && keySheet.layer === layer) {
+        await loadPiProviders({ fresh: true });
+        if (await confirmReplace() && keySheet.layer === layer) res = await api('/auth/apikey', { body: { agent, key, provider, replace: true } });
+        else res = { ok: false, error: 'The key was not saved. Your subscription sign-in is unchanged.' };
+      }
       if (agent === 'opencode') await loadProviders(true);
+      if (agent === 'pi') await loadPiProviders({ fresh: true });
       loadStatus();
       if (keySheet.layer !== layer) return;
       keySheet.saving = false;
@@ -2634,7 +2743,7 @@
         panel.querySelector('#key-error')?.focus({ preventScroll: true });
         return;
       }
-      const label = provider ? (((state.providers || {}).providers || []).find((p) => p.id === provider) || {}).name || provider : null;
+      const label = provider ? keyProviderName(provider) : null;
       keySheet.layer.close('saved');
       Kit.toast(label ? 'Saved the ' + label + ' key' : 'API key saved');
 
@@ -3794,6 +3903,7 @@
     'harness.version': (a, el) => openToolSheet({ id: a.id, target: 'harness', trigger: el }),
     'harness.signin': (a, el) => openSignin(a.id, el),
     'harness.apikey': (a, el) => openKeySheet(a.id, el),
+    'harness.subscription': (a, el) => openKeySheet(a.id, el, { subscription: true }),
     'harness.updateAll': () => updateAll('harness'),
     'toolchain.install': (a) => callLifecycle('toolchain', 'install', a.id),
     'toolchain.update': (a) => callLifecycle('toolchain', 'update', a.id),

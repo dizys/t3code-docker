@@ -123,8 +123,7 @@ const checkSelect = async (page, select, theme) => {
       const openSource = async () => { await visible(target, '[data-cmd="skills.import"]').click(); await target.locator('#skill-source').fill('vercel-labs/skills'); await target.locator('#skill-source').press('Enter'); await target.locator('[data-import-all]').waitFor(); };
       const next = () => target.locator('[data-import-next]');
       const checkColumns = async () => {
-        const agentsChip = target.locator('[data-key=skills-agents-chip]');
-        await agentsChip.click();
+        await visible(target, '[data-cmd="skills.agents-all"]').click();
         await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent').length === 7);
         assert.equal(await target.locator('.tc-mx-agent[data-uninstalled]').count(), 2);
         await target.waitForFunction(() => { const table=document.querySelector('.tc-mx'); return table.scrollWidth <= table.clientWidth + 1 && ![...table.querySelectorAll('.tc-mx-agent-kind')].some(el=>el.textContent.includes('Reading')); });

@@ -21,7 +21,7 @@ const T3SkillInspector = (() => {
       const initial = '---\nname: my-skill\ndescription: Describe when to use this skill.\n---\n\nWrite the skill instructions here.\n';
       const view = { key, skill, data: null, creating, editing: editing || creating, draft: creating ? initial : '', original: creating ? initial : '', slug: '',
         target: targets.find(target => library.installed.includes(target.provider))?.value || targets[0]?.value,
-        generated: true, loading: !creating, saving: false, error: null, layer: null };
+        generated: true, loading: !creating, saving: false, linking: false, linkError: null, error: null, layer: null };
       active = view;
       const editor = T3CodeEditor.create({ id: 'skill-content', label: 'SKILL.md contents', describedBy: 'skill-editor-meta' });
       const row = () => getLibrary().rows.find(row => row.key === key) || skill;
@@ -59,8 +59,12 @@ const T3SkillInspector = (() => {
       };
       const renderOrigin = () => {
         const current = row();
-        if (!current?.origin) return '';
-        return html`<section class="tc-insp-section"><div class="tc-insp-label">Source<span class="tc-spacer"></span><span class="tc-hint">Tracked for updates</span></div><div class="tc-group"><dl class="tc-pathlist"><dt>Repository</dt><dd>${icon('git-branch', 'tc-icon--sm')}<code>${current.origin.source}</code><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs" type="button" data-inspect-copy-source aria-label="Copy repository address">${icon('copy')}</button></dd>${current.update ? html`<dt>Branch</dt><dd><code>${current.update.ref || 'Default branch'}</code></dd>` : ''}<dt>Skill</dt><dd><code>${current.origin.name}</code><span class="tc-hint">in that repository</span></dd></dl><div class="tc-src-status"><span class="tc-dot${current.update?.status === 'error' ? ' tc-dot--warn' : ''}"${current.update?.status === 'available' ? raw(' data-accent') : ''}></span><strong>${updateStatus(current)}</strong>${current.update?.checkedAt ? html`<span class="tc-hint" title="${T3Model.absTime(current.update.checkedAt)}">· checked ${T3Model.relTime(current.update.checkedAt, Date.now())}</span>` : ''}<span class="tc-spacer"></span>${sourceCheck()}</div></div><p class="tc-hint">Updates replace this folder for every agent that reads it. Local edits stay until then.</p></section>`;
+        if (view.editing) return '';
+        if (!current?.origin) {
+          if (!current?.canEdit) return '';
+          return html`<section class="tc-insp-section"><div class="tc-insp-label">Source<span class="tc-spacer"></span><span class="tc-hint">Optional</span></div><div class="tc-group"><div class="tc-src-link"><p class="tc-hint">Link the repository this skill came from to check it for updates. Linking changes no files.</p><label class="tc-label" for="skill-link-source">Repository, skill link or owner/repo</label><div class="tc-source-input">${icon('link')}<input class="tc-input tc-mono" id="skill-link-source" data-key="skill-link-source" placeholder="owner/repo or https://…" maxlength="2048" autocapitalize="none" spellcheck="false"${disabled(view.loading || view.saving || view.linking)}><button class="tc-btn tc-btn--sm" type="button" data-inspect-link-source${disabled(view.loading || view.saving || view.linking)}>${view.linking ? 'Linking…' : 'Link source'}</button></div>${view.linkError ? html`<p class="tc-hint tc-hint--err" role="alert">${view.linkError}</p>` : ''}</div></div></section>`;
+        }
+        return html`<section class="tc-insp-section"><div class="tc-insp-label">Source<span class="tc-spacer"></span><span class="tc-hint">${current.origin.manual ? 'Linked by you' : 'Tracked for updates'}</span></div><div class="tc-group"><dl class="tc-pathlist"><dt>Repository</dt><dd>${icon('git-branch', 'tc-icon--sm')}<code>${current.origin.source}</code><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs" type="button" data-inspect-copy-source aria-label="Copy repository address">${icon('copy')}</button>${Kit.isPhone() ? '' : html`<span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-inspect-unlink-source${disabled(view.loading || view.saving)}>Unlink…</button>`}</dd>${current.update ? html`<dt>Branch</dt><dd><code>${current.update.ref || 'Default branch'}</code></dd>` : ''}<dt>Skill</dt><dd><code>${current.origin.name}</code><span class="tc-hint">in that repository</span></dd></dl><div class="tc-src-status"><span class="tc-dot${current.update?.status === 'error' ? ' tc-dot--warn' : ''}"${current.update?.status === 'available' ? raw(' data-accent') : ''}></span><strong>${updateStatus(current)}</strong>${current.update?.checkedAt ? html`<span class="tc-hint" title="${T3Model.absTime(current.update.checkedAt)}">· checked ${T3Model.relTime(current.update.checkedAt, Date.now())}</span>` : ''}<span class="tc-spacer"></span>${sourceCheck()}</div><div class="tc-src-auto"><div class="tc-row-main"><span class="tc-src-auto-name" id="skill-auto-name">Auto-update</span><span class="tc-src-auto-desc" id="skill-auto-desc">${current.origin.reviewFirst ? 'Your copy differed from the source when you linked it, so review its first update yourself.' : 'Installs new versions while the server is idle, when Skills is on in Automatic updates. Skips skills with local edits.'}</span></div><label class="tc-switch-hit" for="skill-auto-toggle"><button class="tc-switch" id="skill-auto-toggle" data-key="skill-auto-toggle" type="button" role="switch" aria-checked="${String(Boolean(current.origin.autoUpdate))}" aria-labelledby="skill-auto-name" aria-describedby="skill-auto-desc" data-inspect-auto-update${view.saving ? raw(' aria-busy="true"') : ''}${disabled(view.loading || view.saving)}></button></label></div></div><p class="tc-hint">Updates replace this folder for every agent that reads it. Local edits stay until then.</p></section>`;
       };
       const renderPlugin = () => {
         const id = row()?.byProvider.codex?.pluginId;
@@ -138,13 +142,58 @@ const T3SkillInspector = (() => {
       const act = async (action, button) => {
         if (action === 'data-inspect-hooks' && !view.saving && !view.loading) { getLibrary().reviewHooks(row()?.byProvider?.codex?.pluginId); return; }
         if (action === 'data-inspect-check-source') { if (!view.loading && !view.saving) await getLibrary().checkOne(row().key); return; }
+        if (action === 'data-inspect-auto-update') {
+          const current = row();
+          if (!current?.origin || view.saving || view.loading) return;
+          const on = !current.origin.autoUpdate;
+          view.saving = true; view.error = null; repaint();
+          const response = await api('/context/skills/auto', { body: { provider: current.provider, id: current.byProvider[current.provider].id, autoUpdate: on } });
+          view.saving = false;
+          if (!response.ok) { view.error = response.error; repaint(); return; }
+          Kit.toast(on ? 'Auto-update on for ' + current.name : 'Auto-update off for ' + current.name + '. Manual checks still work.');
+          await refresh();
+          view.layer.panel.querySelector('#skill-auto-toggle')?.focus({ preventScroll: true });
+          return;
+        }
         if (action === 'data-inspect-copy-source') { Kit.copy(row().origin.source, button, 'Repository address copied'); return; }
         if (action === 'data-inspect-rescan') { if (await view.close('refresh')) await refresh(); return; }
+        if (action === 'data-inspect-link-source') {
+          const field = view.layer.panel.querySelector('#skill-link-source');
+          const source = field?.value?.trim() || '';
+          if (!source) { view.linkError = 'Enter a repository, skill link or owner/repo.'; repaint(); field?.focus(); return; }
+          view.linking = true; view.linkError = null; repaint();
+          const current = row();
+          const link = async body => api('/context/skills/link', { body: { provider: current.provider, id: current.byProvider[current.provider].id, source, ...body } });
+          let response = await link({});
+          if (!response.ok && response.code === 'mismatch') {
+            const yes = await Kit.confirm({ title: 'Link a differently named skill?', body: response.error, confirm: 'Link anyway', tone: 'primary' });
+            if (yes && active === view) response = await link({ allowNameMismatch: true });
+            else { view.linking = false; if (active === view) repaint(); return; }
+          }
+          view.linking = false;
+          if (!response.ok) { view.linkError = response.error; repaint(); return; }
+          Kit.toast('Linked ' + current.name + ' to its source');
+          await refresh();
+          return;
+        }
+        if (action === 'data-inspect-unlink-source') {
+          const current = row();
+          const yes = await Kit.confirm({ title: 'Unlink source for ' + current.name + '?', body: 'Keeps the files. Stops update checks and auto-updates for this skill. You can link it again later.', confirm: 'Unlink source', tone: 'danger' });
+          if (!yes || active !== view) return;
+          view.saving = true; repaint();
+          const response = await api('/context/skills/unlink', { body: { provider: current.provider, id: current.byProvider[current.provider].id } });
+          view.saving = false;
+          if (!response.ok) { view.error = response.error; repaint(); return; }
+          Kit.toast('Unlinked source');
+          await refresh();
+          return;
+        }
         if (action === 'data-inspect-menu') {
           Kit.menu(button, { label: 'Skill actions', items: [
             { label: 'Copy path', icon: 'copy', run: () => act('data-inspect-copy-path') },
             { label: 'Download SKILL.md', icon: 'download', run: download },
             { label: row()?.origin ? row().update?.status === 'available' ? 'Review update…' : 'Review source…' : 'Reinstall from source…', icon: 'download', run: () => act(row()?.origin ? 'data-inspect-review-source' : 'data-inspect-reinstall') },
+            ...(row()?.origin && detail()?.canEdit ? [{ label: 'Unlink source…', icon: 'link', run: () => act('data-inspect-unlink-source') }] : []),
             ...(detail()?.canRemove ? [{ sep: true }, { label: 'Remove…', icon: 'trash-2', danger: true, run: () => act('data-inspect-remove') }] : []),
           ] }); return;
         }

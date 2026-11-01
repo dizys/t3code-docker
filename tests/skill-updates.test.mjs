@@ -6,6 +6,7 @@ import os from "node:os";
 import { createSkillsService } from "../docker/setup/skills.mjs";
 import { ORIGIN_FILE } from "../docker/setup/skills/origins.mjs";
 import { resolveSkillSource } from "../docker/setup/skills/sources.mjs";
+import { autoUpdateCandidate } from "../docker/setup/skills/update-review.mjs";
 
 async function fixture(t) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "t3-skill-updates-"));
@@ -212,4 +213,80 @@ test("duplicate-source precedence is preserved through tracked update checks and
   assert.equal((await service.installImport(update.previewId, replacement.planId, true)).results[0].status, "installed");
   assert.equal(await fs.readFile(path.join(path.dirname(row.path), "guide.md"), "utf8"), "Updated published guide");
   assert.equal((await service.checkUpdate("claude", row.id)).update.status, "current");
+});
+
+test("links default to manual-only; tracked replacements carry opt-in flags over", async (t) => {
+  const f = await fixture(t), row = await f.row();
+  assert.equal(row.origin.autoUpdate, false);
+  assert.equal(row.origin.manual, false);
+  await f.service.linkSource("claude", row.id, f.source);
+  assert.equal((await f.row()).origin.autoUpdate, false, "links default to manual-only");
+  assert.equal((await f.row()).origin.manual, true);
+  await f.service.linkSource("claude", row.id, f.source, { autoUpdate: true });
+  assert.equal((await f.row()).origin.autoUpdate, true, "explicit opt-in sticks");
+  f.change();
+  const view = await f.service.previewUpdate("claude", row.id);
+  assert.equal(view.localChanges, false);
+  await f.service.installUpdate(view.previewId, view.planId, true);
+  const updated = await f.row();
+  assert.equal(updated.origin.autoUpdate, true, "a tracked update carries the opt-in over");
+  assert.equal(updated.origin.manual, true);
+});
+
+test("linking a single differently named skill requires confirmation", async (t) => {
+  const f = await fixture(t), row = await f.row();
+  const skills = (name) => [{ name, description: name, content: `---\nname: ${name}\ndescription: ${name}\n---\n`,
+    files: [{ name: "SKILL.md", data: Buffer.from(`---\nname: ${name}\ndescription: ${name}\n---\n`), mode: 0o600 }] }];
+  const service = (list) => createSkillsService({ home: f.home, env: {}, resolveSource: async () =>
+    ({ source: "example/other", sourceType: "git", sourceInfo: null, warnings: [], skills: list }) });
+  await assert.rejects(service(skills("other")).linkSource("claude", row.id, "example/other"), { code: "mismatch" });
+  await assert.rejects(service([skills("a")[0], skills("b")[0]]).linkSource("claude", row.id, "example/other"), { code: "missing" });
+  const linked = await service(skills("other")).linkSource("claude", row.id, "example/other", { allowNameMismatch: true });
+  assert.equal(linked.origin.name, "other");
+  assert.equal(linked.origin.autoUpdate, false, "confirmed links still default to manual-only");
+});
+
+test("the idle pass installs only checked, opted-in updates", () => {
+  const entry = (origin, update) => ({ origin: { autoUpdate: true, ...origin }, update });
+  assert.equal(autoUpdateCandidate(entry({}, { status: "available" })), true);
+  assert.equal(autoUpdateCandidate(entry({}, undefined)), false, "no scheduled check result yet");
+  assert.equal(autoUpdateCandidate(entry({}, { status: "current" })), false);
+  assert.equal(autoUpdateCandidate(entry({}, { status: "error" })), false);
+  assert.equal(autoUpdateCandidate(entry({ autoUpdate: false }, { status: "available" })), false);
+  assert.equal(autoUpdateCandidate(entry({ reviewFirst: true }, { status: "available" })), false);
+  assert.equal(autoUpdateCandidate(null), false);
+});
+
+test("a link from a copy that differs from its source waits for one reviewed update", async (t) => {
+  const f = await fixture(t), row = await f.row();
+  await f.service.linkSource("claude", row.id, f.source, { autoUpdate: true });
+  assert.equal((await f.row()).origin.reviewFirst, false, "a copy that matches its source can update by itself");
+  await fs.writeFile(path.join(path.dirname(row.path), "references/guide.md"), "Customized before linking");
+  await f.service.linkSource("claude", row.id, f.source, { autoUpdate: true });
+  assert.equal((await f.row()).origin.reviewFirst, true);
+  f.change();
+  await f.service.checkUpdates([{ provider: "claude", id: row.id }]);
+  const [tracked] = await f.service.listTracked();
+  assert.equal(tracked.update.status, "available");
+  assert.equal(autoUpdateCandidate(tracked), false, "the idle pass leaves it for a person to review");
+  const view = await f.service.previewUpdate("claude", row.id);
+  assert.equal((await f.service.installUpdate(view.previewId, view.planId, true)).results[0].status, "installed");
+  const updated = await f.row();
+  assert.equal(updated.origin.reviewFirst, false, "after one reviewed update it can update by itself");
+  assert.equal(updated.origin.autoUpdate, true);
+});
+
+test("reinstalling a skill from a different source starts opted out", async (t) => {
+  const f = await fixture(t), row = await f.row();
+  await f.service.setSourceAuto("claude", row.id, true);
+  assert.equal((await f.row()).origin.autoUpdate, true);
+  const content = "---\nname: review\ndescription: Review changes\n---\nFork\n";
+  const other = createSkillsService({ home: f.home, env: {}, resolveSource: async () => ({ source: "example/fork", sourceType: "git", sourceInfo: null, warnings: [],
+    skills: [{ name: "review", description: "Review changes", content, files: [{ name: "SKILL.md", data: Buffer.from(content), mode: 0o600 }] }] }) });
+  const preview = await other.previewSource("example/fork");
+  const plan = await other.planImport(preview.previewId, ["review"], ["claude"]);
+  assert.equal((await other.installImport(preview.previewId, plan.planId, true)).results[0].status, "installed");
+  const replaced = (await other.list("claude", { refresh: true })).skills[0];
+  assert.equal(replaced.origin.source, "example/fork");
+  assert.equal(replaced.origin.autoUpdate, false);
 });

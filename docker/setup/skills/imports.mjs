@@ -2,7 +2,7 @@
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { resolveSkillSource } from "./sources.mjs";
-import { ORIGIN_FILE, skillFingerprint } from "./origins.mjs";
+import { ORIGIN_FILE, skillFingerprint, readSkillOrigin } from "./origins.mjs";
 import { removalPlan, serialized } from "./files.mjs";
 import { createSkillUpdateReview } from "./update-review.mjs";
 
@@ -48,7 +48,7 @@ export function createSkillImporter({ home, env, io, metadata, policyFor, invali
       const initial = await updates.bind(provider, id), { binding } = initial;
       const snapshot = await resolveSource(binding.origin.source, { home, env, metadata });
       const skill = snapshot.skills?.find(skill => skill.name === binding.origin.name);
-      if (snapshot.sourceType !== "git" || !skill) throw fail("missing", "The tracked skill was not found in this repository. It may have been renamed or removed.");
+      if (!["git", "url"].includes(snapshot.sourceType) || !skill) throw fail("missing", "The tracked skill was not found in this source. It may have been renamed or removed.");
       if (skill.files.some(file => file.name === ORIGIN_FILE)) throw fail("conflict", "This source contains reserved skill tracking metadata.");
       const entry = await updates.inspect(binding);
       if (entry.revision !== initial.entry.revision) throw fail("conflict", "This skill changed while reading its repository. Review the update again.");
@@ -130,9 +130,23 @@ export function createSkillImporter({ home, env, io, metadata, policyFor, invali
         await io.writeFile(output, file.data, { flag: "wx", mode: file.mode });
         await io.chmod(output, file.mode);
       }
-      if (snapshot.sourceType === "git") {
+      if (snapshot.sourceType === "git" || snapshot.sourceType === "url") {
         // A source cannot supply or overwrite the console's provenance file.
-        await io.writeFile(path.join(staging, ORIGIN_FILE), JSON.stringify({ version: 1, source: snapshot.source, name: skill.name, fingerprint: skillFingerprint(skill) }) + "\n", { flag: "wx", mode: 0o600 });
+        // Replacing a tracked skill carries its opt-in flags over so an
+        // automatic update never silently unticks "Auto-update this skill".
+        // Only for the same source: a different repository starts opted out.
+        let previous = entry.installation?.origin || null;
+        if (!previous && entry.action === "replace") {
+          const probe = path.join(entry.directory, "SKILL.md");
+          const resolved = await io.realpath(probe).catch(() => null);
+          if (resolved) {
+            try {
+              previous = await readSkillOrigin(io, { path: probe, resolvedPath: resolved, scope: "user", source: "Provider" }, home);
+            } catch { previous = null; }
+          }
+        }
+        await io.writeFile(path.join(staging, ORIGIN_FILE), JSON.stringify({ version: 1, source: snapshot.source, name: skill.name, fingerprint: skillFingerprint(skill),
+          ...(previous?.source === snapshot.source ? { autoUpdate: previous.autoUpdate, manual: previous.manual, linkedAt: previous.linkedAt ?? Date.now() } : { autoUpdate: false, manual: false, linkedAt: Date.now() }) }) + "\n", { flag: "wx", mode: 0o600 });
       }
       // Recheck after staging too, so supporting-file edits invalidate replacement.
       for (const provider of [entry.provider, ...entry.also]) {

@@ -28,6 +28,12 @@ export const DEFAULT_POLICY = Object.freeze({
     checkMinutes: 180,
     idleMinutes: 30,
   }),
+  skills: Object.freeze({
+    enabled: false,
+    // Tracked repository skills that opted into auto-update.
+    checkMinutes: 180,
+    idleMinutes: 60,
+  }),
   t3: Object.freeze({
     enabled: false,
     checkMinutes: 180,
@@ -50,6 +56,7 @@ export function normalizePolicy(input) {
   const providers = src.providers && typeof src.providers === "object" ? src.providers : {};
   const hasToolchains = !!(src.toolchains && typeof src.toolchains === "object");
   const toolchains = hasToolchains ? src.toolchains : {};
+  const skills = src.skills && typeof src.skills === "object" ? src.skills : {};
   const t3 = src.t3 && typeof src.t3 === "object" ? src.t3 : {};
   const normalizedProviders = {
     enabled: providers.enabled === true,
@@ -66,6 +73,11 @@ export function normalizePolicy(input) {
       enabled: hasToolchains ? toolchains.enabled === true : normalizedProviders.enabled && providers.includeToolchains === true,
       checkMinutes: clamp(hasToolchains ? toolchains.checkMinutes : normalizedProviders.checkMinutes, 15, 1440, DEFAULT_POLICY.toolchains.checkMinutes),
       idleMinutes: clamp(hasToolchains ? toolchains.idleMinutes : normalizedProviders.idleMinutes, 5, 480, DEFAULT_POLICY.toolchains.idleMinutes),
+    },
+    skills: {
+      enabled: skills.enabled === true,
+      checkMinutes: clamp(skills.checkMinutes, 15, 1440, DEFAULT_POLICY.skills.checkMinutes),
+      idleMinutes: clamp(skills.idleMinutes, 5, 480, DEFAULT_POLICY.skills.idleMinutes),
     },
     t3: {
       enabled: t3.enabled === true,
@@ -106,16 +118,19 @@ export async function readUpdateState(fs, stateDir) {
       // Version 1 refreshed one shared latest-release cache for agents and
       // tools, so its provider check is also the last toolchain check.
       lastToolchainCheckAt,
+      lastSkillsCheckAt: Number(raw.lastSkillsCheckAt) || null,
       lastProviderAttemptAt: Number(raw.lastProviderAttemptAt) || lastProviderCheckAt,
       lastToolchainAttemptAt: Number(raw.lastToolchainAttemptAt) || lastToolchainCheckAt,
+      lastSkillsAttemptAt: Number(raw.lastSkillsAttemptAt) || Number(raw.lastSkillsCheckAt) || null,
       lastT3CheckAt: Number(raw.lastT3CheckAt) || null,
       lastProviderRunAt: Number(raw.lastProviderRunAt) || null,
       lastToolchainRunAt: Number(raw.lastToolchainRunAt) || null,
+      lastSkillsRunAt: Number(raw.lastSkillsRunAt) || null,
       lastT3RunAt: Number(raw.lastT3RunAt) || null,
       lastResult: typeof raw.lastResult === "string" ? raw.lastResult.slice(0, 300) : null,
     };
   } catch {
-    return { lastProviderCheckAt: null, lastToolchainCheckAt: null, lastProviderAttemptAt: null, lastToolchainAttemptAt: null, lastT3CheckAt: null, lastProviderRunAt: null, lastToolchainRunAt: null, lastT3RunAt: null, lastResult: null };
+    return { lastProviderCheckAt: null, lastToolchainCheckAt: null, lastSkillsCheckAt: null, lastProviderAttemptAt: null, lastToolchainAttemptAt: null, lastSkillsAttemptAt: null, lastT3CheckAt: null, lastProviderRunAt: null, lastToolchainRunAt: null, lastSkillsRunAt: null, lastT3RunAt: null, lastResult: null };
   }
 }
 

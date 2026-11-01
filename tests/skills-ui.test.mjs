@@ -137,6 +137,32 @@ test('View menu persists columns and bundled visibility; polling does not discov
   assert.equal(requests.filter(row => row.url === '/context/skills/hooks').length, 2);
 });
 
+test('Table is the default layout; Cards keep the folders, name limiting agents and persist', async () => {
+  const rows = skills.map(row => row.id === 'user' ? { ...row, state: 'off', canToggle: true } : row);
+  const { ui, storage } = await fixture(rows);
+  let content = ui.content();
+  assert.match(content, /data-key="skills-layout-table"[^>]*aria-pressed="true"/);
+  assert.match(content, /class="tc-mx-scroll tc-sk-matrix"/);
+  assert.doesNotMatch(content, /tc-skill-cards/);
+  assert.match(content, /data-key="skills-view-menu"/, 'agent scope and bundled skills stay in the View menu');
+  ui.layout('cards');
+  assert.equal(storage.get('t3-console-skill-view'), 'cards');
+  content = ui.content();
+  assert.match(content, /data-key="skills-layout-cards"[^>]*aria-pressed="true"/);
+  assert.doesNotMatch(content, /tc-sk-matrix/);
+  assert.match(content, /class="tc-sk-phone-list"/, 'phones keep the grouped list in either layout');
+  const cards = content.slice(content.indexOf('tc-skill-cards'), content.indexOf('tc-sk-phone-list'));
+  assert.match(cards, /data-cmd="skills.group"/, 'cards are grouped by folder');
+  assert.match(cards, /data-key="skill-card-\/skills\/user\//);
+  assert.match(cards, /Off in Codex/, 'a card names an agent that limits its skill');
+  assert.doesNotMatch(cards, /data-key="skill-card-\/skills\/system\//, 'bundled skills stay in a collapsed group');
+  const restored = await fixture(rows, storage);
+  assert.match(restored.ui.content(), /tc-skill-cards/);
+  restored.ui.layout('table');
+  assert.equal(storage.get('t3-console-skill-view'), 'table');
+  assert.match(restored.ui.content(), /tc-sk-matrix/);
+});
+
 test('Updates view keeps unchecked installations visible after a partial check and checks one installation on demand', async () => {
   const second = { ...tracked, id: 'other', name: 'Other skill', path: '/skills/other/SKILL.md', resolvedPath: '/skills/other/SKILL.md' };
   const { ui, requests } = await fixture([tracked, second], new Map(), (url, options) => url.endsWith('/check-update') ? { ok: true, data: { results: options.body.skills.map(row => ({ ...row, ok: true, update: { status: 'available', checkedAt: 1000 } })) } } : null);

@@ -1004,6 +1004,7 @@ native_skill_controls_work() {
   docker cp scripts/skills-import-smoke.mjs "$NAME:/tmp/skills-import-smoke.mjs" >/dev/null 2>&1 || return 1
   docker cp scripts/skills-hooks-smoke.mjs "$NAME:/tmp/skills-hooks-smoke.mjs" >/dev/null 2>&1 || return 1
   docker cp scripts/opencode-auth-smoke.mjs "$NAME:/tmp/opencode-auth-smoke.mjs" >/dev/null 2>&1 || return 1
+  docker cp scripts/opencode-config-smoke.mjs "$NAME:/tmp/opencode-config-smoke.mjs" >/dev/null 2>&1 || return 1
   for id in claude codex opencode; do
     executable="$(status_json | jq -r --arg id "$id" '.harnesses[] | select(.id == $id) | .executable')"
     [ -n "$executable" ] && [ "$executable" != null ] || { printf 'No managed executable returned for %s\n' "$id"; return 1; }
@@ -1020,6 +1021,7 @@ native_skill_controls_work() {
     fi
     if [ "$id" = opencode ]; then
       docker exec -u t3 -e T3_HARNESS_MODULE=/opt/t3-harness/index.mjs "$NAME" node /tmp/opencode-auth-smoke.mjs "$executable" || return 1
+      docker exec -u t3 -e T3_SETUP_DIR=file:///opt/t3-setup/ -e T3_NATIVE_PROCESS_MODULE=file:///opt/t3-harness/native-process.mjs "$NAME" node /tmp/opencode-config-smoke.mjs "$executable" || return 1
     fi
   done
 }

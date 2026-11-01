@@ -44,14 +44,9 @@ T3_HOME=/home/t3
 # Provider integration: maps the harness manager's selection onto T3's
 # per-provider `binaryPath`.
 : "${T3_PROVIDER_CLI:=/opt/t3-provider/cli.mjs}"
-# OpenCode 2.x watches its config directory with inotify: a symlinked
-# ~/.config/opencode fails with `Not a directory`, and symlinked skills/
-# agents subdirectories are misclassified as files. Point OpenCode at a real
-# folder on the state volume instead, so nothing is symlinked and everything
-# stays persisted. An explicitly configured directory is always respected.
-: "${OPENCODE_CONFIG_DIR:=${T3CODE_HOME}/agents/.config_opencode}"
+: "${T3_OPENCODE_CONFIG_CLI:=/opt/t3-setup/opencode-config.mjs}"
 export T3CODE_HOME T3CODE_HOST T3CODE_PORT T3_WORKSPACE T3_SETUP_PORT T3_SINGLE_PORT T3_RUN_DIR
-export T3_INFRA_NODE T3_INFRA_BINARY T3_INFRA_LAUNCHER T3_PROVIDER_CLI T3_PREINSTALL OPENCODE_CONFIG_DIR
+export T3_INFRA_NODE T3_INFRA_BINARY T3_INFRA_LAUNCHER T3_PROVIDER_CLI T3_PREINSTALL
 
 # Ownership migration is recorded here before anything else changes. The state
 # directory is the one path every deployment mounts, so a marker written there
@@ -335,91 +330,52 @@ persist_agent_credentials() {
   ensure_opencode_config
 }
 
-# OpenCode's config root honoring overrides (mirrors skillRoots/adapters).
+# Resolve relative overrides against the home, as Setup's native adapters do.
 opencode_config_root() {
-  if [ -n "${OPENCODE_CONFIG_DIR:-}" ]; then
-    case "$OPENCODE_CONFIG_DIR" in
-      /*) printf '%s' "$OPENCODE_CONFIG_DIR" ;;
-      *) printf '%s/%s' "$T3_HOME" "$OPENCODE_CONFIG_DIR" ;;
-    esac
-  elif [ -n "${XDG_CONFIG_HOME:-}" ]; then
-    case "$XDG_CONFIG_HOME" in
-      /*) printf '%s/opencode' "$XDG_CONFIG_HOME" ;;
-      *) printf '%s/%s/opencode' "$T3_HOME" "$XDG_CONFIG_HOME" ;;
-    esac
-  else
-    printf '%s/.config/opencode' "$T3_HOME"
-  fi
+  local root
+  root="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-${T3_HOME}/.config}/opencode}"
+  case "$root" in /*) ;; *) root="${T3_HOME}/$root" ;; esac
+  realpath -ms -- "$root"
 }
 
-# OpenCode 2.x needs real directories: a symlinked config dir fails inotify
-# with `Not a directory`, and symlinked skills/agents dirs are watched as
-# files. OPENCODE_CONFIG_DIR already points at a real folder on the state
-# volume, so this only repairs legacy symlinks inside it, drops the redundant
-# home symlink when it points at the same place, and strips the invalid
-# top-level `skills` key (fixed discovery paths only; filtering is
-# permission.skill). Shared skills stay discoverable through ~/.agents/skills.
+# Keep host-mounted native config in use. Otherwise the default is a real
+# directory on the state volume, avoiding OpenCode 2's directory-link watcher
+# failure. Explicit overrides and disabled persistence keep their native path.
+configure_opencode_config() {
+  local native
+  native="$(OPENCODE_CONFIG_DIR='' opencode_config_root)"
+  if [ -z "${OPENCODE_CONFIG_DIR:-}" ] && [ "$T3_PERSIST_AGENT_CREDENTIALS" = "1" ] &&
+    [ "$(covering_mount "$native")" = "$(covering_mount "$T3_HOME")" ]; then
+    OPENCODE_CONFIG_DIR="${T3CODE_HOME}/agents/.config_opencode"
+  fi
+  OPENCODE_CONFIG_DIR="$(opencode_config_root)"
+  export OPENCODE_CONFIG_DIR
+}
+
 ensure_opencode_config() {
   [ "$T3_PERSIST_AGENT_CREDENTIALS" = "1" ] || return 0
-  local root legacy target target_path sub
+  local root native root_mount output
+  local args=()
   root="$(opencode_config_root)"
-  # A legacy home symlink left by older images: redundant once it resolves to
-  # the effective config dir. Remove only the link itself, never its target.
-  legacy="${T3_HOME}/.config/opencode"
-  if [ -L "$legacy" ] && [ "$(covering_mount "$legacy")" = "$(covering_mount "$T3_HOME")" ]; then
-    target="$(readlink "$legacy")"
-    case "$target" in
-      /*) target_path="$target" ;;
-      *) target_path="$(dirname "$legacy")/$target" ;;
-    esac
-    if [ "$target_path" = "$root" ]; then
-      rm -f "$legacy"
-      log "removed redundant OpenCode config symlink: ${legacy}"
+  native="$(OPENCODE_CONFIG_DIR='' opencode_config_root)"
+  root_mount="$(covering_mount "$root")"
+  # The default lives on the *state* mount, which need not be the home mount.
+  # Only an independent config mount is host-managed and left untouched.
+  if [ "$root_mount" != "$(covering_mount "$T3_HOME")" ]; then
+    if [ "$root" != "${T3CODE_HOME}/agents/.config_opencode" ] ||
+      [ "$root_mount" != "$(covering_mount "$T3CODE_HOME")" ]; then
+      log "leaving OpenCode config where it is: it is mounted from elsewhere"
+      return 0
     fi
   fi
-  # Mounted elsewhere (host-managed config dir): leave it to the host.
-  if [ "$(covering_mount "$root")" != "$(covering_mount "$T3_HOME")" ]; then
-    log "leaving OpenCode config where it is: it is mounted from elsewhere"
-    return 0
+  if [ "$root" = "${T3CODE_HOME}/agents/.config_opencode" ] &&
+    [ "$(covering_mount "$native")" = "$(covering_mount "$T3_HOME")" ]; then
+    args+=(--legacy-root "$native")
   fi
-  if [ -L "$root" ]; then
-    target="$(readlink "$root")"
-    case "$target" in
-      /*) target_path="$target" ;;
-      *) target_path="$(dirname "$root")/$target" ;;
-    esac
-    rm -f "$root"
-    mkdir -p "$root"
-    for file in opencode.json opencode.jsonc; do
-      if [ -f "$target_path/$file" ] && [ ! -e "$root/$file" ]; then
-        cp -a "$target_path/$file" "$root/$file" 2>/dev/null || true
-      fi
-    done
-    if [ -L "$target_path/AGENTS.md" ] && [ ! -e "$root/AGENTS.md" ]; then
-      cp -a "$target_path/AGENTS.md" "$root/AGENTS.md" 2>/dev/null || true
+  if [ -x "${T3_INFRA_NODE:-}" ] && [ -r "$T3_OPENCODE_CONFIG_CLI" ]; then
+    if ! output="$("$T3_INFRA_NODE" "$T3_OPENCODE_CONFIG_CLI" --fix --home "$T3_HOME" "${args[@]}" 2>&1)"; then
+      log "WARNING: could not finish migrating OpenCode config: $output"
     fi
-    log "replaced symlinked OpenCode config dir with real dir: $root"
-  else
-    mkdir -p "$root"
-  fi
-  for sub in skills agents; do
-    if [ -L "$root/$sub" ]; then
-      rm -f "$root/$sub"
-      mkdir -p "$root/$sub"
-      log "replaced symlinked OpenCode $sub with real dir"
-    else
-      mkdir -p "$root/$sub"
-    fi
-  done
-  for sub in skill agent; do
-    if [ -L "$root/$sub" ]; then
-      rm -f "$root/$sub"
-      mkdir -p "$root/$sub"
-      log "replaced symlinked OpenCode $sub with real dir"
-    fi
-  done
-  if [ -x "${T3_INFRA_NODE:-}" ] && [ -r /opt/t3-setup/opencode-config.mjs ]; then
-    "$T3_INFRA_NODE" /opt/t3-setup/opencode-config.mjs --fix --home "$T3_HOME" >/dev/null 2>&1 || true
   fi
 }
 
@@ -472,6 +428,7 @@ report_persistence() {
   esac
 }
 
+configure_opencode_config
 persist_agent_credentials
 report_persistence
 

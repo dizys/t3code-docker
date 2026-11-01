@@ -159,10 +159,11 @@ test("ensure combines layout and normalize, keeping Claude/Codex shared roots", 
   const f = await fixture(t);
   const root = opencodeConfigRoot(f.home, f.env);
   await fs.mkdir(path.dirname(root), { recursive: true });
-  await fs.symlink(f.home, root);
+  const store = path.join(f.home, "store");
+  await fs.mkdir(store);
+  await fs.symlink(store, root);
   await fs.mkdir(path.join(f.home, ".agents/skills"), { recursive: true });
-  await fs.writeFile(path.join(root, "opencode.json"), '{"skills":["x"]}\n').catch(() => {});
-  // Root is a symlink to home; replacing it preserves json handling without throwing.
+  await fs.writeFile(path.join(root, "opencode.json"), '{"skills":["x"]}\n');
   const result = await ensureOpencodeConfig(f);
   assert.equal(result.root, root);
   assert.ok((await fs.lstat(root)).isDirectory());
@@ -175,4 +176,90 @@ test("ensure combines layout and normalize, keeping Claude/Codex shared roots", 
   assert.ok(skillRoots("claude", f).some((entry) => entry.path === path.join(f.home, ".claude/skills")));
   // Agents dir is real and empty (zero agents expected).
   assert.deepEqual(await fs.readdir(path.join(root, "agents")), []);
+});
+
+test("migration preserves complete config trees and relative instruction links", async (t) => {
+  const { home } = await fixture(t);
+  const legacyRoot = path.join(home, ".config/opencode");
+  const root = path.join(home, "state/agents/.config_opencode");
+  await fs.mkdir(path.join(legacyRoot, "plugins"), { recursive: true });
+  await fs.mkdir(path.join(legacyRoot, "skills/own/references"), { recursive: true });
+  await fs.mkdir(path.join(home, "custom-agents"));
+  await fs.writeFile(path.join(home, "custom-agents/review.md"), "Agent instructions");
+  await fs.symlink("../../custom-agents", path.join(legacyRoot, "agents"));
+  await fs.writeFile(path.join(legacyRoot, "opencode.jsonc"), '{"skills":["old"]}\n');
+  await fs.writeFile(path.join(legacyRoot, "plugins/local.js"), "local plugin");
+  await fs.writeFile(path.join(legacyRoot, "skills/own/SKILL.md"), "My skill");
+  await fs.writeFile(path.join(legacyRoot, "skills/own/references/guide.md"), "Supporting file");
+  await fs.writeFile(path.join(legacyRoot, "own.md"), "Private instructions", { mode: 0o640 });
+  await fs.symlink("own.md", path.join(legacyRoot, "AGENTS.md"));
+  await fs.symlink(path.join(legacyRoot, "own.md"), path.join(legacyRoot, "AGENTS.md.t3-context-backup"));
+  const options = { home, env: { OPENCODE_CONFIG_DIR: root }, legacyRoot };
+  await ensureOpencodeConfig(options);
+  assert.equal(await fs.readFile(path.join(root, "plugins/local.js"), "utf8"), "local plugin");
+  assert.equal(await fs.readFile(path.join(root, "agents/review.md"), "utf8"), "Agent instructions");
+  assert.equal(await fs.readFile(path.join(root, "skills/own/references/guide.md"), "utf8"), "Supporting file");
+  assert.equal(await fs.readFile(path.join(root, "AGENTS.md"), "utf8"), "Private instructions");
+  assert.equal(await fs.realpath(path.join(root, "AGENTS.md.t3-context-backup")), path.join(root, "own.md"));
+  assert.equal((await fs.stat(path.join(root, "own.md"))).mode & 0o777, 0o640);
+  assert.equal((await fs.lstat(path.join(root, "agents"))).isSymbolicLink(), false);
+  assert.equal(await fs.readFile(path.join(home, "custom-agents/review.md"), "utf8"), "Agent instructions");
+  await assert.rejects(fs.lstat(legacyRoot), { code: "ENOENT" });
+  assert.ok((await fs.lstat(`${legacyRoot}.t3-migrated`)).isDirectory());
+  assert.deepEqual((await ensureOpencodeConfig(options)).fixedDirs, []);
+});
+
+test("materializing a config symlink keeps plugins, agents, skills and backups", async (t) => {
+  const f = await fixture(t);
+  const store = path.join(f.home, "store"), root = opencodeConfigRoot(f.home);
+  await fs.mkdir(path.join(store, "agents"), { recursive: true });
+  await fs.mkdir(path.join(store, "plugins"));
+  await fs.writeFile(path.join(store, "agents/review.md"), "Keep my agent");
+  await fs.writeFile(path.join(store, "plugins/tool.js"), "Keep my plugin");
+  await fs.writeFile(path.join(store, "own.md"), "Keep instructions");
+  await fs.symlink("own.md", path.join(store, "AGENTS.md.t3-context-backup"));
+  await fs.mkdir(path.dirname(root), { recursive: true });
+  await fs.symlink(store, root);
+  await ensureOpencodeLayout(f);
+  assert.equal(await fs.readFile(path.join(root, "agents/review.md"), "utf8"), "Keep my agent");
+  assert.equal(await fs.readFile(path.join(root, "plugins/tool.js"), "utf8"), "Keep my plugin");
+  assert.equal(await fs.realpath(path.join(root, "AGENTS.md.t3-context-backup")), path.join(root, "own.md"));
+});
+
+test("a failed config copy preserves the original directory link and target", async (t) => {
+  const f = await fixture(t);
+  const store = path.join(f.home, "store"), root = opencodeConfigRoot(f.home);
+  await fs.mkdir(store); await fs.mkdir(path.dirname(root), { recursive: true });
+  await fs.writeFile(path.join(store, "opencode.json"), '{"username":"keep"}');
+  await fs.symlink(store, root);
+  const io = { ...fs, cp: async () => { throw Object.assign(new Error("Disk full"), { code: "ENOSPC" }); } };
+  await assert.rejects(ensureOpencodeLayout({ ...f, io }), { code: "ENOSPC" });
+  assert.ok((await fs.lstat(root)).isSymbolicLink());
+  assert.equal(await fs.readFile(path.join(root, "opencode.json"), "utf8"), '{"username":"keep"}');
+  assert.deepEqual((await fs.readdir(path.dirname(root))).filter((name) => name.includes("t3-migrate-")), []);
+});
+
+test("normalization and MCP saves preserve valid OpenCode 1 skills objects", async (t) => {
+  const f = await fixture(t);
+  const root = opencodeConfigRoot(f.home), file = path.join(root, "opencode.jsonc");
+  const skills = { paths: ["/custom/skills"], urls: ["https://example.com/skills/"] };
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(file, "// keep settings\n" + JSON.stringify({ skills, mcp: {} }));
+  assert.deepEqual((await normalizeOpencodeConfig(f)).fixed, []);
+  await writeProviderMcpEntry(fs, "opencode", f, "probe", { type: "local", command: ["server"], enabled: true });
+  const content = await fs.readFile(file, "utf8");
+  assert.ok(content.includes("// keep settings"));
+  assert.deepEqual(JSON.parse(content.slice(content.indexOf("{"))).skills, skills);
+});
+
+test("legacy arrays with trailing commas are repaired without changing comments", async (t) => {
+  const f = await fixture(t), root = opencodeConfigRoot(f.home);
+  await fs.mkdir(root, { recursive: true });
+  const file = path.join(root, "opencode.jsonc");
+  await fs.writeFile(file, '{\r\n// keep\r\n"skills": ["old",],\r\n"username": "keep",\r\n}\r\n');
+  assert.deepEqual((await normalizeOpencodeConfig(f)).fixed, [file]);
+  const content = await fs.readFile(file, "utf8");
+  assert.match(content, /\/\/ keep\r\n/);
+  assert.match(content, /"username": "keep"/);
+  assert.doesNotMatch(content, /"skills"/);
 });

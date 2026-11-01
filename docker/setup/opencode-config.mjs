@@ -1,21 +1,8 @@
-// OpenCode global config layout: real directories, not symlinked ones.
-//
-// OpenCode 2.x watches its config directory with inotify and classifies
-// symlinked `skills`/`agents` directories as files (node backend), so global
-// skills/agents stay invisible. The config directory itself fails with
-// `inotify_add_watch ... Not a directory` when it is a symlink.
-//
-// This module is the testable source of truth for the entrypoint fix:
-//   - resolve the config root honoring OPENCODE_CONFIG_DIR/XDG_CONFIG_HOME
-//   - replace symlinked config/skills/agents dirs with real dirs
-//   - strip the invalid top-level `skills` key from opencode.json[c]
-//     (discovery is fixed paths only; valid filtering is permission.skill)
-//
-// Shared skills stay available through native discovery
-// (~/.agents/skills, ~/.claude/skills) without symlinking the provider folder.
+// OpenCode 2 needs real config and discovery directories for its watcher.
+// Keep migration here so the entrypoint and regression tests use the same code.
 import path from "node:path";
 import * as defaultFs from "node:fs/promises";
-import { parseTree, modify, applyEdits } from "./vendor/jsonc.mjs";
+import { parseTree, createScanner, SyntaxKind, applyEdits } from "./vendor/jsonc.mjs";
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
@@ -36,91 +23,123 @@ async function lstatOrNull(io, file) {
   }
 }
 
-async function ensureRealDir(io, dir) {
+async function copyDirectory(io, source, destination, finalDestination = destination) {
+  await io.cp(source, destination, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
+  // Keep internal links inside the copied tree, and external relative links
+  // pointing at their original targets after moving to a different parent.
+  const visit = async (relative = "") => {
+    for (const entry of await io.readdir(path.join(source, relative), { withFileTypes: true })) {
+      const child = path.join(relative, entry.name), file = path.join(destination, child);
+      if (entry.isDirectory()) await visit(child);
+      else if (entry.isSymbolicLink()) {
+        const link = await io.readlink(file);
+        const target = path.resolve(path.dirname(path.join(source, child)), link);
+        const inside = target === source || target.startsWith(source + path.sep);
+        const mapped = inside ? path.join(finalDestination, path.relative(source, target)) : target;
+        const next = path.isAbsolute(link) ? mapped : path.relative(path.dirname(path.join(finalDestination, child)), mapped) || ".";
+        if (next !== link) { await io.unlink(file); await io.symlink(next, file); }
+      }
+    }
+  };
+  await visit();
+}
+
+// Stage a complete copy before removing a directory link. Its target is never
+// removed. Copy all user files, including agents, plugins and instruction backups.
+async function ensureRealDir(io, dir, sharedSkills = []) {
   const entry = await lstatOrNull(io, dir);
   if (!entry) {
     await io.mkdir(dir, { recursive: true });
     return "created";
   }
-  if (entry.isSymbolicLink()) {
-    await io.rm(dir, { force: true });
-    await io.mkdir(dir, { recursive: true });
-    return "replaced-symlink";
-  }
   if (entry.isDirectory()) return "exists";
-  return "not-a-directory";
+  if (!entry.isSymbolicLink()) throw fail("not_directory", `OpenCode path is not a directory: ${dir}`);
+  const link = await io.readlink(dir);
+  const target = await io.realpath(dir).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  const shared = await Promise.all(sharedSkills.map((file) => io.realpath(file).catch(() => path.resolve(file))));
+  const stage = await io.mkdtemp(`${dir}.t3-migrate-`);
+  try {
+    // Shared skill folders already have native discovery. Do not duplicate
+    // those installs; arbitrary skill links and every agent link keep contents.
+    if (target && !shared.includes(target)) await copyDirectory(io, target, stage, dir);
+    await io.unlink(dir);
+    try { await io.rename(stage, dir); }
+    catch (error) { await io.symlink(link, dir); throw error; }
+  } finally {
+    await io.rm(stage, { recursive: true, force: true });
+  }
+  return "replaced-symlink";
 }
 
-export async function ensureOpencodeLayout({ home = "/home/t3", env = {}, io = defaultFs } = {}) {
+export async function ensureOpencodeLayout({ home = "/home/t3", env = {}, io = defaultFs, legacyRoot } = {}) {
   const root = opencodeConfigRoot(home, env);
   const fixed = [];
   const warnings = [];
-  // Config root first: replacing a symlinked root must preserve config files
-  // but must not copy symlinked skills/agents contents (shared discovery covers them).
-  const rootEntry = await lstatOrNull(io, root);
-  if (!rootEntry) {
-    await io.mkdir(root, { recursive: true });
-    fixed.push({ path: root, action: "created" });
-  } else if (rootEntry.isSymbolicLink()) {
-    let target = null;
-    try {
-      const link = await io.readlink(root);
-      target = path.resolve(path.dirname(root), link);
-    } catch {
-      target = null;
-    }
-    await io.rm(root, { force: true });
-    await io.mkdir(root, { recursive: true });
-    fixed.push({ path: root, action: "replaced-symlink" });
-    if (target) {
-      for (const file of ["opencode.json", "opencode.jsonc"]) {
-        try {
-          const src = path.join(target, file);
-          const dst = path.join(root, file);
-          const srcStat = await io.lstat(src).catch(() => null);
-          const dstStat = await io.lstat(dst).catch(() => null);
-          if (srcStat?.isFile() && !dstStat) {
-            const content = await io.readFile(src, "utf8");
-            const mode = srcStat.mode & 0o777;
-            await io.writeFile(dst, content, { mode });
-            try {
-              await io.chmod(dst, mode);
-            } catch {}
-          }
-        } catch (error) {
-          warnings.push(`Could not preserve ${file} from previous config location: ${String(error?.message || error).slice(0, 120)}`);
-        }
+  const rootAction = await ensureRealDir(io, root);
+  if (rootAction !== "exists") fixed.push({ path: root, action: rootAction });
+  // The entrypoint passes this only for an unmounted legacy home directory,
+  // when the effective root is the default on the state volume. Host config
+  // mounts and explicit config overrides never get moved here.
+  let legacy = null;
+  if (legacyRoot && path.resolve(legacyRoot) !== root) {
+    const entry = await lstatOrNull(io, legacyRoot);
+    if (entry) {
+      const target = await io.realpath(legacyRoot).catch((error) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (target === await io.realpath(root)) legacy = { entry, path: legacyRoot };
+      else if (target) {
+        if (root.startsWith(target + path.sep)) throw fail("invalid", "OpenCode config cannot be migrated into itself.");
+        // Preserve the original directory as a backup until the container is
+        // recreated. Never overwrite an earlier backup or remove mount contents.
+        const backup = `${legacyRoot}.t3-migrated`;
+        if (await lstatOrNull(io, backup)) throw fail("conflict", `OpenCode migration backup already exists: ${backup}`);
+        await copyDirectory(io, target, root);
+        legacy = { entry, path: legacyRoot, backup };
       }
     }
-  } else if (!rootEntry.isDirectory()) {
-    warnings.push(`OpenCode config path is not a directory: ${root}`);
-    return { root, fixed, warnings };
   }
-  for (const sub of ["skills", "agents"]) {
+  const sharedSkills = [path.join(home, ".agents/skills"), path.resolve(home, env.CLAUDE_CONFIG_DIR || ".claude", "skills")];
+  for (const sub of ["skills", "agents", "skill", "agent"]) {
     const dir = path.join(root, sub);
-    const action = await ensureRealDir(io, dir);
-    if (action === "created" || action === "replaced-symlink") fixed.push({ path: dir, action });
-    else if (action === "not-a-directory") warnings.push(`OpenCode ${sub} path is not a directory: ${dir}`);
+    if (["skill", "agent"].includes(sub) && !(await lstatOrNull(io, dir))) continue;
+    const action = await ensureRealDir(io, dir, sub === "skills" || sub === "skill" ? sharedSkills : []);
+    if (action !== "exists") fixed.push({ path: dir, action });
   }
-  // Legacy singular names are also watched by OpenCode; a symlinked singular
-  // entry would hit the same misclassification, so normalize it when present.
-  for (const sub of ["skill", "agent"]) {
-    const dir = path.join(root, sub);
-    const entry = await lstatOrNull(io, dir);
-    if (entry?.isSymbolicLink()) {
-      await io.rm(dir, { force: true });
-      await io.mkdir(dir, { recursive: true });
-      fixed.push({ path: dir, action: "replaced-symlink" });
-    }
+  if (legacy) {
+    if (legacy.backup) await io.rename(legacy.path, legacy.backup);
+    else if (legacy.entry.isSymbolicLink()) await io.unlink(legacy.path);
+    fixed.push({ path: legacy.path, action: legacy.backup ? "migrated" : "removed-redundant-symlink" });
   }
   return { root, fixed, warnings };
 }
 
-function hasTopLevelKey(content, key) {
+// Only the legacy array is invalid in both supported majors. OpenCode 1 has a
+// valid skills object (paths/urls); never remove it when saving unrelated MCPs.
+export function stripLegacySkills(content) {
   const errors = [];
-  const tree = parseTree(content, errors);
-  if (errors.length || !tree || tree.type !== "object") return false;
-  return (tree.children || []).some((prop) => prop?.children?.[0]?.value === key);
+  const tree = parseTree(content, errors, { allowTrailingComma: true });
+  if (errors.length || tree?.type !== "object") return content;
+  const entries = (tree.children || []).filter((prop) => prop?.children?.[0]?.value === "skills");
+  if (entries.length !== 1 || entries[0].children?.[1]?.type !== "array") return content;
+  const property = entries[0];
+  const edits = [{ offset: property.offset, length: property.length, content: "" }];
+  // Remove the separator token, preserving surrounding comments/whitespace.
+  // jsonc modify() also removes comments preceding a deleted property.
+  const scanner = createScanner(content, true);
+  scanner.setPosition(property.offset + property.length);
+  if (scanner.scan() !== SyntaxKind.CommaToken) {
+    const previous = tree.children[tree.children.indexOf(property) - 1];
+    if (previous) scanner.setPosition(previous.offset + previous.length);
+    else return applyEdits(content, edits);
+    scanner.scan();
+  }
+  if (scanner.getToken() === SyntaxKind.CommaToken) edits.push({ offset: scanner.getTokenOffset(), length: 1, content: "" });
+  return applyEdits(content, edits);
 }
 
 async function stripSkillsKey(io, file) {
@@ -142,10 +161,8 @@ async function stripSkillsKey(io, file) {
   } catch {
     return { fixed: false };
   }
-  if (!hasTopLevelKey(content, "skills")) return { fixed: false, file };
-  const eol = content.includes("\r\n") ? "\r\n" : "\n";
-  const edits = modify(content, ["skills"], undefined, { formattingOptions: { insertSpaces: true, tabSize: 2, eol } });
-  const next = applyEdits(content, edits);
+  const next = stripLegacySkills(content);
+  if (next === content) return { fixed: false, file };
   if (Buffer.byteLength(next, "utf8") > 1024 * 1024) throw fail("too_large", "Native settings would exceed the 1 MiB limit.");
   const mode = stat.mode & 0o777;
   const tmp = `${resolved}.tmp.${process.pid}.${Math.random().toString(16).slice(2)}`;
@@ -176,8 +193,8 @@ export async function normalizeOpencodeConfig({ home = "/home/t3", env = {}, io 
   return { root, fixed, warnings };
 }
 
-export async function ensureOpencodeConfig({ home = "/home/t3", env = {}, io = defaultFs } = {}) {
-  const layout = await ensureOpencodeLayout({ home, env, io });
+export async function ensureOpencodeConfig({ home = "/home/t3", env = {}, io = defaultFs, legacyRoot } = {}) {
+  const layout = await ensureOpencodeLayout({ home, env, io, legacyRoot });
   const normalized = await normalizeOpencodeConfig({ home, env, io });
   return { root: layout.root, fixedDirs: layout.fixed, dirWarnings: layout.warnings, fixedFiles: normalized.fixed, fileWarnings: normalized.warnings };
 }
@@ -189,11 +206,15 @@ if (invoked) {
   const fix = process.argv.includes("--fix");
   const homeIndex = process.argv.indexOf("--home");
   const home = homeIndex >= 0 && process.argv[homeIndex + 1] ? process.argv[homeIndex + 1] : process.env.HOME || "/home/t3";
-  const env = { OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+  const env = process.env;
+  const legacyIndex = process.argv.indexOf("--legacy-root");
+  const legacyRoot = legacyIndex >= 0 ? process.argv[legacyIndex + 1] : undefined;
   if (fix) {
-    ensureOpencodeConfig({ home, env })
+    ensureOpencodeConfig({ home, env, legacyRoot })
       .then((result) => {
-        console.log(JSON.stringify({ ok: true, ...result }));
+        const ok = !result.dirWarnings.length && !result.fileWarnings.length;
+        console.log(JSON.stringify({ ok, ...result }));
+        if (!ok) process.exitCode = 1;
       })
       .catch((error) => {
         console.error(JSON.stringify({ ok: false, error: String(error?.message || error) }));

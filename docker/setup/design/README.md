@@ -169,7 +169,7 @@ Each of these is a bug in the handoff, not a restyle. Keep them when syncing.
 Not in the handoff. Keep them when syncing.
 
 - **Agent marks.** `T3C.agentMark(id)` draws an agent's own mark (Claude Code,
-  Codex, OpenCode, Grok, Cursor, Muse Code, Antigravity) as T3 Code's provider settings
+  Codex, OpenCode, Grok, Cursor, Muse Code, Pi, Antigravity) as T3 Code's provider settings
   draw it, from `AGENT_MARKS` in `ui.js`, and `.tc-tile--mark` sets it on a
   neutral tile in place of a monogram. One-colour marks fill with
   `currentColor` so they follow the theme; Claude keeps its orange, OpenCode's

@@ -53,9 +53,9 @@ in a comma-separated list; `all` and `agents` include it too.
 It uses the official `@earendil-works/pi-coding-agent` npm package through mise,
 with dependency lifecycle scripts disabled by mise's default policy. The image's
 Node.js meets Pi's Node 22.19 minimum; T3 Code requires Pi 0.80.5 or newer.
-Run `docker compose exec -it t3code t3-login pi`, then `/login` to connect a provider.
-Enable Pi under T3 Code's **Settings → Providers** and refresh it. Setup does not
-probe Pi's provider-specific authentication, so it leaves sign-in status unknown.
+**Sign in** on its row saves an API key for a provider, or shows how to use a
+subscription (see [Signing agents in](#signing-agents-in-and-keeping-them-up-to-date)).
+Enable Pi under T3 Code's **Settings → Providers** and refresh it.
 Its credentials and sessions in `~/.pi/agent` survive updates and uninstall.
 Updates from Setup and T3 Code's provider settings use the same managed updater.
 See [T3 Code's Pi guide](https://github.com/pingdotgg/t3code/blob/main/docs/user/providers-pi.md)
@@ -147,7 +147,7 @@ Each agent offers the sign-in methods it supports:
 | Cursor | browser sign-in, checked until it completes | — |
 | Grok Build | device code: a URL and a code to confirm | — |
 | Muse Code | Meta device code: a URL and a code to confirm | stored with `auth set --api-key-stdin` |
-| Pi | terminal sign-in: `t3-login pi`, then `/login` | — |
+| Pi | subscriptions: `t3-login pi`, then `/login` | choose a provider; saved in Pi's `auth.json` |
 | Antigravity | Google sign-in through T3 Code: paste back the address you land on | — |
 
 **Sign in** opens a sheet that follows the agent's own flow as numbered steps:
@@ -173,7 +173,7 @@ both count, as they do for T3 Code:
 | Grok Build | `grok models`, plus `XAI_API_KEY`, as T3 Code does |
 | OpenCode | 1.x: its `auth.json`; 2.x: `auth list --format json --standalone` for saved accounts |
 | Muse Code | saved credentials in `~/.config/muse/auth.json`; sign-in is checked on the first message |
-| Pi | no status probe; sign-in stays unknown (terminal `/login`) |
+| Pi | `pi --list-models`, offline: signed in when Pi lists any model, as T3 Code decides |
 | Antigravity | T3 Code's provider status |
 
 Codex 0.164.0 changed API-key status from "Logged in using an API key" to
@@ -225,6 +225,33 @@ docker compose exec -it t3code t3-login opencode anthropic --method key
 
 OpenCode 1 uses its interactive picker instead. If the managed version cannot
 be checked, extra login arguments are rejected rather than guessed.
+
+Pi keeps one sign-in per provider in `~/.pi/agent/auth.json` (or under
+`PI_CODING_AGENT_DIR`): an API key, or a subscription made with `/login`. Pi
+has no command that saves a key, so **Save key** writes that file itself. It
+takes the same lock Pi takes for its own writes, replaces the file in one step
+(through a link, if `auth.json` is one), and keeps every other provider and
+any saved extra settings. The picker lists the providers that sign in with a
+plain key; **Other** takes any id, such as a custom provider from Pi's
+`models.json`.
+
+Saving a key for a provider you signed in to with a subscription would replace
+that sign-in, so the sheet asks first. A key that starts with `!` or contains
+`$` is refused, because Pi would run it as a command or read it as a variable.
+
+Subscriptions (Claude Pro or Max, ChatGPT Plus or Pro, GitHub Copilot and
+others) sign in inside Pi, which has no command Setup could run for them. The
+sheet gives the command: run `t3-login pi` in a terminal on the server (T3
+Code's terminal works), then type `/login`. **Signed in to** lists what
+`auth.json` holds, by provider and kind, plus keys Pi reads from the
+environment, such as `OPENROUTER_API_KEY`. It never shows a key. **Remove**
+deletes one provider's saved sign-in; keys in the environment stay.
+
+The row asks Pi for its model list, which includes only providers it holds
+credentials for. That covers keys, subscriptions, the environment, custom
+providers and extensions, and it is what T3 Code uses to decide Pi can start a
+turn. Like the other agents' checks, it confirms that a credential is there,
+not that the provider will accept it.
 
 You can also use T3 Code's own provider setup, which opens a terminal on the
 server with the sign-in command ready to run. Both store credentials in the

@@ -46,3 +46,4 @@ export {
 export { compareVersions, meetsMinimum } from "./version.mjs";
 
 export { createOpenCodeAuth, openCodeMajor, parseAuthList, hasStoredCredentials, storedCredentials, storedIntegrationIds } from "./opencode-auth.mjs";
+export { createPiAuth, parsePiModelList, piAuthFile, PI_KEY_PROVIDERS } from "./pi-auth.mjs";

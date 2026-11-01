@@ -96,7 +96,7 @@ run('hooks', async ({ page, target, api, requests, control, width, shot }) => {
   // A plugin with skills can open a filtered sheet; plugins without skills remain
   // reachable through the permanent footer entry.
   await target.locator('#skill-search').fill('code-review');
-  await visible(target, '.tc-sk-matrix .tc-skill-name, .tc-sk-phone-row').click();
+  await visible(target, '.tc-sk-matrix .tc-skill-name, .tc-sk-phone-row, .tc-skill-card [data-cmd="skills.view"]').click();
   await target.getByRole('button', { name: 'Review hooks…', exact: true }).click();
   await first().waitFor(); assert.equal(await sheet.locator('[data-hook]').count(), 2);
   await sheet.getByRole('button', { name: 'All plugins', exact: true }).click(); assert.equal(await sheet.locator('[data-hook]').count(), 4);

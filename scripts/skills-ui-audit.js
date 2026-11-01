@@ -191,12 +191,12 @@ const checkSelect = async (page, select, theme) => {
         await target.locator('.tc-sk-agent-chips [data-cmd="skills.show"][data-id=all]').click();
       }
       const beforeFilter = writes.length;
-      await visible(target, '[data-cmd="skills.bundled"]').click();
+      await visible(target, '[data-cmd="skills.bundled"]').filter({ hasText: 'Bundled' }).first().click();
       assert.equal(await target.locator('.tc-mx-group-toggle').filter({ hasText: 'Codex system skills' }).count(), 0);
       assert.match(await target.locator('.tc-mx-hidden').innerText(), /4 bundled skills are hidden/);
       assert.equal(writes.length, beforeFilter, 'hiding bundled skills never writes provider settings');
       await shot('bundled-hidden');
-      await visible(target, '[data-cmd="skills.bundled"]').click();
+      await visible(target, '[data-cmd="skills.bundled"]').filter({ hasText: 'Bundled' }).first().click();
       assert.equal(await target.locator('.tc-mx-row').count(), 20);
       await shot('library');
       await checkNoticeContrast(visible(target, '.tc-sk-notices .tc-notice-desc, .tc-sk-phone-summary .tc-pnote small').first());

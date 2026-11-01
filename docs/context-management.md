@@ -91,27 +91,37 @@ Skills and source imports are described below.
 
 The **Skills** tab is one library across installed Claude Code, Codex,
 OpenCode, Cursor, Grok Build, Muse Code and Antigravity agents. Each physical
-`SKILL.md` is one row, joined by resolved path, with one column per installed
-agent. A name appearing in two different folders remains two installations.
-The **Installed agents** menu in the Skill header switches to **All agents**,
-including agents that are not installed. Skill names, row actions and folder
-context stay visible while scrolling across agent columns. On phones, the
-matrix becomes a grouped list with available-agent chips and a fixed install bar.
+`SKILL.md` is one card, joined by resolved path. A name appearing in two
+different folders remains two installations. Click a card for where it lives,
+which agents can use it, its files and its source tracking.
+**View** is an inline Cards/Table toggle beside the filters — no dropdown.
+Cards is the default; Table keeps one column per agent for side-by-side
+comparison. Agent scope is an inline `+N`/All agents toggle next to it (chips
+on phones): installed agents, or all agents including ones not detected here.
+Bundled Codex system skills have their own inline Bundled toggle. All three
+remember their choice in this browser.
 
-Groups identify the owning folder, its actual path, and the other agents that
-read it. System/admin groups start collapsed. Search matches names and
-descriptions; **Available to** and **Needs attention** filters combine with it.
+Cards stay small on purpose: name, description, and how many agents can use
+the skill. Badges appear only when they need you — an available update or
+something that may prevent loading. Locations, per-agent access, files and
+source tracking live one click away in the inspector.
+Search matches names and descriptions; **Available to** and **Needs attention**
+filters combine with it.
 Metadata problems explain what may prevent a skill loading and link to its editor.
-Each agent's policy belongs to that column: saving disables that column's other
-controls while other agents stay usable. A failed write explains the error and
-refreshes only that agent.
+Per-agent policies (Allowed/Ask/Denied, On/Off, visibility) are edited in the
+inspector, where saving disables only that agent’s controls while others stay
+usable. A failed write explains the error and refreshes only that agent.
 
-A skill name opens a 520px side inspector, or a bottom sheet on a phone. It shows
-per-agent availability, actual and linked locations, bounded file metadata,
-and a read-only text view with line numbers. **Found** means the file is in a
-folder the agent reads; that agent does not report which skills it loads.
+A skill card opens a 520px side inspector, or a bottom sheet on a phone. It shows
+per-agent availability, actual and linked locations, an **Access & usage**
+summary (which agents and models inherit access, file counts, update state),
+bounded file metadata, and a read-only text view with line numbers.
+**Found** means the file is in a folder the agent reads; that agent does not
+report which skills it loads.
 It does not assert that a live session has loaded the skill. Native state that
-cannot be changed shows a lock and its reason.
+cannot be changed shows a lock and its reason. Models inherit their agent’s
+access: turning an agent off hides the skill from all its models. The console
+does not count runs — usage here is availability, not call counts.
 
 The file list reports names, sizes and executable bits without reading supporting
 file bodies or following their links. It is limited to 1,024 entries and 12 levels;
@@ -327,10 +337,15 @@ specific folder link to choose another variant. Duplicate names within the same
 discovery priority still require a specific folder.
 
 Repository installs remember their source and a fingerprint of the installed
-files in `.t3-skill-source.json` inside the skill folder. Local **Copy to…**
+files in `.t3-skill-source.json` inside the skill folder, plus an `autoUpdate`
+flag and whether the link was added manually. Local **Copy to…**
 copies omit this metadata, preserve local edits and executable files, and need a
-repository re-import to enable their own update tracking. **Check for updates**
-on the Skills tab checks tracked repository installs on demand, fetching each
+repository re-import to enable their own update tracking. Any editable skill can
+also be linked later from its inspector: paste a repository, skill link or
+`owner/repo`, and the console fingerprints the current files so the next check
+reports correctly. Unlinking keeps the files and stops checks; the per-skill
+**Auto-update this skill** toggle stays manual-only when off. **Check for updates**
+on the Skills tab checks tracked installs on demand, fetching each
 source once per check action. A later check fetches fresh contents. It compares the
 skill's complete source contents and executable flags, so unrelated repository
 commits do not trigger an update. Ordinary inventory refreshes never fetch sources.
@@ -343,8 +358,8 @@ Successful checks retain the branch, commit and check time until the Setup
 service restarts; source tracking survives restarts. **Check again** always
 fetches fresh repository contents. Current skills have no badge in the library.
 
-Choose **Review update…** from a row, its menu or its inspector. **Review N
-updates** works through available rows in order, with a skip action and the next
+Choose **Review update…** from a card, its menu or its inspector. **Review N
+updates** works through available cards in order, with a skip action and the next
 review after each result. Closing ends the queue. Each review shows its exact
 folder and detected readers, file counts, and a file list. Select a file to read
 its inline diff, incoming contents or installed contents; unchanged context can
@@ -364,9 +379,13 @@ compatibility readers share the change; no extra copies are created. Availabilit
 settings stay the same, and agents use the files in new sessions.
 
 Checking alone never changes installed files, and local edits do not count as
-upstream updates. A ref pinned to a commit keeps checking that commit. There are
-no scheduled checks or automatic replacements. Earlier installs and imports from
-local folders or direct Markdown links need a repository re-import to enable
+upstream updates. A ref pinned to a commit keeps checking that commit.
+**Updates → Automatic updates → Skills** optionally checks tracked sources on
+its own schedule and, once the server is idle, auto-installs skills whose
+per-skill auto-update is on. Manual **Check for updates** and **Review update…**
+always work, whether that switch is on or off. Turning a skill’s auto-update off
+or unlinking its source returns it to manual-only. Earlier installs and imports from
+local folders or direct Markdown links need a repository link to enable
 tracking. **Copy to…** remains a separate operation.
 
 Tracked skills in the shared `.agents/skills` folder update there. Links into

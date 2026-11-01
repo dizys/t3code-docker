@@ -2057,6 +2057,7 @@ const T3Model = (() => {
         checkMinutes: rawPolicy.providers?.checkMinutes,
         idleMinutes: rawPolicy.providers?.idleMinutes,
       },
+      skills: rawPolicy.skills || { enabled: false },
       t3: rawPolicy.t3 || { enabled: false },
     };
     const state = auto.state || {};
@@ -2074,8 +2075,8 @@ const T3Model = (() => {
     const checked = (at) => (Number.isFinite(at) && at > 0 ? 'Last checked ' + relTime(at, now) + '.' : null);
     return {
       policy, state,
-      schedule: { providers: schedule(policy.providers), toolchains: schedule(policy.toolchains), t3: schedule(policy.t3) },
-      lastChecked: { providers: checked(state.lastProviderCheckAt), toolchains: checked(state.lastToolchainCheckAt), t3: checked(state.lastT3CheckAt) },
+      schedule: { providers: schedule(policy.providers), toolchains: schedule(policy.toolchains), skills: schedule(policy.skills), t3: schedule(policy.t3) },
+      lastChecked: { providers: checked(state.lastProviderCheckAt), toolchains: checked(state.lastToolchainCheckAt), skills: checked(state.lastSkillsCheckAt), t3: checked(state.lastT3CheckAt) },
       lastActivity: auto.lastActivityAt || null,
       lastActivityText: fmtIdle(auto.lastActivityAt),
       busy: auto.busy || null,

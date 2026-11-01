@@ -481,10 +481,11 @@
   };
 
   // ---------------------------------------------------------- auto-update --
-  // Agents, toolchains and T3 Code each have a switch on the Updates page that
-  // saves as it is pressed, and a schedule of their own: how often to look for
-  // a release, and how long the server must be quiet before one installs.
-  const AUTO_NAMES = { providers: 'Agents', toolchains: 'Toolchains and tools', t3: 'T3 Code' };
+  // Agents, toolchains, skills and T3 Code each have a switch on the Updates
+  // page that saves as it is pressed, and a schedule of their own: how often
+  // to look for a release, and how long the server must be quiet before one
+  // installs.
+  const AUTO_NAMES = { providers: 'Agents', toolchains: 'Toolchains and tools', skills: 'Skills', t3: 'T3 Code' };
   const confirmT3AutoUpdate = () => Kit.confirm({
     title: 'Update T3 Code automatically?',
     body: 'T3 Code is alpha software: a release can break it, or how it works with this setup console. Updates would install without asking, once nothing has used the server for a while.',
@@ -1585,11 +1586,12 @@
 
   // Each category's switch, as the Updates page shows it: what it covers, its
   // schedule in a sentence, and a way to change that schedule.
-  // In the page's own order: T3 Code, then the agents, then the tools.
+  // In the page's own order: T3 Code, then the agents, then the tools, then skills.
   const AUTO_KINDS = [
     ['t3', 'T3 Code', null],
     ['providers', 'Agents', 'bot'],
     ['toolchains', 'Toolchains and tools', 'wrench'],
+    ['skills', 'Skills', 'book-open'],
   ];
   const autoSaving = new Set();
   const autoRow = (auto, [kind, label, glyph]) => {
@@ -3668,8 +3670,8 @@
     'skills.refresh': () => skillsUI.refresh(),
     'skills.hooks': a => skillsUI.hooks(a.id),
     'skills.show': a => skillsUI.show(a.id),
-    'skills.view-menu': (a, el) => skillsUI.viewMenu(el),
-    'skills.all-agents': () => skillsUI.allAgents(),
+    'skills.layout': a => skillsUI.layout(a.id),
+    'skills.agents-all': () => skillsUI.toggleAgents(),
     'skills.update': a => skillsUI.update(a.id),
     'skills.check-one': a => skillsUI.checkOne(a.id),
     'skills.review-updates': () => skillsUI.reviewUpdates(),
@@ -3685,7 +3687,6 @@
     'skills.agent': (a) => skillsUI.select(a.provider || ''),
     'skills.attention': () => skillsUI.attention(),
     'skills.clear': () => skillsUI.clear(),
-    'skills.columns': (a, el) => skillsUI.columns(el),
     'skills.group': (a) => skillsUI.group(a.id),
     'skills.copy': (a) => skillsUI.copy(a.id, a.provider),
     'skills.copy-group': (a) => skillsUI.copyGroup(a.id),

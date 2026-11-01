@@ -8,9 +8,9 @@ import { listCodexSkills, writeCodexSkillConfig } from "./skills/codex.mjs";
 import { codexConfigPath, configSnapshot, stateRevision, serializeState } from "./skills/state.mjs";
 import { createSkillFileManager, skillRevision } from "./skills/files.mjs";
 import { createSkillPolicies } from "./skills/policies.mjs";
-import { readSkillOrigin, skillFingerprint } from "./skills/origins.mjs";
+import { readSkillOrigin, skillFingerprint, fingerprintInstalledDir, writeSkillOrigin, removeSkillOrigin } from "./skills/origins.mjs";
 import { adapterDetection } from "./skills/adapters.mjs";
-import { resolveSkillSource } from "./skills/sources.mjs";
+import { resolveSkillSource, parseSkillSource } from "./skills/sources.mjs";
 import { createSkillImporter } from "./skills/imports.mjs";
 import { skillReach } from "./skills/reach.mjs";
 import { createPluginHookService } from "./skills/hooks.mjs";
@@ -343,6 +343,78 @@ export function createSkillsService({ home, env = process.env, io = fs, nativeCo
       .then(result => { entry.pending = false; entry.at = Date.now(); return { ...result, home }; }, error => { cache.delete(key); throw error; });
     cache.set(key, entry); return entry.promise;
   };
+  // Link an existing local skill to a repository source so it can be checked
+  // and auto-updated like an import. Stores the current on-disk fingerprint so
+  // the next check correctly reports available vs current, plus an autoUpdate
+  // flag the background updater honours. Manual links are editable/removable.
+  const linkSource = async (provider, id, source, { autoUpdate = true } = {}) => {
+    if (!Object.hasOwn(PROVIDERS, provider)) throw problem("invalid", "Unknown skill provider.");
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id)) throw problem("invalid", "Invalid skill identifier.");
+    if (typeof source !== "string" || !source.trim() || source.length > 2048) throw problem("invalid", "Enter a repository, skill URL or owner/repo to link.");
+    let kind;
+    try { kind = parseSkillSource(source.trim(), home).type; }
+    catch (error) { throw problem(error.code || "invalid", summaryError(error)); }
+    if (!["git", "url"].includes(kind)) throw problem("invalid", "Link a repository or skill URL so it can be checked for updates. Container folders can't auto-update — use Install from source for those.");
+    const row = await read(provider, id);
+    const policy = await fileManager.policyFor(provider);
+    if (!policy.capabilities(row).canEdit) throw problem("unsupported", policy.capabilities(row).readOnlyReason || "This skill cannot be linked for updates.");
+    if (path.basename(row.resolvedPath) !== "SKILL.md") throw problem("unsupported", "Only ordinary skill folders with a SKILL.md file can be linked.");
+    const directory = path.dirname(row.resolvedPath);
+    let snapshot;
+    try { snapshot = await (resolveSource || resolveSkillSource)(source.trim(), { home, env, metadata: skillMetadata }); }
+    catch (error) { throw problem(error.code || "unavailable", summaryError(error)); }
+    if (snapshot.links) throw problem("invalid", "Choose a repository or skill link from that page, not the listing page itself.");
+    if (!["git", "url"].includes(snapshot.sourceType)) throw problem("invalid", "Link a repository or skill URL so it can be checked for updates. Container folders can't auto-update — use Install from source for those.");
+    const match = (snapshot.skills || []).find(skill => skill.name === row.name) || (snapshot.skills?.length === 1 ? snapshot.skills[0] : null);
+    if (!match) throw problem("missing", snapshot.skills?.length ? `This source has ${snapshot.skills.length} skills but none named ${row.name}. Use its skill folder link or pick the matching name.` : "No skills were found in this source.");
+    if (match.files.some(file => file.name === ".t3-skill-source.json")) throw problem("conflict", "This source contains reserved skill tracking metadata.");
+    const fingerprint = await fingerprintInstalledDir(io, directory);
+    await writeSkillOrigin(io, directory, { source: snapshot.source || source.trim(), name: match.name, fingerprint, autoUpdate: autoUpdate !== false, manual: true, linkedAt: Date.now() });
+    cache.clear();
+    const fresh = await list(provider, { refresh: true });
+    const updated = fresh.skills.find(skill => skill.id === id);
+    if (!updated?.origin) throw problem("unavailable", "The source was saved but could not be verified. Refresh and check the skill.");
+    return { ok: true, provider, id, origin: updated.origin };
+  };
+  const unlinkSource = async (provider, id) => {
+    if (!Object.hasOwn(PROVIDERS, provider)) throw problem("invalid", "Unknown skill provider.");
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id)) throw problem("invalid", "Invalid skill identifier.");
+    const row = await read(provider, id);
+    const policy = await fileManager.policyFor(provider);
+    if (!policy.capabilities(row).canEdit) throw problem("unsupported", policy.capabilities(row).readOnlyReason || "This skill cannot be unlinked.");
+    await removeSkillOrigin(io, path.dirname(row.resolvedPath));
+    for (const tracked of [...updateStates.keys()]) { if (tracked === row.resolvedPath) updateStates.delete(tracked); }
+    cache.clear();
+    return { ok: true, provider, id };
+  };
+  const setSourceAuto = async (provider, id, autoUpdate) => {
+    if (!Object.hasOwn(PROVIDERS, provider)) throw problem("invalid", "Unknown skill provider.");
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id)) throw problem("invalid", "Invalid skill identifier.");
+    if (typeof autoUpdate !== "boolean") throw problem("invalid", "Expected a boolean auto-update value.");
+    const row = await read(provider, id);
+    const origin = await readSkillOrigin(io, row, home);
+    if (!origin) throw problem("unsupported", "This skill has no linked source. Link one before enabling auto-update.");
+    const policy = await fileManager.policyFor(provider);
+    if (!policy.capabilities(row).canEdit) throw problem("unsupported", policy.capabilities(row).readOnlyReason || "This skill cannot change its update settings.");
+    await writeSkillOrigin(io, path.dirname(row.resolvedPath), { ...origin, autoUpdate });
+    // A replaced or removed installation must not inherit a stale toggle.
+    const current = await readSkillOrigin(io, row, home);
+    if (!current || current.source !== origin.source || current.fingerprint !== origin.fingerprint) throw problem("conflict", "The installation changed. Refresh before changing auto-update.");
+    cache.clear();
+    return { ok: true, provider, id, autoUpdate };
+  };
+  const listTracked = async () => {
+    const inventories = await Promise.all(skillProviders().map(async ({ id }) => ({ id, data: await list(id).catch(() => null) })));
+    const tracked = [];
+    for (const { id, data } of inventories) {
+      for (const skill of data?.skills || []) {
+        if (skill.origin) tracked.push({ provider: id, id: skill.id, key: skill.resolvedPath || skill.path, name: skill.name, origin: skill.origin, update: skill.update || null });
+      }
+    }
+    // One physical folder can appear under several providers; check it once.
+    const seen = new Set();
+    return tracked.filter(entry => (seen.has(entry.key) ? false : (seen.add(entry.key), true)));
+  };
   const hooks = createPluginHookService({ home, env, io, getHarness, nativeList: nativeCodexHooks, nativeWrite: nativeCodexHookWrite });
-  return { list, read, reach, checkUpdate, checkUpdates, setState, create: fileManager.create, save: fileManager.save, remove: fileManager.remove, ...importer, ...hooks };
+  return { list, read, reach, checkUpdate, checkUpdates, setState, create: fileManager.create, save: fileManager.save, remove: fileManager.remove, linkSource, unlinkSource, setSourceAuto, listTracked, ...importer, ...hooks };
 }

@@ -117,22 +117,39 @@ test('different repositories use separate requests', async () => {
 });
 
 
-test('View menu persists columns and bundled visibility; polling does not discover hooks', async () => {
-  const { ui, requests, menus, storage } = await fixture();
+test('layout, agent scope and bundled visibility are inline and persist without provider writes', async () => {
+  const { ui, requests, storage } = await fixture();
   assert.equal(requests.filter(row => row.url === '/context/skills/hooks').length, 1);
   const count = requests.length;
   for (let index = 0; index < 3; index++) ui.activate(false);
   assert.equal(requests.length, count);
-  ui.viewMenu({});
-  const menu = menus.at(-1);
-  assert.equal(menu.items.find(row => row.label === 'Show bundled skills').checkbox, true);
-  assert.equal(menu.items.find(row => row.label === 'Installed agents').checked, true);
-  menu.items.find(row => row.label === 'All agents').run();
+  // Cards by default, with an inline Cards/Table toggle and no View menu.
+  assert.doesNotMatch(ui.content(), /skills\.view-menu|skills-view-menu/);
+  assert.match(ui.content(), /data-key="skills-layout-cards"[^>]*aria-pressed="true"/);
+  ui.layout('table');
+  assert.equal(storage.get('t3-console-skill-view'), 'table');
+  assert.match(ui.content(), /data-key="skills-layout-table"[^>]*aria-pressed="true"/);
+  ui.layout('cards');
+  assert.equal(storage.get('t3-console-skill-view'), 'cards');
+  // Agent scope is an inline toggle that remembers its choice.
+  ui.toggleAgents();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(storage.get('t3-console-skill-columns'), 'all');
-  assert.doesNotMatch(ui.content(), /class="tc-btn tc-btn--ghost tc-btn--xs tc-mx-more"/);
-  menu.items.find(row => row.label === 'Show bundled skills').run();
-  assert.equal(storage.get('t3-console-hide-bundled-skills'), 'true');
+  assert.match(ui.content(), /data-key="skills-agents-chip"[^>]*aria-pressed="true"/);
+  ui.toggleAgents();
+  assert.equal(storage.get('t3-console-skill-columns'), 'installed');
+  // Bundled visibility is an inline chip that never writes provider settings.
+  const before = requests.length;
+  ui.toggleBundled();
+  const content = ui.content();
+  assert.doesNotMatch(content, /data-key="(?:phone-)?skill-[^\"]*system/);
+  for (const name of ['My skill', 'Organization skill', 'Plugin skill']) assert.ok(content.includes(name));
+  assert.match(content, /1 bundled skill is hidden/);
+  assert.equal(requests.length, before);
+  const restored = await fixture(skills, storage);
+  assert.doesNotMatch(restored.ui.content(), /data-key="(?:phone-)?skill-[^\"]*system/);
+  restored.ui.toggleBundled();
+  assert.match(restored.ui.content(), /Bundled skill/);
   await ui.refresh();
   assert.equal(requests.filter(row => row.url === '/context/skills/hooks').length, 2);
 });

@@ -1369,11 +1369,11 @@ test('unavailable device snapshots do not prompt pairing a first device', () => 
 test('auto-update view says each schedule, when each last checked, and the last activity', () => {
   const off = M.autoUpdateView({}, NOW);
   assert.equal(off.schedule.providers, 'Off');
-  assert.deepEqual(plain(off.lastChecked), { providers: null, toolchains: null, t3: null });
+  assert.deepEqual(plain(off.lastChecked), { providers: null, toolchains: null, skills: null, t3: null });
   assert.equal(off.lastActivityText, 'Not used since the setup service started');
   assert.equal(M.autoUpdateView({ autoUpdate: { lastActivityAt: NOW - 10_000 } }, NOW).lastActivityText, 'Last used just now');
   const on = M.autoUpdateView({ autoUpdate: {
-    policy: { providers: { enabled: false, checkMinutes: 180, idleMinutes: 30 }, toolchains: { enabled: true, checkMinutes: 45, idleMinutes: 15 }, t3: { enabled: false, checkMinutes: 45, idleMinutes: 15 } },
+    policy: { providers: { enabled: false, checkMinutes: 180, idleMinutes: 30 }, toolchains: { enabled: true, checkMinutes: 45, idleMinutes: 15 }, skills: { enabled: false }, t3: { enabled: false, checkMinutes: 45, idleMinutes: 15 } },
     state: { lastProviderCheckAt: NOW - 6 * MIN, lastToolchainCheckAt: NOW - 12 * MIN, lastResult: 'Queued 2 tool updates' },
     lastActivityAt: NOW - 2 * 60 * MIN, busy: 'An install or update is already running',
   } }, NOW);

@@ -1107,7 +1107,12 @@ html.tc-locked { overflow: hidden; }
 .tc-mx-row[data-highlight], .tc-prow[data-highlight], .tc-skill-card[data-highlight] { background: var(--accent-soft); }
 .tc-mx-row[data-highlight] { background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--surface); }
 .tc-skill-card[data-highlight] { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
-/* One card per skill. A responsive grid that collapses to one column on phones. */
+/* Cards: the table's folders, each a grid of one card per skill. Phones keep
+   the grouped list instead. */
+.tc-skill-cards-head { position: static; width: auto; }
+.tc-skill-cards-group:first-child > .tc-skill-cards-head { border-top: 0; }
+.tc-skill-cards-group > .tc-skill-grid { padding: var(--space-3); }
+:where(:root[data-compact]) .tc-skill-cards, :where(:root[data-compact]) .tc-sk-layout { display: none; }
 .tc-skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr)); gap: var(--space-3); }
 .tc-skill-card { display: flex; flex-direction: column; min-width: 0; padding: 0; overflow: hidden; }
 .tc-skill-card-main { appearance: none; border: 0; background: none; color: inherit; font: inherit; text-align: left; display: flex; flex-direction: column; gap: 0.5rem; padding: 1rem; cursor: pointer; min-width: 0; }
@@ -1116,15 +1121,15 @@ html.tc-locked { overflow: hidden; }
 .tc-skill-card-name { font-size: 1rem; line-height: 1.375rem; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; flex: 1 1 auto; min-width: 0; }
 .tc-skill-card-desc { margin: 0; font-size: 0.8125rem; line-height: 1.25rem; color: var(--fg-muted); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; min-height: 2.5rem; }
 .tc-skill-card-agents { display: flex; align-items: center; gap: 0.5rem; font-size: 0.75rem; line-height: 1rem; color: var(--fg-muted); min-width: 0; }
-.tc-skill-card-agents > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tc-lh-toggles { display: flex; align-items: center; gap: 0.25rem; }
+.tc-skill-card-agents > span:last-child { min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .tc-src-status { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; font-size: 0.8125rem; }
 .tc-src-status .tc-hint { margin: 0; }
 .tc-src-auto { display: flex; align-items: flex-start; gap: 0.75rem; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--hairline); }
 .tc-src-auto-row { display: flex; align-items: flex-start; gap: 0.625rem; flex: 1 1 auto; min-width: 0; cursor: pointer; font-size: 0.8125rem; }
 .tc-src-auto-row > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tc-src-auto-row small { color: var(--fg-muted); font-size: 0.75rem; line-height: 1.125rem; }
-.tc-src-link .tc-source-input { margin-top: 0.5rem; }
+.tc-src-link { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.875rem 1rem; }
+.tc-src-link > .tc-hint, .tc-src-link > .tc-label { margin: 0; }
 .tc-src-link .tc-hint--err { color: var(--danger-text); }
 .tc-sk-library-foot { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; font-size: 0.75rem; line-height: 1.125rem; color: var(--fg-muted); }
 .tc-sk-library-foot > span:first-child { display: inline-flex; align-items: center; gap: var(--space-2); flex: 1 1 28rem; }
@@ -2012,7 +2017,7 @@ button.tc-dv-hunk { width: 100%; border-left: 0; border-right: 0; cursor: pointe
 .tc-sk-matrix .tc-mx-agent { position: relative; }
 .tc-sk-matrix .tc-mx-agent:has(.tc-mx-more) { padding-right: 2.625rem; }
 .tc-sk-matrix .tc-mx-more { position: absolute; inset: 10px 6px auto auto; }
-.tc-sk-phone-summary { display: none; }
+.tc-sk-phone-view, .tc-sk-phone-summary { display: none; }
 .tc-sk-phone-row { position: relative; border-top: 1px solid var(--hairline); }
 .tc-sk-phone-row > .tc-prow { border-top: 0; }
 .tc-sk-phone-row[data-highlight] { background: var(--accent-soft); }
@@ -2049,6 +2054,7 @@ button.tc-dv-hunk { width: 100%; border-left: 0; border-right: 0; cursor: pointe
  :where(:root[data-compact]) .tc-sk-card > .tc-lh .tc-spacer { display: none; }
  :where(:root[data-compact]) .tc-sk-card > .tc-lh .tc-lh-status { margin-right: auto; white-space: normal; }
  :where(:root[data-compact]) .tc-sk-card .tc-sk-library-foot > span:first-child { flex-basis: 100%; }
+ :where(:root[data-compact]) .tc-sk-phone-view { display: inline-flex; flex: none; }
  :where(:root[data-compact]) .tc-sk-toolbar > .tc-spacer { display: none; }
  :where(:root[data-compact]) .tc-sk-toolbar .tc-sk-search { flex: 1; min-width: 0; }
  :where(:root[data-compact]) .tc-sk-phone-summary:not(:empty) { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--surface-raised); }

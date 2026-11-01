@@ -123,7 +123,13 @@ const checkSelect = async (page, select, theme) => {
       const openSource = async () => { await visible(target, '[data-cmd="skills.import"]').click(); await target.locator('#skill-source').fill('vercel-labs/skills'); await target.locator('#skill-source').press('Enter'); await target.locator('[data-import-all]').waitFor(); };
       const next = () => target.locator('[data-import-next]');
       const checkColumns = async () => {
-        await visible(target, '[data-cmd="skills.agents-all"]').click();
+        const columnButton = target.locator('[data-key=skills-view-menu]');
+        await columnButton.click();
+        assert.equal(await target.getByRole('menuitemradio',{name:/Installed agents/}).getAttribute('aria-checked'),'true');
+        await page.keyboard.press('Escape');
+        assert(await columnButton.evaluate(el=>el===document.activeElement),'column menu returns keyboard focus');
+        await columnButton.click();
+        await target.getByRole('menuitemradio',{name:/All agents/}).click();
         await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent').length === 7);
         assert.equal(await target.locator('.tc-mx-agent[data-uninstalled]').count(), 2);
         await target.waitForFunction(() => { const table=document.querySelector('.tc-mx'); return table.scrollWidth <= table.clientWidth + 1 && ![...table.querySelectorAll('.tc-mx-agent-kind')].some(el=>el.textContent.includes('Reading')); });
@@ -147,28 +153,16 @@ const checkSelect = async (page, select, theme) => {
         await firstPolicy.focus();
         const focusClear = await firstPolicy.evaluate(button => button.getBoundingClientRect().left >= button.closest('.tc-mx-row').querySelector('.tc-mx-skill').getBoundingClientRect().right - 1);
         assert(focusClear,'keyboard focus scrolls policy controls clear of the fixed skill column');
-        await visible(target, '[data-cmd="skills.agents-all"]').click();
-        await shot('agent-columns-toggle');
+        await columnButton.click(); await shot('agent-columns-menu');
+        assert.equal(await target.getByRole('menuitemradio',{name:/All agents/}).getAttribute('aria-checked'),'true');
+        await target.getByRole('menuitemradio',{name:/Installed agents/}).click();
         await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent').length === 5);
       };
       await navigate('instructions/skills');
-      // Cards are the default; the matrix assertions below need Table view,
-      // which phones don't offer (cards-first product UI) — phones assert the
-      // cards they actually show. Cards render every filtered skill while the
-      // table collapses system groups, so phone totals match the tab count.
-      const phoneUI = width < (TAB ? 640 : 1024);
-      const rowSel = phoneUI ? '.tc-skill-card' : '.tc-mx-row';
-      if (!phoneUI) await target.locator('[data-key=skills-layout-table]').click();
-      await target.waitForFunction(() => /Skills \d+/.test(document.querySelector('#cx-tab-skills')?.innerText || ''));
-      const tabTotal = Number((await target.locator('#cx-tab-skills').innerText()).match(/Skills (\d+)/)[1]);
-      if (phoneUI) {
-        await target.waitForFunction(total => document.querySelectorAll('.tc-skill-card').length === total, tabTotal);
-      } else {
-        await target.locator('.tc-mx-row').first().waitFor({ state: 'attached' });
-        await target.waitForFunction(() => !document.querySelector('.tc-mx-agent-kind')?.textContent.includes('Reading'));
-        assert.equal(await target.locator('.tc-mx-row').count(), 20);
-        assert.equal(await target.locator('.tc-mx-agent').count(), 5);
-      }
+      await target.locator('.tc-mx-row').first().waitFor({ state: 'attached' });
+      await target.waitForFunction(() => !document.querySelector('.tc-mx-agent-kind')?.textContent.includes('Reading'));
+      assert.equal(await target.locator('.tc-mx-row').count(), 20);
+      assert.equal(await target.locator('.tc-mx-agent').count(), 5);
       assert.equal(await target.locator('#cx-tab-skills').innerText(), 'Skills 24');
       if (width >= (TAB ? 640 : 1024) && width !== 1440) await checkColumns();
       const inventoryCount = Object.values(gets).reduce((a, b) => a + b, 0);
@@ -183,7 +177,7 @@ const checkSelect = async (page, select, theme) => {
       await page.keyboard.press('/');
       assert.equal(await target.evaluate(() => document.activeElement.id), 'skill-search');
       await target.locator('#skill-search').fill('research narrative');
-      assert.equal(await target.locator(rowSel).count(), 1);
+      assert.equal(await target.locator('.tc-mx-row').count(), 1);
       await target.locator('#skill-search').fill('');
       if (width >= (TAB ? 640 : 1024)) {
         await target.locator('.tc-lh [data-cmd="skills.show"][data-id=attention]').first().click();
@@ -196,25 +190,18 @@ const checkSelect = async (page, select, theme) => {
         await target.getByRole('menuitemradio', { name: 'Any agent', exact: true }).click();
       } else {
         await checkChipFocus(page, target.locator('.tc-sk-agent-chips'), shot);
-        // The chip badge states how many of the visible skills this agent can
-        // use — the same filtered set the cards render.
-        const codexChip = target.locator('.tc-sk-agent-chips [data-cmd="skills.agent"][data-provider=codex]');
-        const codexTotal = Number(await codexChip.locator('.tc-tab-count').textContent());
-        await codexChip.click();
-        assert.equal(await target.locator('.tc-skill-card').count(), codexTotal);
+        await target.locator('[data-cmd="skills.agent"][data-provider=codex]').click();
+        assert.equal(await target.locator('.tc-mx-row').count(), 3);
         await target.locator('.tc-sk-agent-chips [data-cmd="skills.show"][data-id=all]').click();
       }
       const beforeFilter = writes.length;
-      const bundledChip = visible(target, '[data-cmd="skills.bundled"]').filter({ hasText: 'Bundled' }).first();
-      const bundledTotal = phoneUI ? Number(await bundledChip.locator('.tc-tab-count').textContent()) : 0;
-      await bundledChip.click();
+      await visible(target, '[data-cmd="skills.view-menu"]').click(); await target.getByRole('menuitemcheckbox', { name: /Show bundled skills/ }).click();
       assert.equal(await target.locator('.tc-mx-group-toggle').filter({ hasText: 'Codex system skills' }).count(), 0);
       assert.match(await target.locator('.tc-mx-hidden').innerText(), /4 bundled skills are hidden/);
       assert.equal(writes.length, beforeFilter, 'hiding bundled skills never writes provider settings');
-      if (phoneUI) assert.equal(await target.locator('.tc-skill-card').count(), tabTotal - bundledTotal, 'hiding bundled skills removes their cards');
       await shot('bundled-hidden');
-      await bundledChip.click();
-      assert.equal(await target.locator(rowSel).count(), phoneUI ? tabTotal : 20);
+      await visible(target, '[data-cmd="skills.view-menu"]').click(); await target.getByRole('menuitemcheckbox', { name: /Show bundled skills/ }).click();
+      assert.equal(await target.locator('.tc-mx-row').count(), 20);
       await shot('library');
       await checkNoticeContrast(visible(target, '.tc-sk-notices .tc-notice-desc, .tc-sk-phone-summary .tc-pnote small').first());
       const deep = () => visible(target, 'button[data-cmd="skills.view"]').filter({ hasText: 'deep-research' });
@@ -498,9 +485,9 @@ const checkSelect = async (page, select, theme) => {
       await visible(target, '.tc-upd').first().waitFor();
       assert.equal(writes.filter(write => write.path.endsWith('/check-update')).length, 1);
       assert.equal(writes.find(write => write.path.endsWith('/check-update')).input.skills.length, 1, 'one batch contains each physical installation once');
-      await visible(target, '.tc-sk-matrix .tc-skill-name, .tc-sk-phone-row, .tc-skill-card [data-cmd="skills.view"]').filter({ hasText: 'frontend-design' }).scrollIntoViewIfNeeded();
+      await visible(target, '.tc-sk-matrix .tc-skill-name, .tc-sk-phone-row').filter({ hasText: 'frontend-design' }).scrollIntoViewIfNeeded();
       await shot('repository-update');
-      const trackedSkill = visible(target, '.tc-sk-matrix .tc-skill-name, .tc-sk-phone-row, .tc-skill-card [data-cmd="skills.view"]').filter({ hasText: 'frontend-design' });
+      const trackedSkill = visible(target, '.tc-sk-matrix .tc-skill-name, .tc-sk-phone-row').filter({ hasText: 'frontend-design' });
       await trackedSkill.click(); await target.locator('[data-inspect-review-source]').first().waitFor();
       await target.locator('[data-inspect-review-source]').first().click();
       await target.locator('[data-update-consent]').waitFor();
@@ -510,8 +497,7 @@ const checkSelect = async (page, select, theme) => {
       assert.equal(await target.locator('[data-import-mode]').count(), 0, 'an update cannot drift into choosing another destination');
       await shot('repository-review'); await close();
       updateStatus = 'error'; await checkUpdates.click();
-      // Cards render the same warning without the table/phone-list suffix.
-      await visible(target, '.tc-tagline[data-tone="warn"]').first().waitFor();
+      await visible(target, '.tc-tagline--src[data-tone=warn]').first().waitFor();
       updateStatus = 'current'; await checkUpdates.click();
       await visible(target, '.tc-upd').waitFor({ state: 'hidden' });
       updateGate = deferred(); updateStarted = deferred();
@@ -529,16 +515,16 @@ const checkSelect = async (page, select, theme) => {
         && ![...document.querySelectorAll('.tc-mx-agent-kind')].some(el => el.textContent.includes('Reading'));
       await target.waitForFunction(quiet);
       // Folder management stays available for undetected tools, including on phones.
-      // The agent scope is an inline toggle now, so no menu popover is involved.
+      // N.B. force-click the menu items: a synthetic scrollIntoView scrolls the
+      // page, and Kit closes popovers on any page scroll. Real pointer clicks
+      // never scroll, so they don't hit this. Scroll to the top first so the
+      // trigger click below settles before the menu opens.
       await target.evaluate(() => window.scrollTo(0, 0));
-      await visible(target, '[data-cmd="skills.agents-all"]').click();
-      // Table columns don't render in cards view; on phones the undetected
-      // provider's chip appearing proves the scope expanded.
-      if (phoneUI) {
-        await target.waitForFunction(() => !!document.querySelector('[data-cmd="skills.agent"][data-provider="antigravity"]'));
-      } else {
-        await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent[data-uninstalled]').length === 2);
-      }
+      await visible(target, '[data-cmd="skills.view-menu"]').click();
+      const showAllAgents = target.getByRole('menuitemradio', { name: /All agents/ });
+      await showAllAgents.waitFor({ state: 'visible' });
+      await showAllAgents.click({ force: true });
+      await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent[data-uninstalled]').length === 2);
       assert.equal(await target.locator('.tc-sk-provider-notice').filter({ hasText: 'isn’t detected' }).count(), 0);
       await shot('undetected-agent');
       await openSource();
@@ -549,37 +535,34 @@ const checkSelect = async (page, select, theme) => {
       assert(writes.filter(write => write.path.endsWith('/plan')).at(-1).input.providers.includes('antigravity'), 'an explicitly selected undetected tool can receive a skill copy');
       await close();
       // Showing all agents loads the undetected providers above; wait out
-      // those paints before toggling back.
+      // those paints before reopening the menu.
       await target.waitForFunction(() => ![...document.querySelectorAll('.tc-mx-agent-kind')].some(el => el.textContent.includes('Reading')));
-      await visible(target, '[data-cmd="skills.agents-all"]').click();
-      if (phoneUI) {
-        await target.waitForFunction(() => !document.querySelector('[data-cmd="skills.agent"][data-provider="antigravity"]'));
-      } else {
-        await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent[data-uninstalled]').length === 0);
-      }
-      // Cards are the default view: one card per skill, details in the inspector.
-      // The table collapses system groups while cards render every skill, so
-      // expand all groups before comparing the two views. Phones have no
-      // layout switch and stay in cards: assert cards against the live tab
-      // total instead.
-      if (phoneUI) {
-        const nowTotal = Number((await target.locator('#cx-tab-skills').innerText()).match(/Skills (\d+)/)[1]);
-        assert.equal(await target.locator('.tc-skill-card').count(), nowTotal, 'one card per skill');
-      } else {
-        for (;;) {
-          const collapsed = visible(target, '[data-cmd="skills.group"][aria-expanded="false"]');
-          if (!(await collapsed.count())) break;
-          await collapsed.first().click();
-        }
-        const cards = await target.locator('.tc-mx-row').count();
-        await target.locator('[data-key="skills-layout-cards"]').click();
+      await target.evaluate(() => window.scrollTo(0, 0));
+      await visible(target, '[data-cmd="skills.view-menu"]').click();
+      const installedAgents = target.getByRole('menuitemradio', { name: /Installed agents/ });
+      await installedAgents.waitFor({ state: 'visible' });
+      await installedAgents.click({ force: true });
+      // Cards are an option on wider screens, with the table's folders and the
+      // same skills. Phones keep the grouped list and have no layout switch.
+      await target.waitForFunction(() => ![...document.querySelectorAll('.tc-mx-agent-kind')].some(el => el.textContent.includes('Reading')));
+      if (width >= (TAB ? 640 : 1024)) {
+        assert.equal(await target.locator('[data-key=skills-layout-table]').getAttribute('aria-pressed'), 'true', 'Table is the default layout');
+        const tableRows = await target.locator('.tc-mx-row').count(), tableGroups = await target.locator('.tc-sk-matrix [data-cmd="skills.group"]').count();
+        await target.locator('[data-key=skills-layout-cards]').click();
         await target.locator('.tc-skill-card').first().waitFor();
-        assert.equal(await target.locator('.tc-skill-card').count(), cards);
-        assert.equal(await target.locator('.tc-skill-card [data-cmd="skills.view"]').count(), cards);
-        await target.locator('[data-key="skills-layout-table"]').click();
-        await target.locator('.tc-mx-row').first().waitFor({ state: 'attached' });
+        assert.equal(await target.locator('.tc-skill-card').count(), tableRows, 'cards show the skills the table shows');
+        assert.equal(await target.locator('.tc-skill-cards [data-cmd="skills.group"]').count(), tableGroups, 'cards keep the folder groups');
+        assert.match(await target.locator('.tc-skill-card').filter({ hasText: 'computer-use' }).first().innerText(), /Ask in OpenCode/, 'a card names the agents that limit its skill');
+        assert.equal(await target.evaluate(() => localStorage.getItem('t3-console-skill-view')), 'cards');
+        await shot('cards');
+        await target.locator('.tc-skill-card [data-cmd="skills.view"]').filter({ hasText: 'deep-research' }).first().click();
+        await target.locator('#skill-view-title').waitFor(); await close();
+        await target.locator('[data-key=skills-layout-table]').click();
+        await target.locator('.tc-mx-row').first().waitFor();
+      } else {
+        assert.equal(await visible(target, '[data-key=skills-layout-cards]').count(), 0, 'phones have no layout switch');
+        assert(await visible(target, '.tc-sk-phone-row').count() > 0, 'phones keep the grouped list');
       }
-      await shot('cards');
       await navigate('instructions');
       await target.locator('.tc-doc-preview .tc-code').waitFor();
       assert.equal(await target.locator('.tc-reads-row').count(), 3);

@@ -36,7 +36,7 @@ import * as Context from "./context.mjs";
 import { createOpenCodeAuth } from "./opencode-auth.mjs";
 import { createPiAuth, PI_KEY_PROVIDERS, piProviderName } from "./pi-auth.mjs";
 import { createSkillsService } from "./skills.mjs";
-import { autoInstallable } from "./skills/update-review.mjs";
+import { autoInstallable, autoUpdateCandidate } from "./skills/update-review.mjs";
 import { createMcpService } from "./mcp.mjs";
 import { clientAddress } from "./client-address.mjs";
 import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
@@ -2354,16 +2354,13 @@ const autoTick = async () => {
         try {
           const tracked = await skillsService.listTracked().catch(() => []);
           let installed = 0;
-          for (const entry of tracked.filter(row => row.origin?.autoUpdate !== false)) {
+          // Only what the scheduled check found: this pass never fetches a
+          // source just to see whether it changed.
+          for (const entry of tracked.filter(autoUpdateCandidate)) {
             if (!AutoUpdate.isIdle({ idleMinutes: autoPolicy.skills.idleMinutes, lastActivityAt, now: Date.now() })) break;
-            // Refresh the check result for this installation only; shared
-            // sources are fetched once per check action upstream.
-            let check;
-            try { check = await skillsService.checkUpdate(entry.provider, entry.id); }
-            catch { continue; }
-            if (check?.update?.status !== "available") continue;
+            let preview = null;
             try {
-              const preview = await skillsService.previewUpdate(entry.provider, entry.id);
+              preview = await skillsService.previewUpdate(entry.provider, entry.id);
               // Manual updates require ticking "Replace my local edits" first;
               // the idle pass must never silently overwrite them. The update
               // stays available and flagged in Updates for an explicit review.
@@ -2374,6 +2371,8 @@ const autoTick = async () => {
                 recordEvent("auto.skills", `Auto-updated skill ${preview.name || entry.name}`);
               }
             } catch { /* next tick retries */ }
+            // Free the review slot so Install from source stays available.
+            finally { if (preview?.previewId) await skillsService.discardImport(preview.previewId).catch(() => {}); }
           }
           if (installed) await persist({ lastSkillsRunAt: Date.now(), lastResult: `Auto-updated ${installed} skill${installed === 1 ? "" : "s"}` });
         } catch { /* next tick retries */ }
@@ -2681,7 +2680,7 @@ const server = createServer(async (req, res) => {
       try {
         const { writeFile, mkdir, readFile } = await import("node:fs/promises");
         autoPolicy = await AutoUpdate.writePolicy({ readFile, writeFile, mkdir }, STATE_DIR, input);
-        recordEvent("auto.policy", (autoPolicy.providers.enabled || autoPolicy.toolchains.enabled || autoPolicy.t3.enabled) ? "Auto-update preferences saved" : "Auto-update turned off");
+        recordEvent("auto.policy", (autoPolicy.providers.enabled || autoPolicy.toolchains.enabled || autoPolicy.skills.enabled || autoPolicy.t3.enabled) ? "Auto-update preferences saved" : "Auto-update turned off");
         return sendJson(res, 200, { ok: true, policy: autoPolicy });
       } catch (error) {
         return sendJson(res, 500, { ok: false, error: String(error?.message ?? error).slice(0, 300) });

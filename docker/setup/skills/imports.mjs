@@ -134,6 +134,7 @@ export function createSkillImporter({ home, env, io, metadata, policyFor, invali
         // A source cannot supply or overwrite the console's provenance file.
         // Replacing a tracked skill carries its opt-in flags over so an
         // automatic update never silently unticks "Auto-update this skill".
+        // Only for the same source: a different repository starts opted out.
         let previous = entry.installation?.origin || null;
         if (!previous && entry.action === "replace") {
           const probe = path.join(entry.directory, "SKILL.md");
@@ -145,7 +146,7 @@ export function createSkillImporter({ home, env, io, metadata, policyFor, invali
           }
         }
         await io.writeFile(path.join(staging, ORIGIN_FILE), JSON.stringify({ version: 1, source: snapshot.source, name: skill.name, fingerprint: skillFingerprint(skill),
-          autoUpdate: previous ? previous.autoUpdate : false, manual: previous ? previous.manual : false, linkedAt: previous?.linkedAt ?? Date.now() }) + "\n", { flag: "wx", mode: 0o600 });
+          ...(previous?.source === snapshot.source ? { autoUpdate: previous.autoUpdate, manual: previous.manual, linkedAt: previous.linkedAt ?? Date.now() } : { autoUpdate: false, manual: false, linkedAt: Date.now() }) }) + "\n", { flag: "wx", mode: 0o600 });
       }
       // Recheck after staging too, so supporting-file edits invalidate replacement.
       for (const provider of [entry.provider, ...entry.also]) {

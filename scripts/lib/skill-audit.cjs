@@ -39,8 +39,7 @@ const run = async (name, work) => {
       await target.evaluate(() => document.fonts.ready);
       const shot = async state => { await page.screenshot({ path: path.join(output, `${theme}-${width}${embedded ? '-embedded' : ''}-${state}.png`) }); };
       await target.evaluate(() => { location.hash = 'instructions/skills'; });
-      // Cards are the default view; accept whichever rendering the combo uses.
-      await target.waitForFunction(() => document.querySelectorAll('.tc-mx-row, .tc-skill-card').length >= 20);
+      await target.waitForFunction(() => document.querySelectorAll('.tc-mx-row').length >= 20);
       await work({ page, target, api, errors, requests, control, theme, width, height, embedded, shot });
       assert.deepEqual(errors, []);
       assert(await target.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'the page does not overflow horizontally');

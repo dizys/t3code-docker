@@ -30,7 +30,7 @@ export async function readSkillOrigin(io, row, home) {
     if (!["git", "url"].includes(parsed.type)) return null;
     return { source: value.source, name: value.name, fingerprint: value.fingerprint,
       autoUpdate: value.autoUpdate === true, linkedAt: Number.isFinite(value.linkedAt) ? value.linkedAt : null,
-      manual: value.manual === true };
+      manual: value.manual === true, reviewFirst: value.reviewFirst === true };
   } catch { return null; }
   finally { await handle?.close(); }
 }
@@ -75,8 +75,8 @@ export async function fingerprintInstalledDir(io, directory, { fileLimit = 4 * 1
   return fingerprintEntries(entries);
 }
 
-export async function writeSkillOrigin(io, directory, { source, name, fingerprint, autoUpdate = true, manual = true, linkedAt = Date.now() }) {
-  const payload = JSON.stringify({ version: 1, source, name, fingerprint, autoUpdate: autoUpdate === true, manual: manual === true, linkedAt }) + "\n";
+export async function writeSkillOrigin(io, directory, { source, name, fingerprint, autoUpdate = false, manual = true, linkedAt = Date.now(), reviewFirst = false }) {
+  const payload = JSON.stringify({ version: 1, source, name, fingerprint, autoUpdate: autoUpdate === true, manual: manual === true, linkedAt, ...(reviewFirst === true ? { reviewFirst: true } : {}) }) + "\n";
   if (Buffer.byteLength(payload, "utf8") > 8192) throw Object.assign(new Error("The skill source record is too large."), { code: "invalid" });
   await io.writeFile(path.join(directory, ORIGIN_FILE), payload, { encoding: "utf8", mode: 0o600 });
 }

@@ -372,7 +372,10 @@ export function createSkillsService({ home, env = process.env, io = fs, nativeCo
     if (!match) throw problem("missing", snapshot.skills?.length ? `This source has ${snapshot.skills.length} skills but none named ${row.name}. Use its skill folder link or pick the matching name.` : "No skills were found in this source.");
     if (match.files.some(file => file.name === ".t3-skill-source.json")) throw problem("conflict", "This source contains reserved skill tracking metadata.");
     const fingerprint = await fingerprintInstalledDir(io, directory);
-    await writeSkillOrigin(io, directory, { source: snapshot.source || source.trim(), name: match.name, fingerprint, autoUpdate: autoUpdate !== false, manual: true, linkedAt: Date.now() });
+    // A copy that already differs from the source is either older or edited.
+    // Its first update is reviewed by hand, even with auto-update on.
+    const reviewFirst = fingerprint !== skillFingerprint(match);
+    await writeSkillOrigin(io, directory, { source: snapshot.source || source.trim(), name: match.name, fingerprint, autoUpdate: autoUpdate === true, manual: true, linkedAt: Date.now(), reviewFirst });
     cache.clear();
     const fresh = await list(provider, { refresh: true });
     const updated = fresh.skills.find(skill => skill.id === id);

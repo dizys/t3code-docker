@@ -111,6 +111,13 @@ export function createSkillUpdateReview({ home, io, policyFor, readInstalled, re
   return { bind, inspect, review };
 }
 
+// The idle pass installs only what a scheduled check already found, for a
+// skill that opted in. A skill linked from a copy that already differed from
+// its source waits for one reviewed update: Setup can't tell an older copy
+// from a customized one, so it never guesses.
+export const autoUpdateCandidate = entry => entry?.origin?.autoUpdate === true && entry.origin.reviewFirst !== true
+  && entry.update?.status === "available";
+
 // Idle auto-installs must never silently overwrite local edits the way an
 // explicit "Replace my local edits" confirmation does. The update stays
 // available and flagged in Updates for a manual review instead. Both review

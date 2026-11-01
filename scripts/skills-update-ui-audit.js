@@ -33,7 +33,7 @@ run('updates', async ({ page, target, api, requests, control, width, shot }) => 
   const open = async () => {
     await visible(target, '[data-cmd="skills.show"][data-id=all]').click();
     await target.locator('#skill-search').fill('frontend-design');
-    await visible(target, '.tc-sk-matrix .tc-skill-name, .tc-sk-phone-row, .tc-skill-card [data-cmd="skills.view"]').click();
+    await visible(target, '.tc-sk-matrix .tc-skill-name, .tc-sk-phone-row').click();
     await target.locator('[data-inspect-review-source]').first().click();
   };
   const ready = () => dialog.locator('[data-update-save]').waitFor();
@@ -55,7 +55,7 @@ run('updates', async ({ page, target, api, requests, control, width, shot }) => 
   // A source check belongs to its one installation and stays visibly pending.
   await visible(target, '.tc-lh-filters [data-cmd="skills.show"][data-id=all], .tc-sk-agent-chips [data-cmd="skills.show"][data-id=all]').click();
   await target.locator('#skill-search').fill('frontend-design');
-  await visible(target, '.tc-sk-matrix .tc-skill-name, .tc-sk-phone-row, .tc-skill-card [data-cmd="skills.view"]').click();
+  await visible(target, '.tc-sk-matrix .tc-skill-name, .tc-sk-phone-row').click();
   const checking = deferred(); checkGate = checking; checkBegan = deferred();
   const checkButton = target.locator('[data-inspect-check-source]');
   await checkButton.click(); await checkBegan.promise;

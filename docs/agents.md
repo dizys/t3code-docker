@@ -91,10 +91,12 @@ checks for new releases in the background every hour. **Setup → Updates**
 gathers every agent, toolchain, added tool and source control CLI with a newer
 release in one list, with **Update all** and **Check for updates** for a fresh
 pass on demand. Under **Automatic updates** there, agents, toolchains and
-tools (including source control CLIs), and T3 Code each have their own switch
-and **Schedule**. By default each enabled category checks every 3 hours and
+tools (including source control CLIs), skills, and T3 Code each have their own
+switch and **Schedule**. By default each enabled category checks every 3 hours and
 installs only after 30 minutes without activity (no open console or T3 Code
-client, no install or update running).
+client, no install or update running). Skills wait 60 minutes, and only skills
+you opted in one by one update this way; see
+[Install skills from sources](context-management.md#install-skills-from-sources).
 
 If a source cannot be verified, the Updates page says how many, and
 **Details** shows which, with technical details you can copy and a **Check

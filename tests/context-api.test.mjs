@@ -20,7 +20,7 @@ test("global instruction API discovers existing files and changes them only on e
   await new Promise((resolve) => reservation.close(resolve));
   const child = spawn(process.execPath, [fileURLToPath(new URL("../docker/setup/server.mjs", import.meta.url))], { env: {
     ...process.env, HOME: home, T3CODE_HOME: path.join(home, ".t3"), T3_WORKSPACE: path.join(root, "workspace"),
-    CODEX_HOME: codex, CLAUDE_CONFIG_DIR: path.join(home, ".claude"), XDG_CONFIG_HOME: config,
+    CODEX_HOME: codex, CLAUDE_CONFIG_DIR: path.join(home, ".claude"), XDG_CONFIG_HOME: config, OPENCODE_CONFIG_DIR: path.join(config, "opencode"),
     MISE_DATA_DIR: path.join(home, ".local/share/mise"), MISE_STATE_DIR: path.join(home, ".local/state/mise"),
     MISE_CONFIG_DIR: path.join(config, "mise"), T3_SETUP_PORT: String(port), T3_SETUP_KEY: "fixture-key",
     T3_SETUP_KEY_SOURCE: "env", T3_INFRA_LAUNCHER: "/bin/false", T3CODE_PORT: "1",

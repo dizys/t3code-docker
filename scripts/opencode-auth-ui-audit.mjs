@@ -27,7 +27,8 @@ try {
     await page.goto(f.base + '/' + (embedded ? '?embed=t3&theme=' + theme : '') + '#agents');
     await page.getByRole('textbox', { name: 'Setup key', exact: true }).fill('auth-fixture');
     await page.getByRole('button', { name: 'Unlock', exact: true }).click();
-    await page.getByRole('button', { name: 'Add key', exact: true }).click();
+    // The first open races the saved-account read: the label follows it.
+    await page.locator('[data-cmd="harness.apikey"][data-id="opencode"]').click();
     await sheet.waitFor();
     await page.getByText('Checking saved sign-ins…', { exact: true }).waitFor();
     assert.equal(await page.getByText('No saved sign-ins yet.', { exact: true }).count(), 0);
@@ -63,7 +64,7 @@ try {
     // A later result must not dismiss a newly opened sheet or replace its draft.
     await page.evaluate(() => { location.hash = '#overview'; }); await sheet.waitFor({ state: 'hidden' });
     await page.evaluate(() => { location.hash = '#agents'; });
-    await page.getByRole('button', { name: 'Add key', exact: true }).click();
+    await page.getByRole('button', { name: 'Manage keys', exact: true }).click();
     await page.locator('#apikey').fill('draft-for-the-new-sheet');
     const completedSave = page.waitForResponse((response) => response.url().endsWith('/auth/apikey'));
     await f.mode({}); await completedSave;
@@ -80,7 +81,7 @@ try {
     assert.equal(await page.locator('#apikey').inputValue(), 'draft-for-the-new-sheet');
     await f.mode({ failList: true }); await f.request('/providers?refresh=1');
     await sheet.getByRole('button', { name: 'Cancel', exact: true }).click();
-    await page.getByRole('button', { name: 'Add key', exact: true }).click();
+    await page.getByRole('button', { name: 'Manage keys', exact: true }).click();
     await page.getByText('Could not check saved sign-ins.', { exact: false }).waitFor();
     await page.locator('#apikey').fill('draft-through-retry');
     await f.mode({}); await page.getByRole('button', { name: 'Try again', exact: true }).click();

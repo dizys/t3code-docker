@@ -227,6 +227,10 @@ test("a row shows exactly the one verb its state calls for", () => {
   const opencode = row(s, "opencode");
   assert.equal(opencode.action.label, "Add key", "OpenCode keeps Add key visible");
   assert.notEqual(opencode.action.variant, "primary");
+  // With a key saved, the same sheet lists and removes keys too.
+  const managed = row(s, "opencode", { providerNames: ["Anthropic"] });
+  assert.deepEqual([managed.action.cmd, managed.action.label], ["harness.apikey", "Manage keys"]);
+  assert.notEqual(managed.action.variant, "primary");
 
   const grok = row(s, "grok");
   assert.equal(grok.state, "signin");
@@ -1544,9 +1548,11 @@ test("Pi signs in with a key per provider or a subscription, from one sheet", ()
   assert.ok(!signedOut.menu.some(item => item.cmd === "harness.signin"), "Pi has no sign-in command Setup can drive");
 
   // Signed in: names the providers, saved or from the environment.
-  const signedIn = at({ signedIn: true }, { piNames: ["Anthropic", "OpenRouter"] });
+  const signedIn = at({ signedIn: true }, { piNames: ["Anthropic", "OpenRouter"], piSaved: 2 });
   assert.equal(signedIn.status.text, "Signed in to Anthropic and OpenRouter");
-  assert.equal(signedIn.action.cmd, "harness.apikey");
+  assert.deepEqual([signedIn.action.cmd, signedIn.action.label], ["harness.apikey", "Manage keys"]);
+  // A key in the environment is not one the sheet can manage.
+  assert.equal(at({ signedIn: true }, { piNames: ["OpenAI"], piSaved: 0 }).action.label, "Add key");
   assert.equal(at({ signedIn: true }).status.text, "Signed in", "models.json or an extension can sign Pi in without a named provider");
   assert.equal(at({ signedIn: true, latestVersion: "1.1.0" }).action.cmd, "harness.update");
 

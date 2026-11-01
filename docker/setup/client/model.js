@@ -431,8 +431,12 @@ const T3Model = (() => {
       row.status.text = !isKey || !names.length ? signedInAs(h)
         : meta.subscription ? 'Signed in to ' + listOf(names)
           : (names.length === 1 ? 'Key saved for ' : 'Keys saved for ') + listOf(names);
+      // Once a provider key is saved, the same sheet adds, lists and removes
+      // keys, so the button says so. Pi's environment keys and models.json
+      // providers are not saved keys: there is nothing to manage for them.
+      const saved = h.id === 'pi' ? (ui && ui.piSaved) || 0 : names.length;
       if (updateAvailable) row.action = { cmd: 'harness.update', label: 'Update' };
-      else if (isKey) row.action = { cmd: 'harness.apikey', label: 'Add key', icon: 'key-round' };
+      else if (isKey) row.action = { cmd: 'harness.apikey', label: saved ? 'Manage keys' : 'Add key', icon: 'key-round' };
     }
     row.notice = distinctNotice(notice, row.status);
     row.held = null;

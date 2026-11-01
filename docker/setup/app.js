@@ -131,8 +131,10 @@
     portsBusy,
     expandedPorts,
     providerNames: [],
-    // Pi's providers with a credential, saved or from the environment.
+    // Pi's providers with a credential, saved or from the environment, and
+    // how many of them auth.json holds.
     piNames: [],
+    piSaved: 0,
     signingIn: null,
     // A source control CLI being signed out, while its request runs.
     signingOut: null,
@@ -351,6 +353,7 @@
         const credentials = res.data.credentials || {};
         const ids = [...new Set([...(credentials.saved || []).map((entry) => entry.provider), ...(credentials.env || []).map((entry) => entry.provider)])];
         ui.piNames = ids.map((id) => names[id] || id).sort((a, b) => a.localeCompare(b));
+        ui.piSaved = (credentials.saved || []).length;
       } else {
         state.piProviders = { ...(state.piProviders || {}), credentials: { ...(state.piProviders?.credentials || {}), error: res.error || 'Pi’s saved sign-ins could not be read.' } };
       }
@@ -363,7 +366,7 @@
     const seen = pi && pi.installed ? String(pi.signedIn) + ':' + (pi.installedVersion || pi.version || '') : null;
     if (seen === piSeen) return;
     piSeen = seen;
-    if (seen === null) { ui.piNames = []; return; }
+    if (seen === null) { ui.piNames = []; ui.piSaved = 0; return; }
     loadPiProviders().then(() => { render(); renderKeySheet(); });
   };
 

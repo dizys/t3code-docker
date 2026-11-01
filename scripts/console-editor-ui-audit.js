@@ -59,6 +59,9 @@ const variants = [['desktop',1440,900],['laptop',1280,800],['tablet',820,900],['
       await field.fill(draft);await target.locator('[data-source-editor="cx-input"] .tc-files-editor-line .k').first().waitFor();
       assert.equal(await field.inputValue(),draft);assert.equal(await target.evaluate(()=>window.skillInjected),undefined);
       assert.equal(await target.locator('[data-source-editor="cx-input"] .tc-files-editor-line .h').textContent(),'# Instructions');checks+=3;
+      // The caret belongs to the transparent input, so its text must start exactly where the painted text does.
+      const caretGap=await target.evaluate(()=>{const input=document.querySelector('#cx-input'),code=document.querySelector('[data-source-editor="cx-input"] .tc-files-editor-line code'),text=document.createTreeWalker(code,NodeFilter.SHOW_TEXT).nextNode(),range=document.createRange();range.setStart(text,0);range.setEnd(text,1);const style=getComputedStyle(input);return range.getBoundingClientRect().left-(input.getBoundingClientRect().left+parseFloat(style.borderLeftWidth)+parseFloat(style.paddingLeft)-input.scrollLeft);});
+      assert(Math.abs(caretGap)<0.5,name+' typed text starts where the painted text does (off by '+caretGap+'px)');checks++;
       const nativeField=await field.evaluate(el=>{window.__editorIdentity=el;return el.id;});assert.equal(nativeField,'cx-input');
       await field.press('Control+End');await field.press('End');await field.press('x');await field.press('Control+z');assert.equal(await field.inputValue(),draft,'native undo remains available');checks++;
       await field.press('Control+f');await target.locator('#cx-input-find').fill('safe');

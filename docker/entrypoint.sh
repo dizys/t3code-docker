@@ -396,8 +396,8 @@ ensure_opencode_config() {
       log "replaced symlinked OpenCode $sub with real dir"
     fi
   done
-  if [ -x "$T3_INFRA_NODE" ] && [ -r /opt/t3-setup/opencode-config.mjs ]; then
-    "$T3_INFRA_NODE" /opt/t3-setup/opencode-config.mjs --fix --home "$T3_HOME" >/dev/null 2>&1 || true
+  if [ -x "${T3_INFRA_NODE:-}" ] && [ -r /opt/t3-setup/opencode-config.mjs ]; then
+    "${T3_INFRA_NODE}" /opt/t3-setup/opencode-config.mjs --fix --home "$T3_HOME" >/dev/null 2>&1 || true
   fi
   store="${T3CODE_HOME}/agents"
   mkdir -p "$store"

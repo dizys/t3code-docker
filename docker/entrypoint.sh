@@ -44,8 +44,14 @@ T3_HOME=/home/t3
 # Provider integration: maps the harness manager's selection onto T3's
 # per-provider `binaryPath`.
 : "${T3_PROVIDER_CLI:=/opt/t3-provider/cli.mjs}"
+# OpenCode 2.x watches its config directory with inotify: a symlinked
+# ~/.config/opencode fails with `Not a directory`, and symlinked skills/
+# agents subdirectories are misclassified as files. Point OpenCode at a real
+# folder on the state volume instead, so nothing is symlinked and everything
+# stays persisted. An explicitly configured directory is always respected.
+: "${OPENCODE_CONFIG_DIR:=${T3CODE_HOME}/agents/.config_opencode}"
 export T3CODE_HOME T3CODE_HOST T3CODE_PORT T3_WORKSPACE T3_SETUP_PORT T3_SINGLE_PORT T3_RUN_DIR
-export T3_INFRA_NODE T3_INFRA_BINARY T3_INFRA_LAUNCHER T3_PROVIDER_CLI T3_PREINSTALL
+export T3_INFRA_NODE T3_INFRA_BINARY T3_INFRA_LAUNCHER T3_PROVIDER_CLI T3_PREINSTALL OPENCODE_CONFIG_DIR
 
 # Ownership migration is recorded here before anything else changes. The state
 # directory is the one path every deployment mounts, so a marker written there
@@ -266,7 +272,14 @@ register_projects
 # Whatever you mounted, signing in once stays signed in. The same goes for the
 # source control CLIs T3 Code opens pull requests through: gh, glab, tea, fj
 # and az keep their sign-ins in these.
-AGENT_DIRS=".claude .codex .cursor .grok .pi .config/opencode .local/share/opencode .config/muse .local/share/muse .agents/skills .local/state/skills .gemini/config/skills .gemini/antigravity-cli/skills"
+#
+# OpenCode's config directory is intentionally absent here. OPENCODE_CONFIG_DIR
+# points at a real folder on the state volume (see above), so there is no
+# symlinked config dir for OpenCode 2.x's inotify watcher to trip over, and
+# everything there already survives a recreate. Shared skills stay
+# discoverable through ~/.agents/skills natively. ensure_opencode_config()
+# below owns that layout.
+AGENT_DIRS=".claude .codex .cursor .grok .pi .local/share/opencode .config/muse .local/share/muse .agents/skills .local/state/skills .gemini/config/skills .gemini/antigravity-cli/skills"
 AGENT_DIRS="$AGENT_DIRS .config/gh .config/glab-cli .config/tea .local/share/forgejo-cli .azure"
 # And git's own settings, plus Claude's global account/MCP config outside its
 # config directory. Git and Claude's native writer preserve these file links.
@@ -319,6 +332,95 @@ persist_agent_credentials() {
     esac
     ln -sfn "$dst" "$src"
   done
+  ensure_opencode_config
+}
+
+# OpenCode's config root honoring overrides (mirrors skillRoots/adapters).
+opencode_config_root() {
+  if [ -n "${OPENCODE_CONFIG_DIR:-}" ]; then
+    case "$OPENCODE_CONFIG_DIR" in
+      /*) printf '%s' "$OPENCODE_CONFIG_DIR" ;;
+      *) printf '%s/%s' "$T3_HOME" "$OPENCODE_CONFIG_DIR" ;;
+    esac
+  elif [ -n "${XDG_CONFIG_HOME:-}" ]; then
+    case "$XDG_CONFIG_HOME" in
+      /*) printf '%s/opencode' "$XDG_CONFIG_HOME" ;;
+      *) printf '%s/%s/opencode' "$T3_HOME" "$XDG_CONFIG_HOME" ;;
+    esac
+  else
+    printf '%s/.config/opencode' "$T3_HOME"
+  fi
+}
+
+# OpenCode 2.x needs real directories: a symlinked config dir fails inotify
+# with `Not a directory`, and symlinked skills/agents dirs are watched as
+# files. OPENCODE_CONFIG_DIR already points at a real folder on the state
+# volume, so this only repairs legacy symlinks inside it, drops the redundant
+# home symlink when it points at the same place, and strips the invalid
+# top-level `skills` key (fixed discovery paths only; filtering is
+# permission.skill). Shared skills stay discoverable through ~/.agents/skills.
+ensure_opencode_config() {
+  [ "$T3_PERSIST_AGENT_CREDENTIALS" = "1" ] || return 0
+  local root legacy target target_path sub
+  root="$(opencode_config_root)"
+  # A legacy home symlink left by older images: redundant once it resolves to
+  # the effective config dir. Remove only the link itself, never its target.
+  legacy="${T3_HOME}/.config/opencode"
+  if [ -L "$legacy" ] && [ "$(covering_mount "$legacy")" = "$(covering_mount "$T3_HOME")" ]; then
+    target="$(readlink "$legacy")"
+    case "$target" in
+      /*) target_path="$target" ;;
+      *) target_path="$(dirname "$legacy")/$target" ;;
+    esac
+    if [ "$target_path" = "$root" ]; then
+      rm -f "$legacy"
+      log "removed redundant OpenCode config symlink: ${legacy}"
+    fi
+  fi
+  # Mounted elsewhere (host-managed config dir): leave it to the host.
+  if [ "$(covering_mount "$root")" != "$(covering_mount "$T3_HOME")" ]; then
+    log "leaving OpenCode config where it is: it is mounted from elsewhere"
+    return 0
+  fi
+  if [ -L "$root" ]; then
+    target="$(readlink "$root")"
+    case "$target" in
+      /*) target_path="$target" ;;
+      *) target_path="$(dirname "$root")/$target" ;;
+    esac
+    rm -f "$root"
+    mkdir -p "$root"
+    for file in opencode.json opencode.jsonc; do
+      if [ -f "$target_path/$file" ] && [ ! -e "$root/$file" ]; then
+        cp -a "$target_path/$file" "$root/$file" 2>/dev/null || true
+      fi
+    done
+    if [ -L "$target_path/AGENTS.md" ] && [ ! -e "$root/AGENTS.md" ]; then
+      cp -a "$target_path/AGENTS.md" "$root/AGENTS.md" 2>/dev/null || true
+    fi
+    log "replaced symlinked OpenCode config dir with real dir: $root"
+  else
+    mkdir -p "$root"
+  fi
+  for sub in skills agents; do
+    if [ -L "$root/$sub" ]; then
+      rm -f "$root/$sub"
+      mkdir -p "$root/$sub"
+      log "replaced symlinked OpenCode $sub with real dir"
+    else
+      mkdir -p "$root/$sub"
+    fi
+  done
+  for sub in skill agent; do
+    if [ -L "$root/$sub" ]; then
+      rm -f "$root/$sub"
+      mkdir -p "$root/$sub"
+      log "replaced symlinked OpenCode $sub with real dir"
+    fi
+  done
+  if [ -x "${T3_INFRA_NODE:-}" ] && [ -r /opt/t3-setup/opencode-config.mjs ]; then
+    "$T3_INFRA_NODE" /opt/t3-setup/opencode-config.mjs --fix --home "$T3_HOME" >/dev/null 2>&1 || true
+  fi
 }
 
 # Field 4 of mountinfo is the mount's source, which is the only way from inside

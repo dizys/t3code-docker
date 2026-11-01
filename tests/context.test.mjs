@@ -21,6 +21,8 @@ test("native instruction targets respect provider environment overrides", () => 
   ]);
   assert.deepEqual(agentsMdTargets({ CLAUDE_CONFIG_DIR: "/claude", CODEX_HOME: "/codex", XDG_CONFIG_HOME: "/config" }).map((t) => t.path),
     ["/claude/CLAUDE.md", "/codex/AGENTS.md", "/config/opencode/AGENTS.md"]);
+  assert.deepEqual(agentsMdTargets({ OPENCODE_CONFIG_DIR: "/state/opencode" }, "/home/t3").map((t) => t.path),
+    ["/home/t3/.claude/CLAUDE.md", "/home/t3/.codex/AGENTS.md", "/state/opencode/AGENTS.md"]);
 });
 
 test("validation rejects blank and oversized UTF-8 content", () => {

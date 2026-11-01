@@ -34,11 +34,18 @@ covering_mount() {
   printf 'home\n'
 }
 eval "$(sed -n '/^AGENT_DIRS=/,/^}/p' "$ROOT/docker/entrypoint.sh")"
+eval "$(sed -n '/^opencode_config_root()/,/^}/p' "$ROOT/docker/entrypoint.sh")"
+eval "$(sed -n '/^ensure_opencode_config()/,/^}/p' "$ROOT/docker/entrypoint.sh")"
 declare -F persist_agent_credentials >/dev/null || { echo "persist_agent_credentials not found in the entrypoint"; exit 1; }
 
 T3_HOME="$WORK/home"
 T3CODE_HOME="$WORK/state"
 export T3_PERSIST_AGENT_CREDENTIALS=1
+# Mirror the entrypoint default: OpenCode reads a real folder on the state
+# volume, so the config never becomes a home symlink.
+: "${OPENCODE_CONFIG_DIR:=$T3CODE_HOME/agents/.config_opencode}"
+export OPENCODE_CONFIG_DIR
+OC_ROOT="$(opencode_config_root)"
 STORE="$T3CODE_HOME/agents"
 mkdir -p "$T3_HOME" "$T3CODE_HOME"
 
@@ -73,6 +80,8 @@ MOUNTED="$T3_HOME/.config/glab-cli"
 persist_agent_credentials
 
 [ -L "$T3_HOME/.agents/skills" ] && ok "shared skills become a scoped link" || no "shared skills become a scoped link"
+[ ! -e "$T3_HOME/.config/opencode" ] && ok "no home OpenCode symlink is created" || no "no home OpenCode symlink is created"
+[ -d "$OC_ROOT/skills" ] && [ ! -L "$OC_ROOT/skills" ] && [ -d "$OC_ROOT/agents" ] && [ ! -L "$OC_ROOT/agents" ] && ok "the state-volume OpenCode config stays real dirs" || no "the state-volume OpenCode config stays real dirs"
 [ -L "$T3_HOME/.gemini/config/skills" ] && ok "Antigravity skills become a scoped link" || no "Antigravity skills become a scoped link"
 [ ! -L "$T3_HOME/.gemini" ] && [ -f "$T3_HOME/.gemini/unrelated" ] && ok "the rest of .gemini stays in place" || no "the rest of .gemini stays in place"
 [ ! -L "$T3_HOME/.agents" ] && [ -f "$T3_HOME/.agents/unrelated" ] && ok "the rest of .agents stays in place" || no "the rest of .agents stays in place"
@@ -122,6 +131,28 @@ is "and its credential helper" '!gh auth git-credential' "$(HOME="$T3_HOME" git 
 before="$(cd "$WORK" && find . | sort)"
 persist_agent_credentials
 is "a second run changes nothing" "$before" "$(cd "$WORK" && find . | sort)"
+
+# A legacy layout (home symlink plus symlinked skills inside the state dir)
+# migrates to real dirs without losing config; the redundant home link goes.
+rm -rf "$OC_ROOT"
+mkdir -p "$OC_ROOT"
+printf '%s' '{"mcp":{}}' > "$OC_ROOT/opencode.json"
+ln -sfn "$OC_ROOT" "$T3_HOME/.config/opencode"
+mkdir -p "$WORK/shared-skills"
+ln -sfn "$WORK/shared-skills" "$OC_ROOT/skills"
+MOUNTED=""
+persist_agent_credentials
+[ ! -e "$T3_HOME/.config/opencode" ] && ok "a redundant home OpenCode link is removed" || no "a redundant home OpenCode link is removed"
+[ -d "$OC_ROOT/skills" ] && [ ! -L "$OC_ROOT/skills" ] && ok "a symlinked OpenCode skills dir becomes real" || no "a symlinked OpenCode skills dir becomes real"
+is "OpenCode config survives the migration" '{"mcp":{}}' "$(cat "$OC_ROOT/opencode.json")"
+
+# A host-managed config dir is left where it is, symlinks and all.
+rm -rf "$OC_ROOT/skills"
+ln -sfn "$WORK/shared-skills" "$OC_ROOT/skills"
+MOUNTED="$OC_ROOT"
+persist_agent_credentials
+[ -L "$OC_ROOT/skills" ] && ok "a mounted OpenCode config is respected" || no "a mounted OpenCode config is respected"
+MOUNTED=""
 
 # Shared skills mounted through their parent remain where the host mounted them.
 rm "$T3_HOME/.agents/skills"

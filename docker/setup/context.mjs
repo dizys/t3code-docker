@@ -17,10 +17,14 @@ export function agentsMdTargets(env = {}, home = "/home/t3") {
   const claudeDir = String(env.CLAUDE_CONFIG_DIR ?? "").trim() || path.join(home, ".claude");
   const codexHome = String(env.CODEX_HOME ?? "").trim() || path.join(home, ".codex");
   const configHome = String(env.XDG_CONFIG_HOME ?? "").trim() || path.join(home, ".config");
+  // OpenCode reads its config dir through OPENCODE_CONFIG_DIR; the entrypoint
+  // points it at a real folder on the state volume, so instructions belong
+  // there rather than under a symlinked ~/.config/opencode.
+  const openCodeHome = String(env.OPENCODE_CONFIG_DIR ?? "").trim() || path.join(configHome, "opencode");
   return [
     { provider: "claude", path: path.join(claudeDir, "CLAUDE.md") },
     { provider: "codex", path: path.join(codexHome, "AGENTS.md") },
-    { provider: "opencode", path: path.join(configHome, "opencode", "AGENTS.md") },
+    { provider: "opencode", path: path.join(openCodeHome, "AGENTS.md") },
   ];
 }
 

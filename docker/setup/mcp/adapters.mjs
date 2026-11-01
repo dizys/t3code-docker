@@ -152,19 +152,7 @@ export async function writeProviderMcpEntry(io, provider, { home, env = {} }, na
       nextEntry = { ...rest, disabled: enabled === false };
     }
     if (!entry && !Object.hasOwn(container.entries, name)) return raw;
-    const eol = (raw || "").includes("\r\n") ? "\r\n" : "\n";
-    let next = applyEdits(raw || "{}\n", modify(raw || "{}\n", [...container.keys, name], nextEntry ?? undefined,
-      { formattingOptions: { insertSpaces: true, tabSize: 2, eol } }));
-    // OpenCode has no top-level `skills` key (fixed discovery paths only).
-    // Strip the legacy invalid key when MCP settings are saved.
-    if (provider === "opencode") {
-      try {
-        if (Object.hasOwn(jsonDocument(next, false), "skills")) {
-          next = applyEdits(next, modify(next, ["skills"], undefined,
-            { formattingOptions: { insertSpaces: true, tabSize: 2, eol } }));
-        }
-      } catch {}
-    }
-    return next;
+    return applyEdits(raw || "{}\n", modify(raw || "{}\n", [...container.keys, name], nextEntry ?? undefined,
+      { formattingOptions: { insertSpaces: true, tabSize: 2, eol: raw.includes("\r\n") ? "\r\n" : "\n" } }));
   });
 }

@@ -266,14 +266,7 @@ register_projects
 # Whatever you mounted, signing in once stays signed in. The same goes for the
 # source control CLIs T3 Code opens pull requests through: gh, glab, tea, fj
 # and az keep their sign-ins in these.
-#
-# OpenCode's config directory is intentionally absent here. OpenCode 2.x watches
-# its config with inotify and misclassifies symlinked skills/agents dirs as
-# files (`Not a directory`), so ~/.config/opencode (or $OPENCODE_CONFIG_DIR)
-# must stay a real directory with real skills/ and agents/ subdirs. Shared
-# skills remain discoverable through ~/.agents/skills natively, without
-# symlinking the provider folder. ensure_opencode_config() below owns that layout.
-AGENT_DIRS=".claude .codex .cursor .grok .pi .local/share/opencode .config/muse .local/share/muse .agents/skills .local/state/skills .gemini/config/skills .gemini/antigravity-cli/skills"
+AGENT_DIRS=".claude .codex .cursor .grok .pi .config/opencode .local/share/opencode .config/muse .local/share/muse .agents/skills .local/state/skills .gemini/config/skills .gemini/antigravity-cli/skills"
 AGENT_DIRS="$AGENT_DIRS .config/gh .config/glab-cli .config/tea .local/share/forgejo-cli .azure"
 # And git's own settings, plus Claude's global account/MCP config outside its
 # config directory. Git and Claude's native writer preserve these file links.
@@ -325,100 +318,6 @@ persist_agent_credentials() {
         ;;
     esac
     ln -sfn "$dst" "$src"
-  done
-  ensure_opencode_config
-}
-
-# OpenCode config root honoring overrides (mirrors skillRoots/adapters/policies).
-opencode_config_root() {
-  if [ -n "${OPENCODE_CONFIG_DIR:-}" ]; then
-    case "$OPENCODE_CONFIG_DIR" in
-      /*) printf '%s' "$OPENCODE_CONFIG_DIR" ;;
-      *) printf '%s/%s' "$T3_HOME" "$OPENCODE_CONFIG_DIR" ;;
-    esac
-  elif [ -n "${XDG_CONFIG_HOME:-}" ]; then
-    case "$XDG_CONFIG_HOME" in
-      /*) printf '%s/opencode' "$XDG_CONFIG_HOME" ;;
-      *) printf '%s/%s/opencode' "$T3_HOME" "$XDG_CONFIG_HOME" ;;
-    esac
-  else
-    printf '%s/.config/opencode' "$T3_HOME"
-  fi
-}
-
-# OpenCode 2.x needs real directories: a symlinked config dir fails inotify
-# with `Not a directory`, and symlinked skills/agents dirs are watched with the
-# node backend as files. Keep real dirs, strip the invalid top-level `skills`
-# key (discovery is fixed paths only; filtering is permission.skill), and
-# persist opencode.json[c] as files so the parent stays real.
-ensure_opencode_config() {
-  [ "$T3_PERSIST_AGENT_CREDENTIALS" = "1" ] || return 0
-  local root store src dst file target target_path sub rel base
-  root="$(opencode_config_root)"
-  # Mounted elsewhere (host's config dir): it already outlives the container.
-  if [ "$(covering_mount "$root")" != "$(covering_mount "$T3_HOME")" ]; then
-    log "leaving OpenCode config where it is: it is mounted from elsewhere"
-    return 0
-  fi
-  if [ -L "$root" ]; then
-    target="$(readlink "$root")"
-    case "$target" in
-      /*) target_path="$target" ;;
-      *) target_path="$(dirname "$root")/$target" ;;
-    esac
-    rm -f "$root"
-    mkdir -p "$root"
-    for file in opencode.json opencode.jsonc; do
-      if [ -f "$target_path/$file" ] && [ ! -e "$root/$file" ]; then
-        cp -a "$target_path/$file" "$root/$file" 2>/dev/null || true
-      fi
-    done
-    if [ -L "$target_path/AGENTS.md" ] && [ ! -e "$root/AGENTS.md" ]; then
-      cp -a "$target_path/AGENTS.md" "$root/AGENTS.md" 2>/dev/null || true
-    fi
-    log "replaced symlinked OpenCode config dir with real dir: $root"
-  else
-    mkdir -p "$root"
-  fi
-  for sub in skills agents; do
-    if [ -L "$root/$sub" ]; then
-      rm -f "$root/$sub"
-      mkdir -p "$root/$sub"
-      log "replaced symlinked OpenCode $sub with real dir"
-    else
-      mkdir -p "$root/$sub"
-    fi
-  done
-  for sub in skill agent; do
-    if [ -L "$root/$sub" ]; then
-      rm -f "$root/$sub"
-      mkdir -p "$root/$sub"
-      log "replaced symlinked OpenCode $sub with real dir"
-    fi
-  done
-  if [ -x "${T3_INFRA_NODE:-}" ] && [ -r /opt/t3-setup/opencode-config.mjs ]; then
-    "${T3_INFRA_NODE}" /opt/t3-setup/opencode-config.mjs --fix --home "$T3_HOME" >/dev/null 2>&1 || true
-  fi
-  store="${T3CODE_HOME}/agents"
-  mkdir -p "$store"
-  case "$root" in
-    "$T3_HOME"/*) rel="${root#"$T3_HOME"/}" ;;
-    *) rel="$root" ;;
-  esac
-  base="$store/$(printf '%s' "$rel" | tr '/' '_')"
-  mkdir -p "$base"
-  for file in opencode.json opencode.jsonc; do
-    src="$root/$file"
-    dst="$base/$file"
-    [ -L "$src" ] && continue
-    if [ -f "$src" ] && [ ! -e "$dst" ]; then
-      cp -a "$src" "$dst" 2>/dev/null || true
-      rm -f "$src"
-      log "moved OpenCode $file onto the state volume"
-    fi
-    if [ -e "$dst" ]; then
-      ln -sfn "$dst" "$src"
-    fi
   done
 }
 

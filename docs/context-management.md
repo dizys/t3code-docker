@@ -317,14 +317,7 @@ remains a separate, read-only source in the console. Grok inventory includes
 Cursor compatibility skills as well as its Claude/shared roots. See
 [T3’s native Antigravity skill paths](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/provider/Drivers/AntigravitySkills.ts).
 
-Provider folders can already be symlinked onto shared storage, except OpenCode's
-config directory. OpenCode 2.x watches its config with inotify: a symlinked
-`~/.config/opencode` fails with `Not a directory`, and symlinked
-`skills`/`agents` subdirs are classified as files, so global skills/agents stay
-invisible. Keep `~/.config/opencode` (or `$OPENCODE_CONFIG_DIR`) plus its
-`skills/` and `agents/` subdirs as real directories; shared skills remain
-discoverable through `~/.agents/skills` natively without linking the provider
-folder. Review resolves
+Provider folders can already be symlinked onto shared storage. Review resolves
 these paths, combines destinations pointing at the same physical folder, and
 refuses retargeted roots. Compatibility discovery can expose a selected provider's
 skills to other providers too. Imports leave provider settings alone: existing

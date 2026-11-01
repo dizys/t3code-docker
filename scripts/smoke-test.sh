@@ -999,6 +999,11 @@ check "keys saved for Pi sit beside subscriptions and the installed Pi reads the
 # no credential, prompt or model request is needed.
 native_skill_controls_work() {
   local id executable script
+  docker exec -u t3 "$NAME" bash -lc '
+    test -n "$OPENCODE_CONFIG_DIR" &&
+    test "$OPENCODE_CONFIG_DIR" = "$(cat "${T3_RUN_DIR:-/tmp/t3code}/opencode-config-dir")" &&
+    test -d "$OPENCODE_CONFIG_DIR" && test ! -L "$OPENCODE_CONFIG_DIR"
+  ' || return 1
   docker cp scripts/skills-native-smoke.mjs "$NAME:/tmp/skills-native-smoke.mjs" >/dev/null 2>&1 || return 1
   docker cp scripts/skills-policy-smoke.mjs "$NAME:/tmp/skills-policy-smoke.mjs" >/dev/null 2>&1 || return 1
   docker cp scripts/skills-import-smoke.mjs "$NAME:/tmp/skills-import-smoke.mjs" >/dev/null 2>&1 || return 1

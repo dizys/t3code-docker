@@ -41,6 +41,7 @@ declare -F persist_agent_credentials >/dev/null || { echo "persist_agent_credent
 
 T3_HOME="$WORK/home"
 T3CODE_HOME="$WORK/state"
+T3_RUN_DIR="$WORK/run"
 export T3_PERSIST_AGENT_CREDENTIALS=1
 # Mirror the entrypoint default: OpenCode reads a real folder on the state
 # volume, so the config never becomes a home symlink.
@@ -49,6 +50,7 @@ export T3_INFRA_NODE
 export T3_OPENCODE_CONFIG_CLI="$ROOT/docker/setup/opencode-config.mjs"
 unset OPENCODE_CONFIG_DIR XDG_CONFIG_HOME
 configure_opencode_config
+is "CLI helpers can read the selected runtime config path" "$OPENCODE_CONFIG_DIR" "$(cat "$T3_RUN_DIR/opencode-config-dir")"
 OC_ROOT="$(opencode_config_root)"
 STORE="$T3CODE_HOME/agents"
 mkdir -p "$T3_HOME" "$T3CODE_HOME"

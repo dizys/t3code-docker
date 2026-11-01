@@ -321,6 +321,7 @@ invisible. The entrypoint therefore exports `OPENCODE_CONFIG_DIR` pointing at
 `$T3CODE_HOME/agents/.config_opencode`, a real folder on the state volume.
 An explicit `OPENCODE_CONFIG_DIR` or a host mount at the native config directory
 remains in use; disabling credential persistence leaves the native path in use.
+Login shells and CLI helpers use the same selected path as Setup and T3 Code.
 Startup copies the complete legacy config, including skills, agents, plugins,
 instructions and backups, before replacing directory links. Shared skill links
 to `~/.agents/skills` or `~/.claude/skills` need no copy because OpenCode discovers

@@ -74,6 +74,14 @@ if [ -r /etc/t3code-image ]; then
 fi
 
 if [ "$(id -u)" != "0" ]; then
+  # The entrypoint selects OpenCode's real persisted config directory, or keeps
+  # a host-mounted native one. docker exec does not inherit its exports. Read
+  # the chosen path as data so terminals and login helpers use the same config.
+  if [ -z "${OPENCODE_CONFIG_DIR:-}" ] && [ -r "${T3_RUN_DIR:-/tmp/t3code}/opencode-config-dir" ]; then
+    IFS= read -r OPENCODE_CONFIG_DIR < "${T3_RUN_DIR:-/tmp/t3code}/opencode-config-dir" || true
+    export OPENCODE_CONFIG_DIR
+  fi
+
   # User globals from `npm i -g`. Writable by t3, so on t3's PATH only.
   : "${NPM_CONFIG_PREFIX:=/opt/npm-global}"
   export NPM_CONFIG_PREFIX

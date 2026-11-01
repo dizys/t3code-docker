@@ -350,6 +350,10 @@ configure_opencode_config() {
   fi
   OPENCODE_CONFIG_DIR="$(opencode_config_root)"
   export OPENCODE_CONFIG_DIR
+  # docker exec starts with the container's original environment. Login shells
+  # and CLI helpers read this runtime value through t3-user-env.sh as plain data.
+  mkdir -p "$T3_RUN_DIR"
+  (umask 077; printf '%s\n' "$OPENCODE_CONFIG_DIR" > "$T3_RUN_DIR/opencode-config-dir")
 }
 
 ensure_opencode_config() {

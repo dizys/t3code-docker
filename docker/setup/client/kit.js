@@ -186,12 +186,12 @@ const Kit = (() => {
 
   const restoreFocus = (layer) => {
     const target = layer.returnTo;
-    if (target && target.isConnected && !target.closest('[inert]')) { target.focus({ preventScroll: true }); return; }
+    if (target && target.isConnected && target.offsetParent !== null && !target.closest('[inert], [data-closing]')) { target.focus({ preventScroll: true }); return; }
     // The trigger was repainted away: its successor carries the same key. The
     // same key can exist on a page that is hidden, so take a visible one.
     const key = layer.returnKey;
     const again = key && [...document.querySelectorAll('[data-key="' + CSS.escape(key) + '"], #' + CSS.escape(key))]
-      .find((el) => el.offsetParent !== null && !el.closest('[inert]'));
+      .find((el) => el.offsetParent !== null && !el.closest('[inert], [data-closing]'));
     if (again) { again.focus({ preventScroll: true }); return; }
     const main = document.getElementById('main');
     if (main) main.focus({ preventScroll: true });
@@ -211,11 +211,20 @@ const Kit = (() => {
    */
   const open = (opts) => {
     const host = document.getElementById('layers') || document.body;
+    // A closing menu/confirmation can open its successor before its fade ends.
+    // Inherit the original trigger instead of returning to a disappearing node.
+    let returnTo = opts.returnTo || document.activeElement, returnKey = null;
+    for (const previous of [...stack].reverse()) {
+      if (previous.closed && previous.el.contains(returnTo)) {
+        returnTo = previous.returnTo;
+        returnKey = previous.returnKey;
+      }
+    }
     const layer = {
       kind: opts.kind,
       modal: opts.modal !== false,
-      returnTo: opts.returnTo || document.activeElement,
-      returnKey: null,
+      returnTo,
+      returnKey,
       onClose: opts.onClose || null,
       onEscape: opts.onEscape || null,
       closed: false,
@@ -253,13 +262,35 @@ const Kit = (() => {
     layer.close = (reason) => {
       if (layer.closed) return;
       layer.closed = true;
-      const i = stack.indexOf(layer);
-      if (i !== -1) stack.splice(i, 1);
-      syncInert();
-      const finish = () => el.remove();
+      let finished = false, fallback;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(fallback);
+        const wasTop = top() === layer;
+        el.remove();
+        const i = stack.indexOf(layer);
+        if (i !== -1) stack.splice(i, 1);
+        // Keep the page locked and the Settings host dimmed until the modal
+        // actually disappears. Returning focus earlier repaints behind it.
+        syncInert();
+        if (wasTop && reason !== 'replaced') restoreFocus(layer);
+      };
       if (REDUCED.matches || opts.kind === 'menu') finish();
-      else { el.setAttribute('data-closing', ''); setTimeout(finish, 140); }
-      if (reason !== 'replaced') restoreFocus(layer);
+      else {
+        // Preserve the current opening pose, including a quick first close.
+        // Replacing the opening animation resets its opacity/position. Fade
+        // from the visible pose without changing the backdrop's ancestor
+        // opacity, which would abruptly cut off its background blur.
+        for (const child of el.children) for (const animation of child.getAnimations()) animation.pause();
+        el.setAttribute('data-closing', '');
+        const fades = [...el.children].map(child => child.animate(
+          [{ opacity: getComputedStyle(child).opacity }, { opacity: 0 }],
+          { duration: 140, easing: 'ease-in', fill: 'forwards' },
+        ));
+        void Promise.all(fades.map(fade => fade.finished)).then(finish, finish);
+        fallback = setTimeout(finish, 200);
+      }
       if (layer.onClose) layer.onClose(reason || 'close');
     };
 
@@ -277,14 +308,15 @@ const Kit = (() => {
   };
 
   /** Whether the ⋯ menu opened from the control keyed `key` is showing. */
-  const menuOpenFor = (key) => stack.some((l) => (l.kind === 'menu' || l.kind === 'bottom') && l.returnKey === key);
+  const menuOpenFor = (key) => stack.some((l) => !l.closed && (l.kind === 'menu' || l.kind === 'bottom') && l.returnKey === key);
 
   /** Close every overlay, top first (a route change, a lock). */
-  const closeAll = (reason) => { while (stack.length) top().close(reason || 'close'); };
+  const closeAll = (reason) => { for (const layer of [...stack].reverse()) layer.close(reason || 'close'); };
 
   document.addEventListener('keydown', (e) => {
     const layer = top();
     if (!layer) return;
+    if (layer.closed) { e.preventDefault(); e.stopPropagation(); return; }
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();

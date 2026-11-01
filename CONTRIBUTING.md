@@ -27,7 +27,11 @@ Issues and pull requests are welcome. Before opening one:
   network latency and asserts that page switches reuse the iframe document.
   `node scripts/setup-tab-audit.js URL` checks the tab headers, page menu,
   keyboard footer links, swipe dismissal and guarded navigation against the
-  fixture console. Set `T3_UI_AUDIT_TAB=1` on `ui-audit.js`,
+  fixture console. `node scripts/layers-ui-audit.js` exercises real opening and
+  closing animations in desktop, phone and Settings layouts, including quick
+  closes, nested dialogs, focus restoration and reduced motion. It uses the
+  local styles and Kit without a server or production API, and runs in the
+  browser image smoke suite. Set `T3_UI_AUDIT_TAB=1` on `ui-audit.js`,
   `skills-ui-audit.js`, `mcp-ui-audit.js`, `files-ui-audit.js` and
   `storage-ui-audit.js` to exercise 480, 639, 640, 704 and 1040px tab frames.
   Omit it to retain their standalone and legacy-embed runs. For native visual

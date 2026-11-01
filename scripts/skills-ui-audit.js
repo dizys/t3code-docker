@@ -542,6 +542,27 @@ const checkSelect = async (page, select, theme) => {
       const installedAgents = target.getByRole('menuitemradio', { name: /Installed agents/ });
       await installedAgents.waitFor({ state: 'visible' });
       await installedAgents.click({ force: true });
+      // Cards are an option on wider screens, with the table's folders and the
+      // same skills. Phones keep the grouped list and have no layout switch.
+      await target.waitForFunction(() => ![...document.querySelectorAll('.tc-mx-agent-kind')].some(el => el.textContent.includes('Reading')));
+      if (width >= (TAB ? 640 : 1024)) {
+        assert.equal(await target.locator('[data-key=skills-layout-table]').getAttribute('aria-pressed'), 'true', 'Table is the default layout');
+        const tableRows = await target.locator('.tc-mx-row').count(), tableGroups = await target.locator('.tc-sk-matrix [data-cmd="skills.group"]').count();
+        await target.locator('[data-key=skills-layout-cards]').click();
+        await target.locator('.tc-skill-card').first().waitFor();
+        assert.equal(await target.locator('.tc-skill-card').count(), tableRows, 'cards show the skills the table shows');
+        assert.equal(await target.locator('.tc-skill-cards [data-cmd="skills.group"]').count(), tableGroups, 'cards keep the folder groups');
+        assert.match(await target.locator('.tc-skill-card').filter({ hasText: 'computer-use' }).first().innerText(), /Ask in OpenCode/, 'a card names the agents that limit its skill');
+        assert.equal(await target.evaluate(() => localStorage.getItem('t3-console-skill-view')), 'cards');
+        await shot('cards');
+        await target.locator('.tc-skill-card [data-cmd="skills.view"]').filter({ hasText: 'deep-research' }).first().click();
+        await target.locator('#skill-view-title').waitFor(); await close();
+        await target.locator('[data-key=skills-layout-table]').click();
+        await target.locator('.tc-mx-row').first().waitFor();
+      } else {
+        assert.equal(await visible(target, '[data-key=skills-layout-cards]').count(), 0, 'phones have no layout switch');
+        assert(await visible(target, '.tc-sk-phone-row').count() > 0, 'phones keep the grouped list');
+      }
       await navigate('instructions');
       await target.locator('.tc-doc-preview .tc-code').waitFor();
       assert.equal(await target.locator('.tc-reads-row').count(), 3);

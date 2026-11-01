@@ -36,6 +36,7 @@ import * as Context from "./context.mjs";
 import { createOpenCodeAuth } from "./opencode-auth.mjs";
 import { createPiAuth, PI_KEY_PROVIDERS, piProviderName } from "./pi-auth.mjs";
 import { createSkillsService } from "./skills.mjs";
+import { autoInstallable, autoUpdateCandidate } from "./skills/update-review.mjs";
 import { createMcpService } from "./mcp.mjs";
 import { clientAddress } from "./client-address.mjs";
 import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
@@ -406,7 +407,7 @@ const recordEvent = (kind, text, detail = null) => {
 // without any of that. Agent turns inside T3 Code are not directly visible
 // here, so idle tracks client activity, not turn activity.
 let autoPolicy = AutoUpdate.normalizePolicy(null);
-let autoState = { lastProviderCheckAt: null, lastToolchainCheckAt: null, lastProviderAttemptAt: null, lastToolchainAttemptAt: null, lastT3CheckAt: null, lastProviderRunAt: null, lastToolchainRunAt: null, lastT3RunAt: null, lastResult: null };
+let autoState = { lastProviderCheckAt: null, lastToolchainCheckAt: null, lastSkillsCheckAt: null, lastProviderAttemptAt: null, lastToolchainAttemptAt: null, lastSkillsAttemptAt: null, lastT3CheckAt: null, lastProviderRunAt: null, lastToolchainRunAt: null, lastSkillsRunAt: null, lastT3RunAt: null, lastResult: null };
 let lastActivityAt = Date.now();
 let autoTickRunning = false;
 const noteActivity = () => { lastActivityAt = Date.now(); };
@@ -2239,7 +2240,7 @@ const ROUTES = [...FILES_ROUTES, ...CREDENTIAL_ROUTES, "/login", "/logout", "/he
   "/toolchains/install", "/toolchains/update", "/toolchains/uninstall", "/toolchains/cancel",
   "/auth/apikey/remove", "/auth/apikey", "/auth/signin", "/auth/session", "/auth/code", "/auth/cancel",
   "/source-control/signin", "/source-control/signout",
-  "/providers", "/updates/check", "/context/skills/check-update", "/context/skills/hooks", "/context/skills/hooks/state", "/context/skills/update/preview", "/context/skills/update",
+  "/providers", "/updates/check", "/context/skills/check-update", "/context/skills/link", "/context/skills/unlink", "/context/skills/auto", "/context/skills/hooks", "/context/skills/hooks/state", "/context/skills/update/preview", "/context/skills/update",
   "/packages/install", "/packages/update", "/packages/uninstall", "/packages/cancel",
   "/packages/registry", "/packages/versions", "/packages/info",
   "/context/agents-md", "/context/skills/reach", "/context/skills/read", "/context/skills/create", "/context/skills/save", "/context/skills/remove", "/context/skills/state", "/context/skills/source", "/context/skills/plan", "/context/skills/install", "/context/skills/discard", "/context/skills",
@@ -2265,6 +2266,22 @@ const autoTick = async () => {
     try {
       await AutoUpdate.checkSoftwareUpdates({ policy: autoPolicy, state: autoState, cache: latestCache, persist });
     } catch { /* next tick retries */ }
+    // Skills: check tracked repository sources on their own cadence. Only
+    // sources are fetched here; installs happen below once idle.
+    if (autoPolicy.skills?.enabled && AutoUpdate.checkDue({ checkMinutes: autoPolicy.skills.checkMinutes, lastCheckAt: autoState.lastSkillsAttemptAt ?? autoState.lastSkillsCheckAt, now })) {
+      try {
+        const tracked = await skillsService.listTracked().catch(() => []);
+        const auto = tracked.filter(entry => entry.origin?.autoUpdate !== false);
+        if (auto.length) {
+          await persist({ lastSkillsAttemptAt: Date.now() });
+          const results = await skillsService.checkUpdates(auto.map(entry => ({ provider: entry.provider, id: entry.id }))).catch(() => null);
+          const ok = results?.results?.every(row => row.ok !== false) ?? false;
+          if (ok) await persist({ lastSkillsCheckAt: Date.now() });
+        } else {
+          await persist({ lastSkillsCheckAt: Date.now(), lastSkillsAttemptAt: Date.now() });
+        }
+      } catch { /* next tick retries */ }
+    }
     // T3 Code: ask the registry when due.
     if (autoPolicy.t3.enabled && AutoUpdate.checkDue({ checkMinutes: autoPolicy.t3.checkMinutes, lastCheckAt: autoState.lastT3CheckAt, now })) {
       try {
@@ -2328,6 +2345,39 @@ const autoTick = async () => {
       } catch { /* next tick retries */ }
     }
     if (queued.length) await persist({ lastResult: `Queued ${queued.join(" and ")}` });
+    // Skills: install tracked updates that opted into auto-update, once idle.
+    // Each install re-reviews its immutable preview, so a raced edit retries
+    // as a fresh review rather than a blind overwrite.
+    if (autoPolicy.skills?.enabled) {
+      const idle = AutoUpdate.isIdle({ idleMinutes: autoPolicy.skills.idleMinutes, lastActivityAt, now: Date.now() });
+      if (idle && !await autoBusyReason().catch(() => "busy")) {
+        try {
+          const tracked = await skillsService.listTracked().catch(() => []);
+          let installed = 0;
+          // Only what the scheduled check found: this pass never fetches a
+          // source just to see whether it changed.
+          for (const entry of tracked.filter(autoUpdateCandidate)) {
+            if (!AutoUpdate.isIdle({ idleMinutes: autoPolicy.skills.idleMinutes, lastActivityAt, now: Date.now() })) break;
+            let preview = null;
+            try {
+              preview = await skillsService.previewUpdate(entry.provider, entry.id);
+              // Manual updates require ticking "Replace my local edits" first;
+              // the idle pass must never silently overwrite them. The update
+              // stays available and flagged in Updates for an explicit review.
+              if (!autoInstallable(preview)) continue;
+              const result = await skillsService.installUpdate(preview.previewId, preview.planId, true);
+              if (result?.results?.[0]?.status === "installed") {
+                installed++;
+                recordEvent("auto.skills", `Auto-updated skill ${preview.name || entry.name}`);
+              }
+            } catch { /* next tick retries */ }
+            // Free the review slot so Install from source stays available.
+            finally { if (preview?.previewId) await skillsService.discardImport(preview.previewId).catch(() => {}); }
+          }
+          if (installed) await persist({ lastSkillsRunAt: Date.now(), lastResult: `Auto-updated ${installed} skill${installed === 1 ? "" : "s"}` });
+        } catch { /* next tick retries */ }
+      }
+    }
     // T3 Code: install the channel's release once idle. Never switches channels.
     if (autoPolicy.t3.enabled) {
       const idle = AutoUpdate.isIdle({ idleMinutes: autoPolicy.t3.idleMinutes, lastActivityAt, now: Date.now() });
@@ -2630,7 +2680,7 @@ const server = createServer(async (req, res) => {
       try {
         const { writeFile, mkdir, readFile } = await import("node:fs/promises");
         autoPolicy = await AutoUpdate.writePolicy({ readFile, writeFile, mkdir }, STATE_DIR, input);
-        recordEvent("auto.policy", (autoPolicy.providers.enabled || autoPolicy.toolchains.enabled || autoPolicy.t3.enabled) ? "Auto-update preferences saved" : "Auto-update turned off");
+        recordEvent("auto.policy", (autoPolicy.providers.enabled || autoPolicy.toolchains.enabled || autoPolicy.skills.enabled || autoPolicy.t3.enabled) ? "Auto-update preferences saved" : "Auto-update turned off");
         return sendJson(res, 200, { ok: true, policy: autoPolicy });
       } catch (error) {
         return sendJson(res, 500, { ok: false, error: String(error?.message ?? error).slice(0, 300) });
@@ -2824,13 +2874,16 @@ const server = createServer(async (req, res) => {
       }
     }
 
-    if (req.method === "POST" && ["/context/skills/create", "/context/skills/save", "/context/skills/remove", "/context/skills/state", "/context/skills/check-update", "/context/skills/source", "/context/skills/plan", "/context/skills/install", "/context/skills/discard", "/context/skills/hooks/state", "/context/skills/update/preview", "/context/skills/update"].includes(route)) {
+    if (req.method === "POST" && ["/context/skills/create", "/context/skills/save", "/context/skills/remove", "/context/skills/state", "/context/skills/link", "/context/skills/unlink", "/context/skills/auto", "/context/skills/check-update", "/context/skills/source", "/context/skills/plan", "/context/skills/install", "/context/skills/discard", "/context/skills/hooks/state", "/context/skills/update/preview", "/context/skills/update"].includes(route)) {
       try {
         const input = JSON.parse((await readBody(req, 6 * 64 * 1024 + 4096)) || "{}");
         if (!input || typeof input !== "object" || Array.isArray(input)) return sendJson(res, 400, { ok: false, error: "Expected a skill operation object." });
         const result = route === "/context/skills/update/preview" ? await skillsService.previewUpdate(input.provider, input.id)
           : route === "/context/skills/update" ? await skillsService.installUpdate(input.previewId, input.planId, input.replace)
           : route === "/context/skills/hooks/state" ? await skillsService.setHook(input.id, input.revision, input.action)
+          : route === "/context/skills/link" ? await skillsService.linkSource(input.provider, input.id, input.source, { autoUpdate: input.autoUpdate, allowNameMismatch: input.allowNameMismatch })
+          : route === "/context/skills/unlink" ? await skillsService.unlinkSource(input.provider, input.id)
+          : route === "/context/skills/auto" ? await skillsService.setSourceAuto(input.provider, input.id, input.autoUpdate)
           : route === "/context/skills/check-update" ? input.skills === undefined ? await skillsService.checkUpdate(input.provider, input.id) : await skillsService.checkUpdates(input.skills)
           : route === "/context/skills/source" ? await skillsService.previewSource(input.source)
           : route === "/context/skills/plan" ? await skillsService.planImport(input.previewId, input.skills, input.providers)
@@ -2841,10 +2894,10 @@ const server = createServer(async (req, res) => {
             : route === "/context/skills/state" ? await skillsService.setState(input.provider, input.id, input.stateRevision, input.enabled, input.state)
               : await skillsService.remove(input.provider, input.id, input.revision, input.removalRevision);
         credentials.invalidateUsage();
-        if (!["/context/skills/check-update", "/context/skills/source", "/context/skills/update/preview", "/context/skills/plan", "/context/skills/discard"].includes(route)) recordEvent("context.saved", route === "/context/skills/update" ? "Updated a repository skill; review the installation result" : route === "/context/skills/hooks/state" ? "Changed a Codex plugin hook setting" : route === "/context/skills/install" ? "Imported local skills; review individual installation results" : route === "/context/skills/remove" ? "Removed a local skill installation" : route === "/context/skills/state" ? "Changed native skill availability" : "Saved a local skill");
+        if (!["/context/skills/check-update", "/context/skills/source", "/context/skills/update/preview", "/context/skills/plan", "/context/skills/discard"].includes(route)) recordEvent("context.saved", route === "/context/skills/update" ? "Updated a repository skill; review the installation result" : route === "/context/skills/link" ? "Linked a skill to its repository source" : route === "/context/skills/unlink" ? "Unlinked a skill source" : route === "/context/skills/auto" ? "Changed a skill's auto-update setting" : route === "/context/skills/hooks/state" ? "Changed a Codex plugin hook setting" : route === "/context/skills/install" ? "Imported local skills; review individual installation results" : route === "/context/skills/remove" ? "Removed a local skill installation" : route === "/context/skills/state" ? "Changed native skill availability" : "Saved a local skill");
         return sendJson(res, 200, result);
       } catch (error) {
-        const status = { invalid: 400, missing: 404, ENOENT: 404, conflict: 409, EEXIST: 409, too_large: 413, unsupported: 403, EACCES: 403, EPERM: 403 }[error?.code] || (error instanceof SyntaxError ? 400 : 500);
+        const status = { invalid: 400, missing: 404, mismatch: 409, ENOENT: 404, conflict: 409, EEXIST: 409, too_large: 413, unsupported: 403, EACCES: 403, EPERM: 403 }[error?.code] || (error instanceof SyntaxError ? 400 : 500);
         return sendJson(res, status, { ok: false, code: error?.code || "unavailable", error: String(error?.message || "The skill operation failed.").slice(0, 500) });
       }
     }

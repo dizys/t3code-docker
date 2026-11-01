@@ -98,6 +98,12 @@ including agents that are not installed. Skill names, row actions and folder
 context stay visible while scrolling across agent columns. On phones, the
 matrix becomes a grouped list with available-agent chips and a fixed install bar.
 
+**Table** and **Cards** beside **View** switch the library layout on wider
+screens, and the choice is remembered in this browser. Cards keep the same
+folder groups. Each card shows a skill's name, description, the agents that can
+use it and any agent that limits it, such as **Ask in OpenCode**. Open a card
+for everything else. Phones always show the grouped list.
+
 Groups identify the owning folder, its actual path, and the other agents that
 read it. System/admin groups start collapsed. Search matches names and
 descriptions; **Available to** and **Needs attention** filters combine with it.
@@ -329,7 +335,14 @@ discovery priority still require a specific folder.
 Repository installs remember their source and a fingerprint of the installed
 files in `.t3-skill-source.json` inside the skill folder. Local **Copy to…**
 copies omit this metadata, preserve local edits and executable files, and need a
-repository re-import to enable their own update tracking. **Check for updates**
+repository re-import or a link to enable their own update tracking.
+
+To track a skill you already have, open it and use **Link source** with a
+repository, a skill link or `owner/repo`. The source must contain a skill with
+the same name; a source with one differently named skill asks first. Linking
+records a fingerprint of the files you have now, so if they differ from the
+source, the next check reports an update. **Unlink source** keeps the files and
+stops checks. **Check for updates**
 on the Skills tab checks tracked repository installs on demand, fetching each
 source once per check action. A later check fetches fresh contents. It compares the
 skill's complete source contents and executable flags, so unrelated repository
@@ -364,10 +377,20 @@ compatibility readers share the change; no extra copies are created. Availabilit
 settings stay the same, and agents use the files in new sessions.
 
 Checking alone never changes installed files, and local edits do not count as
-upstream updates. A ref pinned to a commit keeps checking that commit. There are
-no scheduled checks or automatic replacements. Earlier installs and imports from
-local folders or direct Markdown links need a repository re-import to enable
-tracking. **Copy to…** remains a separate operation.
+upstream updates. A ref pinned to a commit keeps checking that commit. Earlier
+installs and imports from local folders or direct Markdown links need a
+repository re-import or a link to enable tracking. **Copy to…** remains a
+separate operation.
+
+Updates install by themselves only when you ask twice: turn on **Skills** under
+**Updates → Automatic updates**, and tick **Auto-update this skill** in the
+skill's inspector. Both start off. The Skills switch then checks the opted-in
+skills on its own schedule and, once the server has been idle long enough,
+installs the updates that check found. It skips a skill with local edits, and a
+skill whose files already differed from its source when you linked it, until
+you review an update by hand; those stay in **Updates** with **Review
+update…**. An update keeps the skill's auto-update setting. Manual checks and
+reviews work whether or not the switch is on.
 
 Tracked skills in the shared `.agents/skills` folder update there. Links into
 managed global skill folders keep their links and update the reviewed target;

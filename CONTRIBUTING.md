@@ -205,8 +205,21 @@ Releases are made from tags. Pushing `vX.Y.Z` builds each image for each
 architecture, tests each one against the exact digest that was pushed, runs the
 agent lifecycle test and measures the image size on amd64, and then combines
 the tested digests into one manifest without rebuilding. `latest` points at
-`browser`. Published releases are then mirrored to Docker Hub; see
-[Docker Hub publishing](docs/dockerhub-publishing.md).
+`browser`. The build then checks the promoted tags against the tested digests
+and attaches that evidence to a draft release. Publishing the draft mirrors the
+release to Docker Hub; see [Docker Hub publishing](docs/dockerhub-publishing.md).
+
+```bash
+git tag -a vX.Y.Z -m 'vX.Y.Z: Title' <merge-commit>
+git push origin vX.Y.Z
+gh release create vX.Y.Z --draft --verify-tag --title 'vX.Y.Z: Title' --notes-file notes.md
+# Once the build has attached the evidence to the draft:
+gh release edit vX.Y.Z --draft=false --latest
+```
+
+Creating the draft yourself keeps the release under your name. If there's no
+draft when the build finishes, the build creates one from the tag's message and
+shows `github-actions` as its author. Add the notes to it before publishing.
 
 `node scripts/files-ui-audit.js http://127.0.0.1:23785/__setup/ dev` checks Files
 against synthetic in-memory paths. It covers desktop, laptop, tablet, phone,

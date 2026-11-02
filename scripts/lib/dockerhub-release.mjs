@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 export const REPOSITORY = 'dizys/t3code-docker';
 export const SOURCE = `ghcr.io/${REPOSITORY}`;
 export const DESTINATION = `docker.io/${REPOSITORY}`;
+/** What a release must carry to be mirrored. `release-evidence` in build.yml attaches them. */
+export const EVIDENCE_FILES = ['registry-verification.json', ...['core', 'browser'].flatMap((v) => ['amd64', 'arm64'].map((a) => `build-${v}-${a}.json`))];
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 export function releaseVersion(tag) {
   assert.match(tag, /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/, 'Expected a release tag such as v0.18.0');

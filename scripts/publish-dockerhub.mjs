@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { REPOSITORY, releaseVersion, releasePlan, publishPlan, verifyIndex, SOURCE } from './lib/dockerhub-release.mjs';
+import { EVIDENCE_FILES, REPOSITORY, releaseVersion, releasePlan, publishPlan, verifyIndex, SOURCE } from './lib/dockerhub-release.mjs';
 const exec = promisify(execFile);
 const run = async (command, args, timeout = 60_000) => (await exec(command, args, { timeout, maxBuffer: 4 * 1024 * 1024 })).stdout;
 const api = async (route) => JSON.parse(await run('gh', ['api', `repos/${REPOSITORY}/${route}`]));
@@ -19,11 +19,13 @@ try {
   const release = await api(`releases/tags/${encodeURIComponent(tag)}`);
   const commit = await api(`commits/${encodeURIComponent(tag)}`);
   const latest = async () => (await api('releases/latest')).tag_name;
-  const names = ['registry-verification.json', ...['core', 'browser'].flatMap((v) => ['amd64', 'arm64'].map((a) => `build-${v}-${a}.json`))];
   // Only the fixed evidence files are downloaded; no code from the release
   // tag is checked out or executed in this credentialed workflow.
-  await run('gh', ['release', 'download', tag, '-R', REPOSITORY, '--dir', temporary, ...names.flatMap((name) => ['--pattern', name])]);
-  const documents = await Promise.all(names.map(async (name) => JSON.parse(await fs.readFile(path.join(temporary, name), 'utf8'))));
+  await run('gh', ['release', 'download', tag, '-R', REPOSITORY, '--dir', temporary, ...EVIDENCE_FILES.flatMap((name) => ['--pattern', name])]).catch((error) => {
+    if (/no assets to download/.test(error.stderr ?? '')) throw new Error(`${tag} has no evidence attached. The tag build attaches it to a draft release, so publish that draft rather than a new release. If this release is the only one, rerun the tag build's release-evidence job: it attaches the evidence and starts this mirror again.`);
+    throw error;
+  });
+  const documents = await Promise.all(EVIDENCE_FILES.map(async (name) => JSON.parse(await fs.readFile(path.join(temporary, name), 'utf8'))));
   const plans = releasePlan({ tag, release, latest: await latest(), sourceSha: commit.sha, verification: documents[0], builds: documents.slice(1) });
   const read = (ref) => run('regctl', ['manifest', 'get', ref, '--format', 'raw-body']);
   for (const p of plans) verifyIndex(await read(`${SOURCE}@${p.digest}`), p);

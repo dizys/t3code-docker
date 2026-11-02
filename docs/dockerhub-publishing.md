@@ -30,9 +30,11 @@ gh workflow run dockerhub.yml -R dizys/t3code-docker \
 ```
 
 Future GitHub **release publication** events start this workflow automatically.
-Creating a tag or draft release does not publish to Docker Hub. The build and
-GHCR promotion must finish and their verification evidence must be attached
-before publishing the GitHub release, matching our existing release process.
+Creating a tag or draft release does not publish to Docker Hub. Once the build
+and GHCR promotion pass, the tag build's `release-evidence` job attaches the
+verification evidence to a draft release, so publish the draft after that. If
+the release was published too early, its mirror fails, and the job attaches the
+evidence and starts this workflow again itself.
 A missing token produces an actionable failure in the separate workflow; it
 never prevents GHCR builds or promotion.
 
@@ -82,6 +84,18 @@ It requires a published release, matching tag/commit, four successful build
 records, and matching verified index members. Releases without this evidence
 cannot be mirrored through this workflow.
 
+The `release-evidence` job in `build.yml` produces them with
+`scripts/release-evidence.mjs`. It checks that the run passed, that each record
+is marked as tested, that each image's stamps and labels match the tag and
+commit, that the original provenance survived promotion, and that every release
+tag maps exactly the tested digests. It only needs public GHCR reads.
+
+If the job fails, `gh run rerun <run-id> --failed` runs it again, for as long as
+the build's 7-day artifacts last. A rerun replaces the evidence on a draft. On a
+published release it only adds what's missing. Publishing stays a manual step
+because the notes are written by hand, and a release published with the job's
+token wouldn't start this workflow.
+
 The pinned, checksum-verified `regctl` copies complete indexes and their layers
 by digest, including embedded build provenance manifests and available OCI
 referrers. Both variant indexes are staged and their exact bytes and tested
@@ -129,7 +143,15 @@ With `gh` and `regctl` on PATH:
 
 ```bash
 node scripts/publish-dockerhub.mjs v0.18.0 --dry-run
-node --test tests/dockerhub-release.test.mjs
+node --test tests/dockerhub-release.test.mjs tests/release-evidence.test.mjs
+```
+
+With only `gh`, this repeats the evidence checks without changing the release.
+Download the run's `build-evidence-*` artifacts into a directory first. It also
+checks the floating tags, so it only passes for the newest stable release.
+
+```bash
+node scripts/release-evidence.mjs v0.18.0 <commit> <run-id> <directory> --dry-run
 ```
 
 Overview generation and public checks need only Node and Git, with no registry

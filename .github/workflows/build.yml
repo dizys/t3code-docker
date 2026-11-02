@@ -393,3 +393,37 @@ jobs:
             echo
             echo "Tags: $(printf "\`%s\` " "${tags[@]}")"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Check the promoted tags against the tested digests and attach that evidence
+  # to the release, which the Docker Hub mirror requires. Publishing stays a
+  # person's call: the notes are written by hand, and a release published with
+  # this job's token wouldn't start the mirror anyway. If the release was already
+  # published, this job attaches the evidence and starts the mirror itself.
+  release-evidence:
+    if: github.event_name == 'push' && github.ref_type == 'tag' && github.repository == 'dizys/t3code-docker'
+    runs-on: ubuntu-latest
+    needs: [lint, versions, native-runtime, build, merge]
+    timeout-minutes: 15
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/evidence
+          pattern: build-evidence-*
+          merge-multiple: true
+
+      - name: Verify the release and attach its evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/release-evidence.mjs "$RELEASE_TAG" "$GITHUB_SHA" "$GITHUB_RUN_ID" /tmp/evidence

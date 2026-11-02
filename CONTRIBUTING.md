@@ -159,6 +159,12 @@ and Chromium; set `CHROME_PATH` if needed. Screenshots go to
 `/tmp/t3-opencode-auth-ui` (`T3_AUTH_UI_OUTPUT` overrides it). These audits
 never read or change your real OpenCode credentials.
 
+`node scripts/codex-sign-in-ui-audit.mjs` starts the same disposable setup server
+and checks the Codex row while T3 Code uses its own ChatGPT connection: the
+confirmation, a sign-in that has gone, the switch and where focus lands, in
+light/dark, mobile, desktop and embedded layouts. Screenshots go to
+`/tmp/t3-codex-sign-in-ui` (`T3_CODEX_SIGNIN_UI_OUTPUT` overrides it).
+
 For Pi credential changes, run `node scripts/pi-auth-smoke.mjs /absolute/path/to/pi`
 against both 0.80.5 (the supported floor) and the current release. It uses an
 isolated home and fake keys, and checks that saved keys sit beside a `/login`

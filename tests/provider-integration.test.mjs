@@ -638,3 +638,82 @@ test("the CLI resolves, reports exit codes, and syncs through the real file IO",
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("ownSignIns names the agents T3 signs in itself, and an unreadable file names none", async () => {
+  const fs = memoryFs({ [SETTINGS]: JSON.stringify({
+    providerInstances: { codex: { driver: "codex", config: { setupMode: "managed" } }, cursor: { driver: "cursor", config: {} } },
+  }) });
+  const integration = createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness: fakeHarness([]) });
+  assert.deepEqual(await integration.ownSignIns(), ["codex"]);
+  fs.files.set(SETTINGS, JSON.stringify({ providers: { codex: { setupMode: "managed" } } }));
+  assert.deepEqual(await integration.ownSignIns(), ["codex"], "the legacy map counts too");
+  fs.files.set(SETTINGS, JSON.stringify({ providerInstances: { codex: { driver: "codex", config: { setupMode: "existing" } } } }));
+  assert.deepEqual(await integration.ownSignIns(), []);
+  fs.files.set(SETTINGS, "{ not json");
+  assert.deepEqual(await integration.ownSignIns(), []);
+  fs.files.set(SETTINGS, "[]");
+  assert.deepEqual(await integration.ownSignIns(), []);
+  fs.files.delete(SETTINGS);
+  assert.deepEqual(await integration.ownSignIns(), []);
+});
+
+test("useCliSignIn changes only the mode, then points T3 at the managed Codex", async () => {
+  const executable = "/home/t3/.local/share/mise/installs/codex/0.159.1/bin/codex";
+  const fs = memoryFs({ [SETTINGS]: JSON.stringify({
+    theme: "dark",
+    providers: { codex: { enabled: false, setupMode: "managed", other: 1 } },
+    providerInstances: {
+      codex: { driver: "codex", enabled: false, displayName: "Work", config: { enabled: false, setupMode: "managed", model: "m" } },
+      "codex-personal": { driver: "codex", config: { setupMode: "managed" } },
+    },
+  }) });
+  const harness = fakeHarness([fact("codex", { runnable: true, executable })]);
+  const integration = createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness });
+
+  // While T3 owns it, sync leaves the executable alone.
+  await integration.sync();
+  assert.equal(json(fs, SETTINGS).providerInstances.codex.config.binaryPath, undefined);
+
+  const report = await integration.useCliSignIn("codex");
+  assert.equal(report.ok, true);
+  assert.equal(report.changed, true);
+  assert.equal(report.sync.ok, true);
+  const written = json(fs, SETTINGS);
+  assert.equal(written.theme, "dark");
+  assert.equal(written.providers.codex.setupMode, "existing");
+  assert.equal(written.providers.codex.enabled, false);
+  assert.equal(written.providers.codex.other, 1);
+  const instance = written.providerInstances.codex;
+  assert.equal(instance.config.setupMode, "existing");
+  assert.equal(instance.enabled, false, "enablement stays as it was");
+  assert.equal(instance.config.enabled, false);
+  assert.equal(instance.displayName, "Work");
+  assert.equal(instance.config.model, "m");
+  assert.equal(instance.config.binaryPath, launcher("codex"), "the managed executable applies again");
+  assert.deepEqual(written.providerInstances["codex-personal"].config, { setupMode: "managed" }, "another account stays on T3's connection");
+  assert.deepEqual(await integration.ownSignIns(), []);
+
+  // Pressing it twice changes nothing more.
+  const before = fs.files.get(SETTINGS);
+  const again = await integration.useCliSignIn("codex");
+  assert.equal(again.ok, true);
+  assert.equal(again.changed, false);
+  assert.equal(fs.files.get(SETTINGS), before);
+});
+
+test("useCliSignIn keeps an unreadable settings file, and a failed sync doesn't undo the switch", async () => {
+  const fs = memoryFs({ [SETTINGS]: "{ not json" });
+  const integration = createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness: fakeHarness([]) });
+  const refused = await integration.useCliSignIn("codex");
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, "settings-unreadable");
+  assert.equal(fs.files.get(SETTINGS), "{ not json");
+  assert.equal((await integration.useCliSignIn("nope")).code, "unknown");
+
+  fs.files.set(SETTINGS, JSON.stringify({ providerInstances: { codex: { driver: "codex", config: { setupMode: "managed" } } } }));
+  const broken = createProviderIntegration({ fs, home: HOME, baseDir: BASE, harness: { status: async () => { throw new Error("mise timed out"); } } });
+  const report = await broken.useCliSignIn("codex");
+  assert.equal(report.ok, true);
+  assert.equal(report.sync.ok, false);
+  assert.equal(json(fs, SETTINGS).providerInstances.codex.config.setupMode, "existing");
+});

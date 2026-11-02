@@ -138,6 +138,33 @@ export function t3ManagesItself(settings, driver) {
 }
 
 /**
+ * Send an agent back to the CLI's own sign-in, the same switch as T3's "Use
+ * existing CLI". Only the mode changes: enablement, every other key and the
+ * connection T3 saved in its secret store all stay as they are.
+ */
+export function useExistingSetup(settings, driver) {
+  let next = settings;
+  let changed = false;
+  const legacy = settings.providers?.[driver];
+  if (isObject(legacy) && legacy.setupMode === "managed") {
+    next = { ...next, providers: { ...settings.providers, [driver]: { ...legacy, setupMode: "existing" } } };
+    changed = true;
+  }
+  const instance = settings.providerInstances?.[driver];
+  if (isObject(instance) && isObject(instance.config) && instance.config.setupMode === "managed") {
+    next = {
+      ...next,
+      providerInstances: {
+        ...settings.providerInstances,
+        [driver]: { ...instance, config: { ...instance.config, setupMode: "existing" } },
+      },
+    };
+    changed = true;
+  }
+  return { settings: next, changed };
+}
+
+/**
  * Retract a previously written `binaryPath`, but only where it is still exactly
  * the value this module recorded. A user who edited the field themselves keeps
  * their edit; the module stops tracking it.

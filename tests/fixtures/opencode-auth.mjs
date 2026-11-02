@@ -70,12 +70,16 @@ import {readFile} from 'node:fs/promises';
 const row={id:'opencode',name:'OpenCode',installed:true,configured:true,runnable:true,installedVersion:${JSON.stringify(version)},executable:${JSON.stringify(executable)},authenticated:true};
 export const createHarnessManager=()=>({
  resolve:async(id)=>{
-  if(id!=='opencode')return {id,runnable:false,installed:false};
   const facts=JSON.parse(await readFile(${JSON.stringify(factsFile)},'utf8'));
+  if(id==='codex'&&facts.codex)return facts.codex;
+  if(id!=='opencode')return {id,runnable:false,installed:false};
   if(facts.resolveFails)throw new Error('fixture resolver unavailable');
   return {...row,...facts};
  },
- status:async()=>({harnesses:[row],degraded:[]}),invalidateAuth(){},
+ status:async()=>{
+  const {codex}=JSON.parse(await readFile(${JSON.stringify(factsFile)},'utf8'));
+  return {harnesses:[row,...(codex?[codex]:[])],degraded:[]};
+ },invalidateAuth(){},
  latestRelease:async()=>({version:'2.0.32'}),
  toolchains:{status:async()=>({toolchains:[],degraded:[]}),latestRelease:async()=>({version:'1'})},
  packages:{status:async()=>({packages:[],degraded:[]})},paths:{stateDir:${JSON.stringify(home)}}

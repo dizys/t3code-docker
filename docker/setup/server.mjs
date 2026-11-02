@@ -319,6 +319,31 @@ const refreshSignInState = async (id) => {
   } catch { /* the next poll still refreshes on its own */ }
 };
 
+// "Use in T3 Code" on a row. The switch is pointless without a sign-in to switch
+// to, so the CLI is asked now rather than trusting what the page last showed.
+const useCliSignIn = async (id) => {
+  const name = AGENTS[id]?.name;
+  if (!name) throw new Error(`Unknown agent: ${id}`);
+  const harness = await loadHarness();
+  forgetSignInState(id);
+  const facts = await harness.resolve(id, { authenticate: true });
+  if (facts?.authenticated !== true) {
+    // The page showed a sign-in that isn't there any more.
+    await refreshSignInState(id);
+    throw new Error(`Sign in to ${name} first. T3 Code has no sign-in to use yet.`);
+  }
+  const { createProviderIntegration } = await loadProviderIntegration();
+  const report = await createProviderIntegration({ harness }).useCliSignIn(id);
+  if (!report.ok) throw new Error(`T3 Code's settings could not be changed: ${String(report.error ?? report.code).slice(0, 200)}`);
+  await refreshSignInState(id);
+  if (report.changed) recordEvent("signin.ok", `T3 Code now uses this server's ${name} sign-in`);
+  return {
+    ok: true,
+    changed: report.changed,
+    ...(report.sync?.ok === false ? { warning: `T3 Code will run the ${name} installed here after the next restart.` } : {}),
+  };
+};
+
 // Last definite sign-in answer per agent. Five CLIs probed at once contend
 // for the box, and the slowest two - Claude and Cursor - can miss a deadline
 // even though each takes well under it alone. A missed deadline is not news
@@ -582,16 +607,26 @@ const authLists = Object.fromEntries(["pairing", "session"].map((kind) => [kind,
   createListCache({ read: () => listJson(["auth", kind, "list", "--json"]) }),
 ]));
 
+// T3 Code's own ChatGPT connection ignores the CLI's sign-in, so a row that says
+// "Signed in" has to say so. A read that fails is no news about either of them.
+const withT3SignIn = async (harness, harnesses) => {
+  const rows = harnesses.map(toPublicHarness);
+  const own = await loadProviderIntegration()
+    .then(({ createProviderIntegration }) => createProviderIntegration({ harness }).ownSignIns())
+    .catch(() => []);
+  return rows.map((row) => ({ ...row, t3OwnSignIn: own.includes(row.id) }));
+};
+
 const harnessCache = createHarnessCache({
   full: async () => {
     const harness = await loadHarness();
     const { harnesses, degraded } = await harness.status({});
-    return { harnesses: harnesses.map(toPublicHarness), degraded };
+    return { harnesses: await withT3SignIn(harness, harnesses), degraded };
   },
   cheap: async () => {
     const harness = await loadHarness();
     const { harnesses, degraded } = await harness.status({ authenticate: false });
-    return { harnesses: harnesses.map(toPublicHarness), degraded };
+    return { harnesses: await withT3SignIn(harness, harnesses), degraded };
   },
   budgetMs: HARNESS_BUDGET_MS,
 });
@@ -2238,7 +2273,7 @@ const ROUTES = [...FILES_ROUTES, ...CREDENTIAL_ROUTES, "/login", "/logout", "/he
   "/auto-update", "/auto-update/policy",
   "/harnesses/install", "/harnesses/update", "/harnesses/uninstall", "/harnesses/cancel", "/harnesses/versions", "/harnesses/enable", "/harnesses",
   "/toolchains/install", "/toolchains/update", "/toolchains/uninstall", "/toolchains/cancel",
-  "/auth/apikey/remove", "/auth/apikey", "/auth/signin", "/auth/session", "/auth/code", "/auth/cancel",
+  "/auth/apikey/remove", "/auth/apikey", "/auth/use-cli", "/auth/signin", "/auth/session", "/auth/code", "/auth/cancel",
   "/source-control/signin", "/source-control/signout",
   "/providers", "/updates/check", "/context/skills/check-update", "/context/skills/link", "/context/skills/unlink", "/context/skills/auto", "/context/skills/hooks", "/context/skills/hooks/state", "/context/skills/update/preview", "/context/skills/update",
   "/packages/install", "/packages/update", "/packages/uninstall", "/packages/cancel",
@@ -3035,6 +3070,15 @@ const server = createServer(async (req, res) => {
         return sendJson(res, 200, await setApiKey(input.agent, input.key, input.provider, { replaceSubscription: input.replace === true }));
       } catch (error) {
         return sendJson(res, 400, { error: String(error?.message ?? error), ...(error?.code === "subscription-exists" ? { code: error.code } : {}) });
+      }
+    }
+
+    if (req.method === "POST" && route === "/auth/use-cli") {
+      try {
+        const input = JSON.parse((await readBody(req)) || "{}");
+        return sendJson(res, 200, await useCliSignIn(input.agent));
+      } catch (error) {
+        return sendJson(res, 400, { error: String(error?.message ?? error) });
       }
     }
 

@@ -378,6 +378,14 @@ const T3Model = (() => {
       return row;
     }
 
+    if (ui && ui.switchingSignIn === h.id) {
+      row.state = 'signing';
+      row.badge = { tone: 'info', text: 'Switching', spinner: true };
+      row.status.text = 'Pointing T3 Code at this sign-in';
+      row.menu = [];
+      return row;
+    }
+
     const notice = ui && ui.notices ? ui.notices.get(act.key) : null;
     if (h.managedBy === 't3') return t3AgentRow(row, h, meta, notice, updateAvailable, latest);
 
@@ -431,12 +439,16 @@ const T3Model = (() => {
       row.status.text = !isKey || !names.length ? signedInAs(h)
         : meta.subscription ? 'Signed in to ' + listOf(names)
           : (names.length === 1 ? 'Key saved for ' : 'Keys saved for ') + listOf(names);
+      // T3 Code's own ChatGPT connection doesn't read this sign-in. Someone may
+      // have chosen it and it may work, so this is said and offered, not flagged.
+      if (h.t3OwnSignIn) row.status.text += ' · Not used by T3 Code';
       // Once a provider key is saved, the same sheet adds, lists and removes
       // keys, so the button says so. Pi's environment keys and models.json
       // providers are not saved keys: there is nothing to manage for them.
       const saved = h.id === 'pi' ? (ui && ui.piSaved) || 0 : names.length;
       if (updateAvailable) row.action = { cmd: 'harness.update', label: 'Update' };
       else if (isKey) row.action = { cmd: 'harness.apikey', label: saved ? 'Manage keys' : 'Add key', icon: 'key-round' };
+      else if (h.t3OwnSignIn) row.action = { cmd: 'harness.useCli', label: 'Use in T3 Code' };
     }
     row.notice = distinctNotice(notice, row.status);
     row.held = null;
@@ -447,6 +459,7 @@ const T3Model = (() => {
     if (h.canSetKey) row.menu.push({ cmd: 'harness.apikey', label: meta.subscription ? 'Sign-ins and keys…' : isKey ? 'Add a provider key…' : 'Use an API key…', icon: 'key-round' });
     if (h.canSetKey && meta.subscription) row.menu.push({ cmd: 'harness.subscription', label: 'Sign in with a subscription…', icon: 'log-in' });
     if (h.canSignIn && h.runnable && row.state !== 'signin') row.menu.push({ cmd: 'harness.signin', label: 'Sign in again', icon: 'log-in' });
+    if (h.t3OwnSignIn && h.signedIn === true) row.menu.push({ cmd: 'harness.useCli', label: 'Use this sign-in in T3 Code…', icon: 'log-in' });
     row.menu.push({ sep: true });
     row.menu.push({ cmd: 'harness.uninstall', label: 'Uninstall…', icon: 'trash-2', danger: true });
     return row;
@@ -1684,7 +1697,7 @@ const T3Model = (() => {
     // Words people reach for that the label does not use ("login", "expose",
     // "log out"): a query matching only these still finds the item.
     const KEYWORDS = {
-      'harness.signin': 'login log in auth authenticate', 'harness.apikey': 'api key token credential provider', 'harness.subscription': 'login log in subscription claude chatgpt copilot',
+      'harness.signin': 'login log in auth authenticate', 'harness.apikey': 'api key token credential provider', 'harness.subscription': 'login log in subscription claude chatgpt copilot', 'harness.useCli': 'login log in existing cli chatgpt connection not authenticated',
       'harness.install': 'add download', 'harness.uninstall': 'remove delete', 'harness.update': 'upgrade',
       'toolchain.install': 'add download', 'toolchain.uninstall': 'remove delete', 'toolchain.update': 'upgrade', 'scm.updateAll': 'upgrade',
       'package.add': 'install new tool package mise registry', 'package.install': 'add download', 'package.uninstall': 'remove delete',
@@ -1737,6 +1750,7 @@ const T3Model = (() => {
           : m.cmd === 'harness.version' ? 'Install a specific version of ' + a.name + '…'
             : m.cmd === 'harness.apikey' ? (a.id === 'opencode' ? 'Add a provider key for OpenCode…' : a.id === 'pi' ? 'Pi sign-ins and keys…' : 'Use an API key for ' + a.name + '…')
               : m.cmd === 'harness.subscription' ? 'Sign in to ' + a.name + ' with a subscription…'
+              : m.cmd === 'harness.useCli' ? 'Use the ' + a.name + ' sign-in in T3 Code…'
               : m.cmd === 'harness.uninstall' ? 'Uninstall ' + a.name + '…' : m.label + ' ' + a.name;
         if (items.some((i) => i.label === label)) continue;
         add('Agents', label, m.icon, { cmd: m.cmd, id: a.id }, { meta: m.cmd === 'harness.uninstall' ? null : hint });

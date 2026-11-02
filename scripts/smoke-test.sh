@@ -1199,6 +1199,32 @@ codex_key_stored() {
 }
 check "an API key signs Codex in" codex_key_stored
 
+# T3 Code's own ChatGPT connection ignores the sign-in above until the row's
+# switch is pressed, and T3 Code then runs the Codex installed here.
+codex_row_says() {
+  local tries=0
+  until status_json | jq -e --argjson own "$1" '.harnesses[] | select(.id == "codex") | .t3OwnSignIn == $own' >/dev/null; do
+    tries=$((tries + 1)); [ "$tries" -le 30 ] || return 1; sleep 1
+  done
+}
+codex_sign_in_reaches_t3() {
+  local settings=/home/t3/.t3/userdata/settings.json reply
+  as_t3 "node -e '
+    const fs = require(\"fs\"), file = \"$settings\";
+    const s = JSON.parse(fs.readFileSync(file, \"utf8\"));
+    const i = (s.providerInstances ??= {}).codex ??= { driver: \"codex\", config: {} };
+    (i.config ??= {}).setupMode = \"managed\";
+    fs.writeFileSync(file, JSON.stringify(s));
+  '" || return 1
+  codex_row_says true || return 1
+  reply="$(auth_post '{"agent":"codex"}' /auth/use-cli)" || return 1
+  jq -e '.ok == true and .changed == true' <<<"$reply" >/dev/null || return 1
+  docker exec -u t3 "$NAME" cat "$settings" | jq -e '.providerInstances.codex.config
+    | .setupMode == "existing" and (.binaryPath | contains("/t3-harness/launchers/codex/"))' >/dev/null || return 1
+  codex_row_says false
+}
+check "the Codex sign-in reaches T3 Code when asked" codex_sign_in_reaches_t3
+
 opencode_key_stored() {
   auth_post '{"agent":"opencode","provider":"deepseek","key":"sk-smoke"}' /auth/apikey | grep -q '"ok":true' &&
   docker exec -u t3 "$NAME" node --input-type=module -e '

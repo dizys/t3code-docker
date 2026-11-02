@@ -138,6 +138,7 @@
     signingIn: null,
     // A source control CLI being signed out, while its request runs.
     signingOut: null,
+    switchingSignIn: null,
     // This page's own address, once confirmed to be T3 Code's too: see checkHere.
     here: null,
     updatePosting: false,
@@ -2444,6 +2445,31 @@
     });
   };
 
+  // T3 Code's own ChatGPT connection ignores the sign-in on this row. Only ever
+  // on request, since that connection may be what someone chose.
+  const useCliSignIn = async (id) => {
+    const name = (M.AGENTS[id] || {}).name || id;
+    const ok = await Kit.confirm({
+      title: 'Use this sign-in in T3 Code?',
+      body: 'T3 Code will run ' + name + ' with the account signed in here, instead of its own ChatGPT connection. It applies without a restart. The saved connection isn’t deleted.',
+      confirm: 'Use this sign-in',
+      tone: 'primary',
+    });
+    if (!ok) return;
+    ui.switchingSignIn = id;
+    render();
+    const res = await api('/auth/use-cli', { body: { agent: id } });
+    // A refusal is news too: the sign-in the row showed has gone.
+    await loadStatus();
+    ui.switchingSignIn = null;
+    render();
+    // The button that opened this is gone from the row now.
+    const row = M.agentRows(state.status, ui, now()).find((entry) => entry.id === id);
+    if (document.activeElement === document.body && row) document.querySelector('[data-key="menu-' + row.key + '"]')?.focus({ preventScroll: true });
+    if (res.ok) Kit.toast('T3 Code now uses this ' + name + ' sign-in', res.warning ? { detail: res.warning } : undefined);
+    else Kit.toast('Couldn’t switch T3 Code to this sign-in', { tone: 'danger', detail: res.error || 'Try again.' });
+  };
+
   const confirmScmSignOut = async (id) => {
     const meta = M.SOURCE_CONTROL[id] || {};
     const auth = (toolchain(id) || {}).auth || {};
@@ -3907,6 +3933,7 @@
     'harness.signin': (a, el) => openSignin(a.id, el),
     'harness.apikey': (a, el) => openKeySheet(a.id, el),
     'harness.subscription': (a, el) => openKeySheet(a.id, el, { subscription: true }),
+    'harness.useCli': (a) => useCliSignIn(a.id),
     'harness.updateAll': () => updateAll('harness'),
     'toolchain.install': (a) => callLifecycle('toolchain', 'install', a.id),
     'toolchain.update': (a) => callLifecycle('toolchain', 'update', a.id),

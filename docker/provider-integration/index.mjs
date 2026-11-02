@@ -29,11 +29,13 @@ import {
   settingsPathFor,
   statePathFor,
   t3ManagesItself,
+  useExistingSetup,
   writeFileAtomic,
   writeJsonAtomic,
 } from "./settings.mjs";
 
 const SCHEMA = 1;
+const isSettings = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
 /**
  * Build the integration around one T3 environment.
@@ -218,8 +220,38 @@ export function createProviderIntegration(options = {}) {
     };
   }
 
+  /**
+   * The agents T3 Code signs in itself, so it ignores the CLI's sign-in. Only
+   * ever a note on a row: an unreadable settings file is reported by `sync()`.
+   */
+  async function ownSignIns() {
+    const { value, error } = await readJson(fs, settingsPath);
+    if (error || !isSettings(value)) return [];
+    return PROVIDERS.filter((provider) => t3ManagesItself(value, provider.driver)).map((provider) => provider.id);
+  }
+
+  /**
+   * Make T3 Code use the CLI's sign-in for this agent. Someone may have chosen
+   * T3's own connection, so this only ever runs when asked. T3 watches the
+   * file and applies it live. `sync()` then runs because T3 no longer picks
+   * this agent's executable: the managed one applies again. The switch has
+   * already happened if that fails, and startup syncs again.
+   */
+  async function useCliSignIn(id) {
+    const provider = PROVIDERS.find((entry) => entry.id === id);
+    if (!provider) return { ok: false, code: "unknown", error: `Unknown agent: ${id}` };
+    const loaded = await readJson(fs, settingsPath);
+    if (loaded.error) return { ok: false, code: "settings-unreadable", error: loaded.error };
+    const result = useExistingSetup(isSettings(loaded.value) ? loaded.value : {}, provider.driver);
+    if (result.changed) await writeJsonAtomic(fs, settingsPath, result.settings, 0o600);
+    const synced = await sync().catch((error) => ({ ok: false, code: "sync-failed", error: String(error?.message ?? error) }));
+    return { ok: true, changed: result.changed, sync: synced };
+  }
+
   return {
     sync,
+    ownSignIns,
+    useCliSignIn,
     paths: { baseDir, settingsPath, statePath, launcherDir },
   };
 }

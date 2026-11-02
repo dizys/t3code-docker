@@ -1572,3 +1572,46 @@ test("Pi signs in with a key per provider or a subscription, from one sheet", ()
   assert.ok(labels.includes("Pi sign-ins and keys…"));
   assert.ok(labels.includes("Sign in to Pi with a subscription…"));
 });
+
+test("a Codex sign-in T3 Code isn't using says so, offers the switch and asks for nothing", () => {
+  const status = (overrides) => statusWith({ harnesses: [harness("codex", { canSignIn: true, canSetKey: true, t3OwnSignIn: true, ...overrides })] });
+  const at = (overrides, extra) => row(status(overrides), "codex", extra);
+  const useCli = (r) => r.menu.find((item) => item.cmd === "harness.useCli");
+
+  const signedIn = at({});
+  assert.equal(signedIn.status.text, "Signed in · Not used by T3 Code");
+  assert.equal(signedIn.action.cmd, "harness.useCli");
+  assert.equal(signedIn.action.label, "Use in T3 Code");
+  assert.notEqual(signedIn.action.variant, "primary");
+  assert.equal(signedIn.attention, false, "that connection may be what someone chose");
+  assert.equal(useCli(signedIn).label, "Use this sign-in in T3 Code…");
+  assert.equal(at({ authMethod: "apikey" }).status.text, "Signed in with an API key · Not used by T3 Code");
+
+  // The palette names the agent, and finds it by the words people reach for.
+  const palette = plain(M.paletteItems(status({}), null, ui(), NOW)).find((item) => item.label === "Use the Codex sign-in in T3 Code…");
+  assert.equal(palette.cmd.cmd, "harness.useCli");
+  assert.match(palette.keywords, /existing cli/);
+
+  // An update holds the row's one button; the switch stays in the menu.
+  const outdated = at({ latestVersion: "1.1.0" });
+  assert.equal(outdated.action.cmd, "harness.update");
+  assert.ok(useCli(outdated));
+
+  // Nothing to point T3 Code at yet: the row asks for the sign-in as usual.
+  const signedOut = at({ signedIn: false });
+  assert.equal(signedOut.status.text, "Not signed in");
+  assert.equal(signedOut.action.cmd, "harness.signin");
+  assert.equal(useCli(signedOut), undefined);
+  assert.equal(useCli(at({ signedIn: null })), undefined);
+
+  // T3 Code already reads the sign-in here: the row is as it always was.
+  const reading = at({ t3OwnSignIn: false });
+  assert.equal(reading.status.text, "Signed in");
+  assert.equal(reading.action, null);
+  assert.equal(useCli(reading), undefined);
+
+  const switching = at({}, { switchingSignIn: "codex" });
+  assert.equal(switching.badge.text, "Switching");
+  assert.equal(switching.action, null);
+  assert.deepEqual(plain(switching.menu), []);
+});

@@ -184,6 +184,14 @@ the Agents row and completes an active sign-in.
 A configured key confirms local storage; Codex checks whether the key works
 when you send a request.
 
+T3 Code also has its own ChatGPT connection for Codex, separate from the sign-in
+above. Once you choose **Continue with ChatGPT** in T3 Code, it stops reading the
+CLI's sign-in, so this page can say **Signed in** while T3 Code says **Not
+authenticated**. The Codex row says when that's the case, and **Use in T3 Code**
+points T3 Code back at the sign-in here without a restart. The saved connection
+isn't deleted. Nothing switches unless you ask, because you may have chosen that
+connection on purpose.
+
 Muse has no login-status command, and its model list works while signed out.
 The setup page reports saved credentials without claiming that they are
 verified. It ignores an inherited `META_API_KEY`, as T3 Code does; save the

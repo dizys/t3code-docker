@@ -330,7 +330,10 @@ for id in $IDS; do
   args=(install "$id")
   [ -n "${REQ_VERSION[$id]}" ] && args+=(--version "${REQ_VERSION[$id]}")
   args+=(--json)
-  out="$(droot t3-harness "${args[@]}")"
+  if ! out="$(droot t3-harness "${args[@]}")"; then
+    printf 'Failed to install %s:\n%s\n' "$id" "$out" >&2
+    exit 1
+  fi
   is "$id installs" "true" "$(field '.ok' "$out")"
   VERSION[$id]="$(field '.harness.installedVersion // empty' "$out")"
   EXE[$id]="$(field '.harness.executable // empty' "$out")"

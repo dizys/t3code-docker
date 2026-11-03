@@ -17,6 +17,13 @@ client, native modules and resource monitor. Its manifest records the patch
 revision, upstream source commit and original archive checksum. Compiler
 dependencies remain outside the final image.
 
+The OpenCode workspace patch waits for the native skill and command config
+plugins to become active before caching discovery results. Built-in commands can
+arrive before local skills, so their presence does not establish readiness. The
+wait is bounded at ten seconds; failures leave the inventory retryable instead
+of caching partial results. Warm and genuinely empty workspaces use the same
+native readiness signal.
+
 Linux ARM64 runners use upstream's native `build-exe` command without a
 cross-build target, retaining its SEA injection workaround for 16/64 KiB page
 kernels. The builder reads that path's `dist-exe/t3` output; explicit targets

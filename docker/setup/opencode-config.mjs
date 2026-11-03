@@ -2,7 +2,6 @@
 // Keep migration here so the entrypoint and regression tests use the same code.
 import path from "node:path";
 import * as defaultFs from "node:fs/promises";
-import { parseTree, createScanner, SyntaxKind, applyEdits } from "./vendor/jsonc.mjs";
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
@@ -118,79 +117,10 @@ export async function ensureOpencodeLayout({ home = "/home/t3", env = {}, io = d
   return { root, fixed, warnings };
 }
 
-// Only the legacy array is invalid in both supported majors. OpenCode 1 has a
-// valid skills object (paths/urls); never remove it when saving unrelated MCPs.
-export function stripLegacySkills(content) {
-  const errors = [];
-  const tree = parseTree(content, errors, { allowTrailingComma: true });
-  if (errors.length || tree?.type !== "object") return content;
-  const entries = (tree.children || []).filter((prop) => prop?.children?.[0]?.value === "skills");
-  if (entries.length !== 1 || entries[0].children?.[1]?.type !== "array") return content;
-  const property = entries[0];
-  const edits = [{ offset: property.offset, length: property.length, content: "" }];
-  // Remove the separator token, preserving surrounding comments/whitespace.
-  // jsonc modify() also removes comments preceding a deleted property.
-  const scanner = createScanner(content, true);
-  scanner.setPosition(property.offset + property.length);
-  if (scanner.scan() !== SyntaxKind.CommaToken) {
-    const previous = tree.children[tree.children.indexOf(property) - 1];
-    if (previous) scanner.setPosition(previous.offset + previous.length);
-    else return applyEdits(content, edits);
-    scanner.scan();
-  }
-  if (scanner.getToken() === SyntaxKind.CommaToken) edits.push({ offset: scanner.getTokenOffset(), length: 1, content: "" });
-  return applyEdits(content, edits);
-}
-
-async function stripSkillsKey(io, file) {
-  const entry = await lstatOrNull(io, file);
-  if (!entry) return { fixed: false };
-  let stat;
-  try {
-    stat = await io.stat(file);
-  } catch {
-    return { fixed: false };
-  }
-  if (!stat.isFile() || stat.size > 1024 * 1024) return { fixed: false };
-  // Preserve file symlinks (parent stays real for inotify): write through to
-  // the resolved target instead of replacing the symlink itself.
-  const resolved = await io.realpath(file).catch(() => file);
-  let content;
-  try {
-    content = await io.readFile(resolved, "utf8");
-  } catch {
-    return { fixed: false };
-  }
-  const next = stripLegacySkills(content);
-  if (next === content) return { fixed: false, file };
-  if (Buffer.byteLength(next, "utf8") > 1024 * 1024) throw fail("too_large", "Native settings would exceed the 1 MiB limit.");
-  const mode = stat.mode & 0o777;
-  const tmp = `${resolved}.tmp.${process.pid}.${Math.random().toString(16).slice(2)}`;
-  try {
-    await io.writeFile(tmp, next, { encoding: "utf8", mode });
-    try {
-      await io.chmod(tmp, mode);
-    } catch {}
-    await io.rename(tmp, resolved);
-  } finally {
-    await io.rm(tmp, { force: true }).catch(() => {});
-  }
-  return { fixed: true, file };
-}
-
-export async function normalizeOpencodeConfig({ home = "/home/t3", env = {}, io = defaultFs } = {}) {
-  const root = opencodeConfigRoot(home, env);
-  const fixed = [];
-  const warnings = [];
-  for (const file of [path.join(root, "opencode.json"), path.join(root, "opencode.jsonc")]) {
-    try {
-      const result = await stripSkillsKey(io, file);
-      if (result.fixed) fixed.push(file);
-    } catch (error) {
-      warnings.push(`Could not normalize ${file}: ${String(error?.message || error).slice(0, 160)}`);
-    }
-  }
-  return { root, fixed, warnings };
+// Both V2 skill arrays and V1 paths/urls objects are valid native settings.
+// Keep this result contract for callers without rewriting user configuration.
+export async function normalizeOpencodeConfig({ home = "/home/t3", env = {} } = {}) {
+  return { root: opencodeConfigRoot(home, env), fixed: [], warnings: [] };
 }
 
 export async function ensureOpencodeConfig({ home = "/home/t3", env = {}, io = defaultFs, legacyRoot } = {}) {

@@ -29,8 +29,10 @@ try {
     await fs.writeFile(path.join(directory, name, "SKILL.md"), `---\nname: ${name}\ndescription: Disposable migration check\n---\nFixture.\n`);
   }
   await fs.writeFile(path.join(home, "own-agents/migration-agent.md"), "---\ndescription: Disposable migration agent\nmode: subagent\n---\nOnly a fixture.\n");
-  await fs.writeFile(path.join(root, "opencode.jsonc"), '{"username":"config-migration-check","skills":["old"]}\n');
+  const initialConfig = { username: "config-migration-check", skills: { paths: [shared] } };
+  await fs.writeFile(path.join(root, "opencode.jsonc"), JSON.stringify(initialConfig) + "\n");
   await ensureOpencodeConfig({ home, env, legacyRoot });
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(root, "opencode.jsonc"), "utf8")), initialConfig, "Migration preserves native skill sources.");
   assert.equal((await fs.lstat(root)).isSymbolicLink(), false);
   assert.equal((await fs.lstat(path.join(root, "skills"))).isSymbolicLink(), false);
   assert.equal((await fs.lstat(path.join(root, "agents"))).isSymbolicLink(), false);

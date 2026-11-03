@@ -129,6 +129,57 @@ const T3SkillModel = (() => {
     return rows.filter(row => words.every(word => (row.name + ' ' + row.description).toLocaleLowerCase().includes(word))
       && (!agent || available(row.byProvider[agent])) && (!needsAttention || row.attention));
   };
+  // One row per skill name, even when the same name lives in several folders.
+  // Physical installations are kept on `installations`; the merged byProvider
+  // picks the most capable entry per agent so availability stays accurate.
+  // Singletons pass through untouched to preserve existing row identity.
+  const unify = rows => {
+    const byName = new Map();
+    for (const row of rows) {
+      const key = row.name;
+      if (!byName.has(key)) byName.set(key, []);
+      byName.get(key).push(row);
+    }
+    const rank = entry => {
+      if (!entry || entry.error) return 0;
+      if (entry.canSetState) return 4;
+      if (entry.canToggle) return 3;
+      if (available(entry)) return 2;
+      return 1;
+    };
+    const out = [];
+    for (const [name, list] of byName) {
+      if (list.length === 1) { out.push(list[0]); continue; }
+      const ordered = [...list].sort((a, b) => a.key.localeCompare(b.key));
+      const byProvider = {};
+      for (const provider of providers) {
+        const candidates = ordered.map(row => row.byProvider[provider.id]).filter(Boolean);
+        if (candidates.length) byProvider[provider.id] = candidates.slice().sort((a, b) => rank(b) - rank(a))[0];
+      }
+      const firstEditable = ordered.find(row => row.canEdit) || ordered[0];
+      const readers = [...new Set(ordered.flatMap(row => row.root?.readers || []))];
+      const aliases = [...new Set(ordered.flatMap(row => [row.key, ...(row.aliases || [])]))];
+      const description = ordered.map(row => row.description).filter(Boolean).sort((a, b) => b.length - a.length)[0] || '';
+      const withOrigin = ordered.filter(row => row.origin);
+      const origin = withOrigin[0]?.origin;
+      const update = (withOrigin.find(row => row.update?.status === 'available')
+        || withOrigin.find(row => row.update?.status === 'error')
+        || withOrigin.find(row => row.update?.status === 'current'))?.update;
+      const scopes = new Set(ordered.map(row => row.scope));
+      const scope = scopes.size === 1 ? ordered[0].scope : scopes.has('user') ? 'user' : ordered[0].scope;
+      out.push({ ...firstEditable, key: 'unified:' + name, name, description, byProvider, aliases,
+        installations: ordered, provider: firstEditable.provider, path: firstEditable.path,
+        scope, source: 'Unified', canEdit: ordered.some(row => row.canEdit), canRemove: ordered.some(row => row.canRemove),
+        packageManaged: ordered.some(row => row.packageManaged),
+        packageSource: ordered.find(row => row.packageSource)?.packageSource || null,
+        metadataError: ordered.find(row => row.metadataError)?.metadataError || null, error: null,
+        root: { path: 'Multiple folders', resolvedPath: 'unified', readers, source: 'Unified', scope },
+        groupKey: 'unified', groupLabel: 'All skills · unified by name', attention: ordered.some(row => row.attention),
+        update, origin, unified: true, folders: [...new Set(ordered.map(row => directory(row.path)))],
+        locationLabels: [...new Set(ordered.map(row => row.groupLabel))] });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+  };
   const placement = (selected, installed, roots, mode = 'fewest') => {
     const agents = providers.map(p => p.id).filter(id => selected.includes(id));
     const own = id => roots.find(root => (root.owners || [root.owner]).includes(id));
@@ -168,5 +219,5 @@ const T3SkillModel = (() => {
       assignments: Object.fromEntries(agents.map(agent => [agent, (coverage(agent).find(d => d.provider === agent || d.also.includes(agent)) || coverage(agent)[0])?.provider || null])) };
   };
   return { providers, nameOf, pluginName, updateSummary, updateOrder, changeOrder, hookLabel, hookNeedsReview, hookStatus, hooksSummary, hookMatcher, hookTimeout,
-    contains, directory, displayPath, available, state, attention, rootsFor, rootLabel, join, groups, filter, placement };
+    contains, directory, displayPath, available, state, attention, rootsFor, rootLabel, join, unify, groups, filter, placement };
 })();

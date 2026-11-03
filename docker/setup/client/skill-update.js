@@ -26,7 +26,8 @@ const T3SkillUpdate = (() => {
     };
     const open = (provider, id, { queue = [] } = {}) => {
       if (active && !active.layer.closed) { active.layer.panel.focus(); return; }
-      const lookup = (provider, id) => getLibrary().rows.find(row => row.byProvider[provider]?.id === id);
+      const allRows = () => [...(getLibrary().rows || []), ...(getLibrary().physicalRows || [])];
+      const lookup = (provider, id) => allRows().find(row => row.byProvider[provider]?.id === id);
       const original = lookup(provider, id);
       const media = window.matchMedia('(max-width: 639.98px)');
       const view = { provider, id, row: original, data: null, phase: 'loading', consent: false, message: '', code: null, result: null,
@@ -50,7 +51,7 @@ const T3SkillUpdate = (() => {
       const actionLabel = () => readers().detected.length ? 'Update for ' + recipients() : 'Update this folder';
       const next = () => {
         for (let index = view.index + 1; index < view.queue.length; index++) {
-          const row = getLibrary().rows.find(row => row.key === view.queue[index]);
+          const row = allRows().find(row => row.key === view.queue[index]);
           if (row?.origin && row.update?.status === 'available') return { row, index };
         }
         return null;

@@ -185,3 +185,23 @@ test('hook discovery stays absent without Codex, and discovery failure leaves th
   assert.doesNotMatch(unavailable.ui.content(), /waiting for review|unsupported native API/);
   assert.match(unavailable.ui.content(), /Codex plugin hooks…/);
 });
+
+test('unified view merges same-named folders into one row and remembers the choice', async () => {
+  const codexSkill = { id: 'codex-review', name: 'review', description: 'Review', path: '/codex/review/SKILL.md', resolvedPath: '/codex/review/SKILL.md', scope: 'user', canEdit: true };
+  const cursorSkill = { id: 'cursor-review', name: 'review', description: 'Review', path: '/cursor/review/SKILL.md', resolvedPath: '/cursor/review/SKILL.md', scope: 'user', canEdit: true };
+  const byProvider = (url) => url.includes('cursor') ? [cursorSkill] : url.includes('codex') ? [codexSkill] : [];
+  const api = (url) => url.includes('/reach') ? { ok: true, data: { roots: [] } }
+    : { ok: true, data: { provider: url.includes('cursor') ? 'cursor' : 'codex', scannedAt: Date.now(), skills: structuredClone(byProvider(url)) } };
+  const storage = new Map([['t3-console-skill-unified', 'true']]);
+  const { ui } = await fixture(skills, storage, (url) => api(url), ['codex', 'cursor']);
+  const content = ui.content();
+  assert.match(content, /unified by name/);
+  assert.match(content, /data-key="skill-unified:review"/);
+  assert.doesNotMatch(content, /data-key="skill-\/codex\/review/);
+  assert.equal(storage.get('t3-console-skill-unified'), 'true');
+  ui.toggleUnified();
+  assert.equal(storage.get('t3-console-skill-unified'), 'false');
+  const separate = ui.content();
+  assert.doesNotMatch(separate, /unified by name/);
+  assert.match(separate, /data-key="skill-\/codex\/review/);
+});

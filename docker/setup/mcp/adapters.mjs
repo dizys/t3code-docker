@@ -5,7 +5,7 @@ import { parse, parseTree, modify, applyEdits } from "../vendor/jsonc.mjs";
 import { parseMcpToml, applyMcpToml } from "./toml.mjs";
 import { readConfig, changeConfig } from "./files.mjs";
 import { validateMcpServer } from "./store.mjs";
-import { opencodeConfigRoot, stripLegacySkills } from "../opencode-config.mjs";
+import { opencodeConfigRoot } from "../opencode-config.mjs";
 
 const problem = (code, message) => Object.assign(new Error(message), { code });
 const object = (value) => value && typeof value === "object" && !Array.isArray(value);
@@ -154,11 +154,7 @@ export async function writeProviderMcpEntry(io, provider, { home, env = {} }, na
     }
     if (!entry && !Object.hasOwn(container.entries, name)) return raw;
     const eol = (raw || "").includes("\r\n") ? "\r\n" : "\n";
-    let next = applyEdits(raw || "{}\n", modify(raw || "{}\n", [...container.keys, name], nextEntry ?? undefined,
+    return applyEdits(raw || "{}\n", modify(raw || "{}\n", [...container.keys, name], nextEntry ?? undefined,
       { formattingOptions: { insertSpaces: true, tabSize: 2, eol } }));
-    // Remove only the legacy invalid array; valid OpenCode 1 skills settings
-    // and all unrelated provider settings must survive an MCP save.
-    if (provider === "opencode") next = stripLegacySkills(next);
-    return next;
   });
 }

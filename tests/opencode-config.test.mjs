@@ -88,16 +88,16 @@ test("layout honors OPENCODE_CONFIG_DIR override and legacy singular links", asy
   assert.equal(skillRoots("opencode", { home: f.home, env })[0].path, path.join(root, "skills"));
 });
 
-test("normalize removes invalid top-level skills key and preserves the rest", async (t) => {
+test("normalize preserves OpenCode V2 skills arrays and the rest", async (t) => {
   const f = await fixture(t);
   const root = opencodeConfigRoot(f.home, f.env);
   await fs.mkdir(root, { recursive: true });
   const file = path.join(root, "opencode.json");
   await fs.writeFile(file, '{\n  "$schema": "https://opencode.ai/config.json",\n  "skills": ["/home/t3/.t3/agents/.agents_skills"],\n  "instructions": ["/home/t3/.t3/setup/context/AGENTS.md"],\n  "mcp": {}\n}\n', { mode: 0o600 });
   const result = await normalizeOpencodeConfig(f);
-  assert.deepEqual(result.fixed, [file]);
+  assert.deepEqual(result.fixed, []);
   const parsed = JSON.parse(await fs.readFile(file, "utf8"));
-  assert.ok(!Object.hasOwn(parsed, "skills"));
+  assert.deepEqual(parsed.skills, ["/home/t3/.t3/agents/.agents_skills"]);
   assert.deepEqual(parsed.instructions, ["/home/t3/.t3/setup/context/AGENTS.md"]);
   assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
   // Second run is a no-op.
@@ -111,10 +111,10 @@ test("normalize preserves JSONC comments and handles both json and jsonc", async
   const jsonc = path.join(root, "opencode.jsonc");
   await fs.writeFile(jsonc, '{\n// keep\n"permission": {"skill": {"review": "allow"}},\n"skills": ["./shared"]\n}\n');
   const result = await normalizeOpencodeConfig(f);
-  assert.deepEqual(result.fixed, [jsonc]);
+  assert.deepEqual(result.fixed, []);
   const content = await fs.readFile(jsonc, "utf8");
   assert.match(content, /keep/);
-  assert.ok(!content.includes('"skills"'));
+  assert.match(content, /"skills": \["\.\/shared"\]/);
   assert.match(content, /permission/);
 });
 
@@ -128,7 +128,7 @@ test("normalize leaves valid configs and missing files alone", async (t) => {
   assert.deepEqual((await normalizeOpencodeConfig(empty)).fixed, []);
 });
 
-test("normalize preserves file symlinks while stripping the invalid key", async (t) => {
+test("normalize preserves file symlinks and their skill sources", async (t) => {
   const f = await fixture(t);
   const root = opencodeConfigRoot(f.home, f.env);
   await fs.mkdir(root, { recursive: true });
@@ -136,20 +136,20 @@ test("normalize preserves file symlinks while stripping the invalid key", async 
   await fs.writeFile(target, '{"skills":["./shared"],"mcp":{}}\n', { mode: 0o600 });
   await fs.symlink(target, path.join(root, "opencode.json"));
   const result = await normalizeOpencodeConfig(f);
-  assert.deepEqual(result.fixed, [path.join(root, "opencode.json")]);
+  assert.deepEqual(result.fixed, []);
   assert.ok((await fs.lstat(path.join(root, "opencode.json"))).isSymbolicLink());
   const parsed = JSON.parse(await fs.readFile(target, "utf8"));
-  assert.ok(!Object.hasOwn(parsed, "skills"));
+  assert.deepEqual(parsed.skills, ["./shared"]);
 });
 
-test("MCP writes strip the invalid top-level skills key without touching permissions", async (t) => {
+test("MCP writes preserve OpenCode V2 skills arrays and permissions", async (t) => {
   const f = await fixture(t);
   const file = path.join(f.home, ".config/opencode/opencode.json");
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, '{"skills":["/shared"],"permission":{"skill":{"review":"allow"}},"mcp":{}}');
   await writeProviderMcpEntry(fs, "opencode", f, "probe", { type: "local", command: ["server"], enabled: true });
   const parsed = JSON.parse(await fs.readFile(file, "utf8"));
-  assert.ok(!Object.hasOwn(parsed, "skills"));
+  assert.deepEqual(parsed.skills, ["/shared"]);
   assert.deepEqual(parsed.permission, { skill: { review: "allow" } });
   assert.ok(parsed.mcp.probe);
   assert.equal((await readProviderMcp(fs, "opencode", f)).servers[0].name, "probe");
@@ -166,6 +166,7 @@ test("ensure combines layout and normalize, keeping Claude/Codex shared roots", 
   await fs.writeFile(path.join(root, "opencode.json"), '{"skills":["x"]}\n');
   const result = await ensureOpencodeConfig(f);
   assert.equal(result.root, root);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(root, "opencode.json"), "utf8")).skills, ["x"]);
   assert.ok((await fs.lstat(root)).isDirectory());
   assert.ok((await fs.lstat(path.join(root, "skills"))).isDirectory());
   assert.ok((await fs.lstat(path.join(root, "agents"))).isDirectory());
@@ -252,14 +253,14 @@ test("normalization and MCP saves preserve valid OpenCode 1 skills objects", asy
   assert.deepEqual(JSON.parse(content.slice(content.indexOf("{"))).skills, skills);
 });
 
-test("legacy arrays with trailing commas are repaired without changing comments", async (t) => {
+test("V2 arrays with trailing commas remain unchanged with their comments", async (t) => {
   const f = await fixture(t), root = opencodeConfigRoot(f.home);
   await fs.mkdir(root, { recursive: true });
   const file = path.join(root, "opencode.jsonc");
   await fs.writeFile(file, '{\r\n// keep\r\n"skills": ["old",],\r\n"username": "keep",\r\n}\r\n');
-  assert.deepEqual((await normalizeOpencodeConfig(f)).fixed, [file]);
+  assert.deepEqual((await normalizeOpencodeConfig(f)).fixed, []);
   const content = await fs.readFile(file, "utf8");
   assert.match(content, /\/\/ keep\r\n/);
   assert.match(content, /"username": "keep"/);
-  assert.doesNotMatch(content, /"skills"/);
+  assert.match(content, /"skills": \["old",\]/);
 });

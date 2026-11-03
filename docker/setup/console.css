@@ -1522,6 +1522,10 @@ html.tc-locked { overflow: hidden; }
 .tc-mcp-editor .tc-choice code { overflow-wrap: anywhere; min-width: 0; }
 .tc-mcp-editor .tc-choice-head { flex-wrap: wrap; }
 .tc-mcp-editor .tc-agentpick-row .tc-avail-note { overflow-wrap: anywhere; }
+/* Settings at 640 to 799px stacks the panel under the form without being a phone. Which
+   agents get the server is part of the form, so it's shown rather than left behind a bar. */
+:root[data-host="tab"]:not([data-compact]) .tc-mcp-editor .tc-wizard-rail-toggle { display: none; }
+@media (max-width: 799.98px) { :root[data-host="tab"]:not([data-compact]) .tc-mcp-editor .tc-wizard-rail { padding-top: 1rem; } }
 .tc-mcp-editor .tc-wizard-grid:has(> .tc-wizard-main:only-child) { grid-template-columns: minmax(0, 1fr); }
 .tc-mcp-editor .tc-choice:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 3px; }
 .tc-mcp-remove .tc-dialog-desc { margin-top: var(--space-3); }
@@ -1557,6 +1561,8 @@ html.tc-locked { overflow: hidden; }
   :where(:root[data-compact]) .tc-mcp-editor .tc-choice { padding: var(--space-4); }
   :where(:root[data-compact]) .tc-mcp-editor .tc-choice-head { font-size: 0.875rem; }
   :where(:root[data-compact]) .tc-mcp-editor .tc-agentpick-row { padding: var(--space-3); }
+  /* The bar above already says this. */
+  :where(:root[data-compact]) .tc-mcp-editor .tc-wizard-rail > .tc-insp-label:first-child { display: none; }
   :where(:root[data-compact]) .tc-mcp-editor .tc-wizard-foot .tc-btn--primary { white-space: normal; }
   :where(:root[data-compact]) .tc-mcp-editor .tc-form-field > .tc-label > .tc-spacer { display: none; }
   :where(:root[data-compact]) .tc-mcp-remove { max-height: 92dvh; overflow-y: auto; }

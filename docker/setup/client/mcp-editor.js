@@ -153,7 +153,7 @@ const T3McpEditor = (() => {
         if (differing.length) return 'Uncheck ' + M.listOf(differing) + ' to keep ' + (differing.length === 1 ? 'its own version. It then shows Differs.' : 'their own versions. They then show Differs.');
         return 'Nothing starts here. Agents start the server in their next session.';
       };
-      const rail = () => html`<details class="tc-wizard-rail-wrap"${view.railOpen || !Kit.isPhone() ? raw(' open') : ''}><summary class="tc-wizard-rail-toggle">${mode === 'edit' ? 'When you save' : 'Use in'} · ${M.plural(view.agents.size, 'agent')}</summary><aside class="tc-wizard-rail"><span class="tc-insp-label">${mode === 'edit' ? 'When you save' : 'Use in'}</span><div class="tc-agentpick">${railAgents().map(p => {
+      const rail = () => html`<details class="tc-wizard-rail-wrap"${view.railOpen || !Kit.isPhone() ? raw(' open data-open') : ''}><summary class="tc-wizard-rail-toggle"><span>${mode === 'edit' ? 'When you save' : 'Use in'} · ${M.plural(view.agents.size, 'agent')}</span>${icon('chevron-down')}</summary><aside class="tc-wizard-rail"><span class="tc-insp-label">${mode === 'edit' ? 'When you save' : 'Use in'}</span><div class="tc-agentpick">${railAgents().map(p => {
         const native = provider(p.id), state = S.state(view.snapshot, { name: view.draft.name.trim(), shared: true }, p.id), warn = mode === 'share' ? versionDiffers(p.id) : state.kind === 'differs' || collision(p.id);
         const label = mode === 'edit' ? (state.kind === 'differs' ? 'Replace in ' : state.kind === 'none' ? 'Add to ' : 'Update ') + p.name : p.name;
         const note = native?.error || (mode === 'edit' ? state.kind === 'differs' ? 'Its copy differs. Its own changes would be lost.' : state.kind === 'none' ? 'Not added yet' : 'Uses the shared version' + (state.kind === 'off' ? ' · stays Off' : '') : mode === 'share' ? p.id === view.source ? 'Already has this version' : versionDiffers(p.id) ? 'Its version is replaced' : S.has(native, view.name) ? 'Already has this version' : 'Added' : ctx.pathLabel(native?.path));
@@ -225,7 +225,11 @@ const T3McpEditor = (() => {
         if (event.target.dataset.mcpSource) { view.source = event.target.dataset.mcpSource; if (managed.some(p => p.id === view.source)) view.agents.add(view.source); view.consent.clear(); }
         paint();
       });
-      view.layer.panel.addEventListener('toggle', event => { if (Kit.isPhone() && event.target.matches('.tc-wizard-rail-wrap')) view.railOpen = event.target.open; }, true);
+      view.layer.panel.addEventListener('toggle', event => {
+        if (!Kit.isPhone() || !event.target.matches('.tc-wizard-rail-wrap')) return;
+        // The stylesheet shows the panel from data-open, so it has to follow the native toggle.
+        view.railOpen = event.target.open; event.target.toggleAttribute('data-open', view.railOpen);
+      }, true);
       view.layer.panel.addEventListener('keydown', event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); void submit(); } });
       view.layer.panel.addEventListener('click', async event => {
         const button = event.target.closest('[data-mcp-editor]'); if (!button || button.disabled) return;

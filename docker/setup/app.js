@@ -240,7 +240,8 @@
         checkHere();
         if (state.route === 'instructions' && state.contextTab === 'skills') skillsUI.activate();
         if (state.route === 'mcp') mcpUI.activate();
-        if (state.route === 'credentials') credentialsUI.activate();
+        // A link the page hasn't handled yet belongs to that navigation, which would close whatever this opened.
+        if (state.route === 'vault' && (location.hash === shownHash || !location.hash.includes('/'))) credentialsUI.activate();
         if (state.route === 'files') filesUI.activate();
         if (state.route === 'instructions' && state.contextTab === 'instructions') void loadInstructionsPreview();
       } else if (!locked) {
@@ -911,8 +912,8 @@
     </div>`;
 
   /** The page a "Needs you" item lives on, and that page's link when they all share one. */
-  const NEEDS_PAGES = { agents: 'All agents', toolchains: 'All toolchains', sourcecontrol: 'Source control', ports: 'All ports', server: 'Server', storage: 'Storage', updates: 'Updates', credentials: 'Credentials' };
-  const needsPage = (x) => x.target === 'credential' ? 'credentials' : x.target === 'port' ? 'ports' : x.target === 'harness' ? 'agents'
+  const NEEDS_PAGES = { agents: 'All agents', toolchains: 'All toolchains', sourcecontrol: 'Source control', ports: 'All ports', server: 'Server', storage: 'Storage', updates: 'Updates', vault: 'Vault' };
+  const needsPage = (x) => x.target === 'credential' ? 'vault' : x.target === 'port' ? 'ports' : x.target === 'harness' ? 'agents'
     : x.target === 'server' ? (x.action && x.action.route) || 'server'
       : x.target === 'toolchain' && M.SOURCE_CONTROL[x.id] ? 'sourcecontrol' : 'toolchains';
 
@@ -1221,7 +1222,7 @@
     ui.updateAwaiting = false;
     const failures = Object.keys(s.updates?.errors || {});
     Kit.toast(failures.length ? 'Some update checks failed' : 'Update check complete', {
-      tone: 'info',
+      tone: failures.length ? 'warn' : 'info',
       detail: failures.length ? M.plural(failures.length, 'source') + ' could not be verified. Last known releases are kept.' : 'Available releases are shown beside each tool.',
       ...(failures.length ? { action: { label: 'Review', run: () => openUpdateChecks(null, null) } } : {}),
     });
@@ -1922,7 +1923,7 @@
     files: () => html`${filesUI.phoneHead()}${pageHead('files')}${filesUI.content()}`,
     overview: overviewPage, access: accessPage, agents: agentsPage, instructions: instructionsPage,
     mcp: () => html`${mcpUI.phoneHead()}${pageHead('mcp', { sub: 'Servers your agents can start or connect to. Define one once, then add it to the agents you choose.' })}${mcpUI.content()}`,
-    credentials: () => html`${pageHead('credentials')}${credentialsUI.content()}`,
+    vault: () => html`${pageHead('vault')}${credentialsUI.content()}`,
     toolchains: toolchainsPage, sourcecontrol: sourceControlPage, ports: portsPage,
     updates: updatesPage, storage: storagePage, server: serverPage, more: morePage,
   };
@@ -2076,7 +2077,7 @@
     if (route === 'instructions' && state.contextTab === 'skills' && state.status) skillsUI.activate(true);
     if (route === 'instructions' && state.contextTab === 'instructions' && state.status) void loadInstructionsPreview(true);
     if (route === 'mcp' && state.status) mcpUI.activate(true);
-    if (route === 'credentials' && state.status) credentialsUI.activate(true);
+    if (route === 'vault' && state.status) credentialsUI.activate(true);
     if (route === 'files' && state.status) filesUI.activate();
   };
   const navigateFromHash = async focus => {
@@ -2241,7 +2242,7 @@
       // A source control CLI names its host (GitHub), an agent itself. What
       // came after the sign-in and did not work (gh as git's credential
       // helper) is said, without undoing it.
-      Kit.toast('Signed in to ' + (meta.provider || meta.name || signin.agent), st.warning ? { detail: st.warning } : undefined);
+      Kit.toast('Signed in to ' + (meta.provider || meta.name || signin.agent), st.warning ? { tone: 'warn', detail: st.warning } : undefined);
       loadStatus();
       return;
     }
@@ -2466,7 +2467,7 @@
     // The button that opened this is gone from the row now.
     const row = M.agentRows(state.status, ui, now()).find((entry) => entry.id === id);
     if (document.activeElement === document.body && row) document.querySelector('[data-key="menu-' + row.key + '"]')?.focus({ preventScroll: true });
-    if (res.ok) Kit.toast('T3 Code now uses this ' + name + ' sign-in', res.warning ? { detail: res.warning } : undefined);
+    if (res.ok) Kit.toast('T3 Code now uses this ' + name + ' sign-in', res.warning ? { tone: 'warn', detail: res.warning } : undefined);
     else Kit.toast('Couldn’t switch T3 Code to this sign-in', { tone: 'danger', detail: res.error || 'Try again.' });
   };
 
@@ -2841,7 +2842,7 @@
     const res = await api('/public-url', { body: seen ? { url, check: false } : { url } });
     urlSaving = false;
     if (!res.ok) return res;
-    Kit.toast('Pairing links now point at ' + M.hostOf(res.data.publicUrl), seen ? {} : { detail: reachDetail(res.data.check) });
+    Kit.toast('Pairing links now point at ' + M.hostOf(res.data.publicUrl), seen ? {} : { detail: reachDetail(res.data.check), ...(res.data.check && res.data.check.reaches !== 'this' ? { tone: 'info' } : {}) });
     applyUrl(res.data);
     return res;
   };
@@ -4246,7 +4247,7 @@
 
   // ------------------------------------------------------------ shortcuts --
   Kit.bind('mod+k', openPalette);
-  Kit.bind('/', () => state.route === 'files' ? filesUI.focusSearch() : state.route === 'mcp' ? mcpUI.focusSearch() : state.route === 'credentials' ? credentialsUI.focusSearch() : state.route === 'instructions' && state.contextTab === 'skills' ? skillsUI.focusSearch() : openPalette());
+  Kit.bind('/', () => state.route === 'files' ? filesUI.focusSearch() : state.route === 'mcp' ? mcpUI.focusSearch() : state.route === 'vault' ? credentialsUI.focusSearch() : state.route === 'instructions' && state.contextTab === 'skills' ? skillsUI.focusSearch() : openPalette());
   for (const page of T3Routes.PAGES) {
     if (page.key) Kit.bind('g ' + page.key, () => { keyboardNav = true; go(page.route); });
   }

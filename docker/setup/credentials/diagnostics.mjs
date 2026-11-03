@@ -7,8 +7,8 @@ import os from 'node:os';
 import { execute } from './hostkeys.mjs';
 import { outputFilter } from './redact.mjs';
 
-export async function createSshDiagnostics(secret, write = () => {}) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 't3-ssh-test-'));
+export async function createSshDiagnostics(secrets, write = () => {}) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 't3-vault-ssh-diagnostics-'));
   const file = path.join(directory, 'diagnostics');
   let handle, ended = false, text = '';
   try {
@@ -16,7 +16,7 @@ export async function createSshDiagnostics(secret, write = () => {}) {
     const answer = await execute('/usr/bin/mkfifo', ['-m', '600', '--', file]);
     if (answer.code !== 0) throw new Error('Could not prepare SSH diagnostics');
     handle = await fs.open(file, constants.O_RDWR | constants.O_NONBLOCK);
-    const filter = outputFilter(secret, value => { text = (text + value).slice(-65536); write(value); });
+    const filter = outputFilter(secrets, value => { text = (text + value).slice(-65536); write(value); });
     const reading = (async () => {
       const buffer = Buffer.alloc(8192), decoder = new TextDecoder();
       try {

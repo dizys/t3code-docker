@@ -172,26 +172,35 @@ subscription, that Pi lists their providers' models, and removal, without a
 login or model request. The image smoke suite runs it against the installed
 release, then signs Pi in and out through the Setup API.
 
-For Credentials changes, run `node --test tests/credential*.test.mjs`
-and `node scripts/credentials-ui-audit.mjs`. The browser audit starts a real
-Setup API in a disposable home and a loopback API server. It tests drafts,
-secret replacement, concurrent edits, host-key review, stale addresses, failed
-reads, repeated saves, deletion focus, deep links and long metadata in both
-themes, standalone, legacy embed and Settings widths. SSH scans and host trust
-are intercepted; it never contacts an external service or changes a production
-credential. Screenshots go to `/tmp/t3-credentials-ui`
-(`T3_CREDENTIALS_UI_OUTPUT` overrides it). `T3_CREDENTIALS_UI_WIDTHS=390,640,1280`
-narrows the matrix; `T3_CREDENTIALS_UI_THEMES=light` narrows the themes. The image
-smoke suite runs both themes at those three widths on both browser architectures,
-plus installed-helper and loopback API checks on each image variant.
+For Vault changes, run `node --test tests/credential*.test.mjs` and
+`node scripts/credentials-ui-audit.mjs`. The tests use the real `ssh`, `ssh-keygen`
+and `git` with throwaway keys and folders. The store writes an `Include` line to
+`~/.ssh/config` under the `home` it's given, so any new test or script must pass a
+temporary `home`. The browser audit starts a real Setup API in a disposable home and
+a loopback API server. It tests paste detection, drafts, secret replacement,
+concurrent edits, host-key review, stale addresses, failed reads, repeated saves,
+deletion focus, deep links and long metadata in both themes, standalone, legacy embed
+and Settings widths. SSH scans and host trust are intercepted; it never contacts an
+external service or changes a production credential. Screenshots go to
+`/tmp/t3-credentials-ui` (`T3_CREDENTIALS_UI_OUTPUT` overrides it).
+`T3_CREDENTIALS_UI_WIDTHS=390,640,1280` narrows the matrix;
+`T3_CREDENTIALS_UI_THEMES=light` narrows the themes. The image smoke suite runs both
+themes at those three widths on both browser architectures, plus the installed
+`t3-vault` and loopback API checks on each image variant.
+
+To add a credential type, add it to `docker/setup/credentials/types.mjs`. The store,
+`t3-vault add` and the Setup form are all built from that table. Only a type that
+needs more than environment variables and files needs code, in `deliver.mjs`. Update
+`scripts/fixtures/console/credentials.json` too, because it carries a copy of the
+table, and a test compares them.
 
 For handoff comparisons, start `console-preview.mjs`, then run
 `node scripts/credentials-visual-audit.mjs http://127.0.0.1:23785/__setup/`.
-It captures the list, empty state, SSH/API details, editor, conflict, host-key
-review and deletion, including phone states in both themes. It uses public
-synthetic fixture records and keeps newly entered secrets masked. Outputs go to
-`/tmp/t3-credentials-visual` (`T3_CREDENTIALS_VISUAL_OUTPUT` overrides it). Compare
-these at the supplied handoff’s viewport; include real screenshots in the PR.
+It captures the list, empty state, details, the add dialog, editor, conflict, host-key
+review and deletion, including phone states in both themes. It uses public synthetic
+fixture records and keeps newly entered secrets masked. Outputs go to
+`/tmp/t3-credentials-visual` (`T3_CREDENTIALS_VISUAL_OUTPUT` overrides it). Include
+real screenshots in the PR.
 
 T3 functionality specific to this container and Setup belongs in the local
 source patch set under `docker/runtime/patches`. Maintain the patched distribution

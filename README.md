@@ -170,7 +170,7 @@ instead. Details: [Reaching the server from a phone](docs/remote-access.md).
 | [Upgrading T3 Code](docs/t3code-updates.md) | Stable and Nightly, auto-update, rollback |
 | [Toolchains](docs/toolchains.md) | Go, Rust and friends, any mise tool, per-project versions |
 | [Source control](docs/source-control.md) | gh, glab, fj, tea and az sign-in |
-| [Credentials](docs/credentials.md) | Saved SSH/API logins, explicit host trust, connection tests and skill usage |
+| [Vault](docs/vault.md) | Saved keys, tokens and passwords that every agent can use by name, added in Setup or from chat |
 | [Publishing a port](docs/ports.md) | Public URLs for dev servers |
 | [Giving agents a browser](docs/agent-browser.md) | T3's server browser and the browser MCP servers |
 | [Context management](docs/context-management.md) | Global `AGENTS.md` and the shared skill library |

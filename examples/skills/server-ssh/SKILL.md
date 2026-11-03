@@ -3,14 +3,15 @@ name: server-ssh
 description: Use the saved build-server SSH connection when asked to administer that server.
 ---
 
-Use the saved `build-server` connection for remote commands:
+Run commands on `build-server` with plain ssh. Its address, user and key are saved
+in the Vault:
 
 ```sh
-t3-ssh build-server -- '<remote command>'
+ssh build-server '<remote command>'
+scp app.tar build-server:/srv/
 ```
 
-The host, username, port and password are managed in Setup → Credentials.
-Change the credential name in this example to match your server. If authentication
-fails, check the saved login. If the host key is untrusted or changed, stop and
-ask the user to verify its fingerprint in Credentials; never bypass host checks. Do not read or print credential files or the
-helper's child environment.
+Change the name in this example to match your server. If sign-in fails, run
+`t3-vault test build-server` and follow what it says. If the server's key has
+changed, stop and show the user what `t3-vault trust build-server` prints. Never
+get past it with `StrictHostKeyChecking=no`. Don't read or print credential files.

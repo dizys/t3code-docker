@@ -7,8 +7,8 @@ import { CredentialError, validId, validText } from './errors.mjs';
 const TYPES = ['ssh-ed25519', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384', 'ecdsa-sha2-nistp521', 'ssh-rsa'];
 export const publicKey = key => key ? { type: key.type, fingerprint: key.fingerprint } : null;
 export const keyFile = id => { if (!validId(id)) throw new CredentialError('Choose a valid credential name.'); return 'known_hosts/' + id; };
-export const execute = (program, args, { input, signal, timeout = 5000 } = {}) => new Promise((resolve, reject) => {
-  const child = execFile(program, args, { encoding: 'utf8', maxBuffer: 64 * 1024, timeout, signal, killSignal: 'SIGKILL' }, (error, stdout, stderr) => {
+export const execute = (program, args, { input, signal, timeout = 5000, env } = {}) => new Promise((resolve, reject) => {
+  const child = execFile(program, args, { encoding: 'utf8', maxBuffer: 64 * 1024, timeout, signal, killSignal: 'SIGKILL', ...(env ? { env } : {}) }, (error, stdout, stderr) => {
     if (error?.code === 'ENOENT' || error?.code === 'ABORT_ERR' || error?.killed) return reject(error);
     resolve({ code: error?.code || 0, stdout, stderr });
   });
@@ -87,6 +87,6 @@ export function createHostKeys({ io, run = execute, reach = reachHost, home = pr
   return { read, scan, inspect, legacy,
     write: (id, key) => io.write(keyFile(id), row(id, key), { maxBytes: 64 * 1024, recover: true }),
     forget: id => io.remove(keyFile(id)),
-    metadata: (key, carried = false) => ({ ...publicKey(key), trustedAt: clock(), carried }),
+    metadata: (key, { carried = false, firstUse = false } = {}) => ({ ...publicKey(key), trustedAt: clock(), carried, firstUse }),
   };
 }

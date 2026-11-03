@@ -1371,7 +1371,7 @@ const T3Model = (() => {
       if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(item.id || '') || item.id.length > 64) continue;
       const warn = item.code === 'host-key-untrusted' || item.code === 'host-key-changed';
       items.push({ target: 'credential', id: item.id, key: 'credential:' + item.id, icon: 'key-round', tone: warn ? 'warn' : 'danger', severity: warn ? 1 : 0,
-        name: item.id, text: credentialProblem(item.code), action: { cmd: 'goto', route: 'credentials/' + item.id, label: 'Review' } });
+        name: item.id, text: credentialProblem(item.code), action: { cmd: 'goto', route: 'vault/' + item.id, label: 'Review' } });
     }
     // Stable within a severity: the order each page lists them in.
     return items.map((item, i) => [item, i]).sort((a, b) => a[0].severity - b[0].severity || a[1] - b[1]).map(([item]) => item);
@@ -1381,6 +1381,8 @@ const T3Model = (() => {
   const CREDENTIAL_RESULTS = {
     ssh: {
       "ok": {"tone": "ok", "row": ["Connected", "{when}"], "sheet": {"title": "Connected {when}", "desc": "Signed in as {user}. The host key matched."}, "action": "Test"},
+      "key-rejected": {"tone": "danger", "row": ["Key not accepted", "{when}"], "sheet": {"title": "Key not accepted", "desc": "{host} didn’t accept this key for {user}. Add its public key to the server, then test again."}, "action": "Test"},
+      "not-connected": {"tone": "muted", "row": ["Not connected yet", ""], "sheet": {"title": "Not connected yet", "desc": "Its identity gets pinned the first time {host} is reached."}, "action": "Test"},
       "auth-rejected": {"tone": "danger", "row": ["Password rejected", "{when}"], "sheet": {"title": "Password rejected", "desc": "{host} didn’t accept the saved password for {user}. Replace it if it changed."}, "action": "Replace…"},
       "unreachable": {"tone": "danger", "row": ["Unreachable", "{when}"], "sheet": {"title": "Couldn’t reach {host}", "desc": "Nothing answered on port {port}. Check the address, and that the server is on and allows SSH from here."}, "action": "Test"},
       "timeout": {"tone": "danger", "row": ["Timed out", "{when}"], "sheet": {"title": "Timed out", "desc": "{host} didn’t finish signing in within 15 seconds."}, "action": "Test"},
@@ -1399,6 +1401,13 @@ const T3Model = (() => {
       "unreachable": {"tone": "danger", "row": ["Unreachable", "{when}"], "sheet": {"title": "Couldn’t reach {host}", "desc": "The address didn’t resolve or didn’t answer. Check it, and this server’s network."}, "action": "Test"},
       "timeout": {"tone": "danger", "row": ["Timed out", "{when}"], "sheet": {"title": "Timed out", "desc": "{host} didn’t answer within 15 seconds."}, "action": "Test"},
     },
+    "no-test": {
+      "tone": "muted",
+      "attention": false,
+      "row": ["No test set up", ""],
+      "sheet": {"title": "No test set up", "desc": "Add an API address to test it here, or run a real command with it."},
+      "action": "",
+    },
     untested: {
       "tone": "muted",
       "attention": false,
@@ -1413,16 +1422,18 @@ const T3Model = (() => {
     },
   };
   const credentialState = (profile, { busy = false, now = Date.now() } = {}) => {
-    const result = profile.test, code = busy ? 'testing' : profile.type === 'ssh' && !profile.hostKey ? 'host-key-untrusted' : result?.code || 'untested';
-    const source = CREDENTIAL_RESULTS[code] || CREDENTIAL_RESULTS[profile.type]?.[code] || CREDENTIAL_RESULTS.untested;
-    let host = profile.host || profile.baseUrl || '';
-    if (profile.type === 'api') { try { host = new URL(profile.baseUrl).host; } catch {} }
-    const values = { id: profile.id, host, port: profile.port, status: result?.detail?.status, user: profile.username || result?.detail?.user,
+    const result = profile.test, fields = profile.fields || {}, ssh = profile.type === 'ssh', keyAuth = ssh && fields.auth === 'key', testable = ssh || Boolean(fields.baseUrl);
+    let code = busy ? 'testing' : ssh && !profile.hostKey && !keyAuth ? 'host-key-untrusted' : !testable ? 'no-test' : result?.code || (keyAuth && !profile.hostKey ? 'not-connected' : 'untested');
+    const group = ssh ? CREDENTIAL_RESULTS.ssh : CREDENTIAL_RESULTS.api;
+    const source = CREDENTIAL_RESULTS[code] || group[code === 'auth-rejected' && keyAuth ? 'key-rejected' : code] || CREDENTIAL_RESULTS.untested;
+    let host = fields.host || fields.baseUrl || '';
+    if (!ssh && fields.baseUrl) { try { host = new URL(fields.baseUrl).host; } catch {} }
+    const values = { id: profile.id, host, port: fields.port, status: result?.detail?.status, user: fields.username || result?.detail?.user,
       when: result?.at ? relTime(result.at, now) : '', ms: result?.ms || 0, line: result?.detail?.line || 'The connection did not complete.',
-      path: profile.testPath || 'the base URL', secretKind: profile.authType === 'bearer' ? 'token' : profile.type === 'ssh' ? 'password' : 'key' };
+      path: fields.testPath || 'the address', secretKind: fields.authType === 'bearer' ? 'token' : ssh ? 'password' : 'key' };
     const fill = text => String(text || '').replace(/\{(\w+)\}/g, (_, name) => values[name] ?? '');
     return { code, tone: source.tone, label: fill(source.row[0]), sub: fill(source.row[1]), title: fill(source.sheet.title), desc: fill(source.sheet.desc),
-      action: source.action || 'Test', at: result?.at || null, icon: busy ? null : source.tone === 'ok' ? 'circle-check' : source.tone === 'warn' ? 'triangle-alert' : source.tone === 'danger' ? 'circle-x' : 'info' };
+      action: source.action ?? 'Test', at: result?.at || null, icon: busy ? null : source.tone === 'ok' ? 'circle-check' : source.tone === 'warn' ? 'triangle-alert' : source.tone === 'danger' ? 'circle-x' : 'info' };
   };
   const credentialProblem = code => {
     const text = CREDENTIAL_RESULTS.ssh[code]?.row[0] || CREDENTIAL_RESULTS.api[code]?.row[0] || 'Connection needs attention';
@@ -1530,7 +1541,7 @@ const T3Model = (() => {
       access: warn(!s.publicUrl && s.server && connectView(s).state !== 'on' && connectView(s).state !== 'linking' ? 1 : 0),
       agents: warn(agents.filter((a) => a.attention).length) || running(busy(agents)),
       instructions: null,
-      credentials: warn(s.credentials?.attention?.length || 0),
+      vault: warn(s.credentials?.attention?.length || 0),
       mcp: warn((s.context?.mcp?.providers || []).filter(p => p.supported && s.harnesses?.some(a => a.id === p.provider && a.installed)).reduce((n, p) => n + (p.diverged?.length || 0) + (p.error ? 1 : 0), 0)),
       toolchains: warn(tools.filter((t) => t.state === 'failed').length) || running(busy(tools)),
       // A source control CLI someone installed and has not signed in is as
@@ -1726,7 +1737,7 @@ const T3Model = (() => {
     }
     for (const item of s.credentials?.attention || []) {
       if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(item.id || '') || item.id.length > 64) continue;
-      add('Credentials', item.id, 'key-round', { cmd: 'goto', route: 'credentials/' + item.id }, { attention: true, meta: { text: credentialProblem(item.code), dot: String(item.code || '').startsWith('host-key') ? 'warn' : 'danger' }, keywords: 'credential ssh api key password token secret ' + item.id });
+      add('Vault', item.id, 'key-round', { cmd: 'goto', route: 'vault/' + item.id }, { attention: true, meta: { text: credentialProblem(item.code), dot: String(item.code || '').startsWith('host-key') ? 'warn' : 'danger' }, keywords: 'credential ssh api key password token secret ' + item.id });
     }
     add('MCP servers', 'Add MCP server…', 'plug', { cmd: 'mcp.add' });
     add('MCP servers', 'Rescan MCP servers', 'refresh-cw', { cmd: 'mcp.refresh' });

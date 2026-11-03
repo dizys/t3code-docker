@@ -1,78 +1,198 @@
 // Pure credential presentation and draft validation. Saved secrets never enter
 // this model; request previews and snippets use fixed masks or placeholders.
+// What each type holds comes from the server, so this file has no list of types.
 const T3CredentialModel = (() => {
   'use strict';
   const M = T3Model, C = T3McpCommand;
-  const fields = ['id', 'type', 'host', 'port', 'username', 'baseUrl', 'authType', 'authName', 'authPrefix', 'testPath'];
-  const validName = value => typeof value === 'string' && value.length <= 64 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
+  let TYPES = new Map();
+  const setTypes = list => { if (Array.isArray(list)) TYPES = new Map(list.map(type => [type.id, type])); };
+  const typeOf = id => TYPES.get(id) || null;
+  const typeList = () => [...TYPES.values()];
+  const iconFor = id => typeOf(id)?.icon || 'key-round';
+  const badge = id => typeOf(id)?.badge || 'Credential';
+  const typeLabel = id => typeOf(id)?.label || 'Credential';
+
+  const validName = value => typeof value === 'string' && value.length <= 64 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) && value !== 'new';
   const text = (value, max, optional = false) => typeof value === 'string' && value.isWellFormed() && (optional || value.length > 0) && value.length <= max && !/[\x00-\x1f\x7f]/.test(value);
-  const defaults = type => ({ id: '', type, host: '', port: 22, username: '', baseUrl: '', authType: 'bearer', authName: 'X-API-Key', authPrefix: '', testPath: '' });
-  const draftOf = profile => ({ ...defaults(profile?.type || 'ssh'), ...Object.fromEntries(fields.filter(field => profile?.[field] !== undefined).map(field => [field, profile[field]])) });
-  const payload = draft => Object.fromEntries(fields.filter(field => draft[field] !== undefined).map(field => [field, field === 'port' ? Number(draft[field]) : draft[field]]));
-  const kind = profile => profile.type === 'ssh' ? 'Password' : profile.authType === 'header' ? profile.authName || 'Header key' : profile.authType === 'query' ? '?' + (profile.authName || 'key') : 'Bearer token';
-  const secretKind = profile => profile.type === 'ssh' ? 'password' : profile.authType === 'bearer' ? 'token' : 'key';
-  const auth = profile => profile.type === 'ssh' ? 'password' : profile.authType === 'header' ? (profile.authName || 'Header') + ' header' : profile.authType === 'query' ? (profile.authName || 'key') + ' query parameter' : 'bearer token';
-  const target = profile => profile.type === 'ssh' ? (profile.username || 'user') + '@' + (profile.host || 'host') + (Number(profile.port || 22) !== 22 ? ':' + profile.port : '') : profile.baseUrl;
-  const usageCount = (profile, partial = false) => { const n = profile.usedIn?.length || 0, unit = profile.usedIn?.some(item => item.kind === 'instructions') ? 'source' : 'skill'; return partial ? n ? 'At least ' + M.plural(n, unit) : 'Unknown' : M.plural(n, unit); };
+  const validHost = host => {
+    if (!text(host, 253)) return false;
+    if (/^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(host)) return true;
+    if (!host.includes(':')) return false;
+    try { const [address, zone, extra] = host.split('%'), probe = 'http://[' + address + ']/'; return new URL(probe).hostname.startsWith('[') && extra === undefined && (zone === undefined || /^[a-z0-9_.-]+$/i.test(zone)); } catch { return false; }
+  };
+  const validEnvName = value => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value || '') && !/^(?:PATH|HOME|USER|SHELL|PWD|IFS|LD_.*|DYLD_.*|NODE_OPTIONS|BASH_ENV|ENV)$/.test(value);
+
+  const applies = (entry, fields) => (!entry.needs || Boolean(fields[entry.needs])) && (!entry.when || Object.entries(entry.when).every(([key, values]) => values.includes(fields[key])));
+  const withDefaults = (type, fields = {}) => {
+    const result = { ...fields };
+    for (const entry of typeOf(type)?.fields || []) if (result[entry.key] === undefined && entry.default !== undefined) result[entry.key] = entry.default;
+    return result;
+  };
+  const primarySecret = (type, fields = {}) => (typeOf(type)?.secrets || []).find(entry => entry.primary && applies(entry, fields)) || null;
+  const envStem = id => (id || 'NAME').toUpperCase().replace(/-/g, '_');
+  const resolveEnvName = (template, id) => {
+    if (!template.includes('{NAME}')) return template;
+    const stem = envStem(id), suffix = template.replace('{NAME}_', '');
+    return stem === suffix || stem.endsWith('_' + suffix) ? stem : template.replace('{NAME}', stem);
+  };
+  // The variable an entry reaches commands under, for a draft that may have no name yet.
+  const envFor = (draft, entry) => draft.env?.[entry.key] || (entry.env ? resolveEnvName(entry.env, draft.id) : null);
+
+  const defaults = type => ({ id: '', type, description: '', fields: withDefaults(type, {}), env: {}, vars: typeOf(type)?.dynamic ? [{ name: '', value: '', secret: true }] : [] });
+  const draftOf = credential => {
+    if (!credential) return defaults('token');
+    const draft = { ...defaults(credential.type), id: credential.id, description: credential.description || '', fields: withDefaults(credential.type, credential.fields), env: {} };
+    for (const entry of [...(typeOf(credential.type)?.fields || []), ...(typeOf(credential.type)?.secrets || [])]) if (entry.editableEnv && credential.env?.[entry.key]) draft.env[entry.key] = credential.env[entry.key];
+    if (typeOf(credential.type)?.dynamic) draft.vars = [...Object.entries(credential.fields || {}).map(([name, value]) => ({ name, value, secret: false })), ...(credential.secretNames || []).map(name => ({ name, value: '', secret: true, saved: true }))];
+    return draft;
+  };
+  const payload = (draft, secrets = {}) => {
+    const type = typeOf(draft.type), base = { id: draft.id, type: draft.type, description: draft.description || '' };
+    if (type?.dynamic) {
+      const rows = draft.vars.filter(row => row.name);
+      return { ...base, fields: Object.fromEntries(rows.filter(row => !row.secret).map(row => [row.name, row.value])), secretNames: rows.filter(row => row.secret).map(row => row.name), secrets: Object.fromEntries(rows.filter(row => row.secret && row.value).map(row => [row.name, row.value])) };
+    }
+    const fields = {};
+    for (const entry of type?.fields || []) {
+      if (entry.key === 'publicKey' || !applies(entry, draft.fields)) continue;
+      const value = draft.fields[entry.key];
+      if (value !== undefined && value !== '') fields[entry.key] = entry.kind === 'number' ? Number(value) : value;
+    }
+    return { ...base, fields, env: draft.env || {}, secrets: Object.fromEntries(Object.entries(secrets).filter(([, value]) => value)) };
+  };
+
+  const kind = credential => credential.type === 'ssh' ? (credential.fields?.auth === 'key' ? 'Key' : 'Password') : credential.fields?.baseUrl ? (credential.fields.authType === 'header' ? credential.fields.authName || 'Header key' : credential.fields.authType === 'query' ? '?' + (credential.fields.authName || 'key') : 'Bearer token') : null;
+  const secretKind = credential => primarySecret(credential.type, credential.fields)?.label.toLowerCase() || 'secret';
+  const host = url => { try { return new URL(url).host; } catch { return url || ''; } };
+  const target = credential => {
+    const fields = credential.fields || {}, names = credential.delivers || [];
+    if (credential.type === 'ssh') return (fields.username || 'user') + '@' + (fields.host || 'host') + (Number(fields.port || 22) !== 22 ? ':' + fields.port : '');
+    if (credential.type === 'database') return (fields.username ? fields.username + '@' : '') + (fields.host || '') + (fields.database ? '/' + fields.database : '');
+    if (credential.type === 'aws') return (fields.accessKeyId ? fields.accessKeyId.slice(0, 4) + '…' + fields.accessKeyId.slice(-4) : '') + (fields.region ? ' · ' + fields.region : '');
+    if (credential.type === 'gcp') return fields.clientEmail || fields.project || names.join(', ');
+    const envName = credential.env?.token || credential.env?.password || credential.env?.content || names[0] || '';
+    if (fields.baseUrl) return envName + ' · ' + host(fields.baseUrl);
+    if (credential.type === 'git') return envName + ' · ' + (fields.host || '');
+    return credential.type === 'custom' ? names.slice(0, 4).join(', ') + (names.length > 4 ? ' and ' + (names.length - 4) + ' more' : '') : names.join(', ');
+  };
+  const delivery = credential => {
+    const files = (typeOf(credential.type)?.secrets || []).some(entry => entry.file);
+    return files ? 'Given to each command as a temporary file' : (credential.delivers || []).join(', ');
+  };
+  /** What a command would get, before the server has seen this draft. */
+  const givesPreview = draft => {
+    const type = typeOf(draft.type);
+    if (!type) return [];
+    if (type.dynamic) return draft.vars.filter(row => row.name).map(row => ({ name: row.name }));
+    if (draft.type === 'database') return [{ name: 'DATABASE_URL' }, ...(draft.fields.engine === 'postgres' ? [{ name: 'PGPASSWORD' }] : draft.fields.engine === 'mysql' ? [{ name: 'MYSQL_PWD' }] : [])];
+    return [...type.fields, ...type.secrets].filter(entry => entry.env && applies(entry, draft.fields)).map(entry => ({ name: envFor(draft, entry), file: Boolean(entry.file) }));
+  };
+  const canTest = credential => credential.type === 'ssh' || Boolean(credential.fields?.baseUrl);
+  const usageCount = (credential, partial = false) => { const n = credential.usedIn?.length || 0, unit = credential.usedIn?.some(item => item.kind === 'instructions') ? 'source' : 'skill'; return partial ? n ? 'At least ' + M.plural(n, unit) : 'Unknown' : M.plural(n, unit); };
   const day = value => { const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : 'unknown'; };
   const keyType = type => type === 'ssh-ed25519' ? 'ED25519' : type === 'ssh-rsa' ? 'RSA' : type?.startsWith('ecdsa') ? 'ECDSA' : 'Host key';
   const keyCommand = type => 'ssh-keygen -lf /etc/ssh/ssh_host_' + (type === 'ssh-rsa' ? 'rsa' : type?.startsWith('ecdsa') ? 'ecdsa' : 'ed25519') + '_key.pub';
-  const commands = (profile, editing = false) => profile.type === 'ssh'
-    ? ['t3-ssh ' + (profile.id || 'name') + ' -- ' + (editing ? 'command' : 'uptime'), 't3-ssh ' + (profile.id || 'name') + ' -- bash -s < script.sh']
-    : ['t3-api ' + (profile.id || 'name') + ' GET ' + C.quote(profile.testPath || '<path>'), 't3-api ' + (profile.id || 'name') + ' POST <path> --stdin < body.json'];
-  const snippet = profile => {
-    if (profile.type === 'ssh') return `Run commands on ${profile.id} with its saved login:\n\nt3-ssh ${profile.id} -- '<command>'\n\nDon’t read or print credential files.`;
-    let host = profile.baseUrl; try { host = new URL(profile.baseUrl).host; } catch {}
-    return `Call ${host}’s API with its saved key:\n\nt3-api ${profile.id} GET <path>\nt3-api ${profile.id} POST <path> --stdin < body.json\n\nPaths are relative to ${profile.baseUrl}. Don’t read or print credential files.`;
-  };
-  const request = (profile, short = false) => {
-    try {
-      const base = new URL(profile.baseUrl); if (!base.pathname.endsWith('/')) base.pathname += '/';
-      const url = new URL(profile.testPath || '.', base);
-      if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || url.origin !== base.origin || !url.pathname.startsWith(base.pathname.endsWith('/') ? base.pathname : base.pathname + '/')) return 'Enter a valid base URL and relative test path.';
-      if (profile.authType === 'query') url.searchParams.set(profile.authName || 'key', '••••••••');
-      const address = (short ? url.pathname + url.search : url.href).replace(/%E2%80%A2/gi, '•');
-      const header = profile.authType === 'query' ? '' : profile.authType === 'header' ? (profile.authName || 'X-API-Key') + ': ' + (profile.authPrefix ? profile.authPrefix + ' ' : '') + '••••••••\n' : 'Authorization: Bearer ••••••••\n';
-      return 'GET ' + address + '\n' + (short ? 'Host: ' + base.host + '\n' : '') + header + 'accept: application/json';
-    } catch { return 'Enter a base URL to preview the request.'; }
-  };
-  const validate = (draft, { editing = false, names = [], secret = '', hasSecret = false } = {}) => {
-    const errors = {};
-    if (!validName(draft.id)) errors.id = 'Use up to 64 lowercase letters, numbers and single hyphens.';
-    else if (!editing && names.includes(draft.id)) errors.id = draft.id + ' is taken.';
-    if (!['ssh', 'api'].includes(draft.type)) errors.type = 'Choose SSH server or HTTP API.';
-    if (draft.type === 'ssh') {
-      const host = draft.host || ''; let ipv6 = false;
-      if (host.includes(':')) { try { const [address, zone, extra] = host.split('%'); const addressUrl = 'http://[' + address + ']/'; ipv6 = new URL(addressUrl).hostname.startsWith('[') && extra === undefined && (zone === undefined || /^[a-z0-9_.-]+$/i.test(zone)); } catch {} }
-      if (!text(host, 253) || !(ipv6 || /^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(host))) errors.host = 'Enter a hostname or IP address, without a username or port.';
-      if (!Number.isInteger(Number(draft.port)) || Number(draft.port) < 1 || Number(draft.port) > 65535) errors.port = 'Use a port from 1 to 65535.';
-      if (!text(draft.username || '', 64) || !/^[a-zA-Z_][a-zA-Z0-9_.-]*\$?$/.test(draft.username)) errors.username = 'Enter a valid SSH username.';
-    } else if (draft.type === 'api') {
-      let base;
-      try { base = new URL(draft.baseUrl); } catch {}
-      if (!text(draft.baseUrl || '', 2048) || !base || !['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash) errors.baseUrl = 'Use an HTTP or HTTPS address without credentials, a query or a fragment.';
-      if (!['bearer', 'header', 'query'].includes(draft.authType)) errors.authType = 'Choose an authentication method.';
-      if (draft.authType !== 'bearer') {
-        if (!text(draft.authName || '', 128)) errors.authName = 'Enter an authentication header or parameter name.';
-        if (draft.authType === 'header') {
-          if (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(draft.authName || '') || ['host', 'content-length', 'transfer-encoding', 'connection', 'upgrade', 'expect', 'trailer', 'te', 'accept', 'content-type'].includes(draft.authName?.toLowerCase())) errors.authName = 'Use a valid authentication header, such as X-API-Key.';
-          if (typeof draft.authPrefix !== 'string' || draft.authPrefix.length > 128 || /[^\x20-\x7e]/.test(draft.authPrefix)) errors.authPrefix = 'Use up to 128 printable characters for the prefix.';
-        }
-      }
-      const relative = draft.testPath || '';
-      if (!text(relative, 2048, true) || relative.startsWith('/') || relative.includes('\\') || /^[a-z][a-z0-9+.-]*:/i.test(relative)) errors.testPath = 'Use a relative path, such as account.';
-      else if (base && !errors.baseUrl) {
-        if (!base.pathname.endsWith('/')) base.pathname += '/';
-        const target = new URL(relative || '.', base);
-        if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname) || target.hash) errors.testPath = 'The test path must stay under the base URL.';
-      }
+  const installLine = publicKey => "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '" + publicKey + "' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys";
+
+  const commands = (credential, { aliases = true } = {}) => {
+    const id = credential.id || 'name', fields = credential.fields || {};
+    if (credential.type === 'ssh') {
+      if (aliases && fields.auth === 'key') return ['ssh ' + id + ' uptime', 'scp app.tar ' + id + ':/srv/'];
+      return ['t3-vault ssh ' + id + ' -- uptime', ...(aliases ? ['t3-vault run ' + id + ' -- scp app.tar ' + id + ':/srv/'] : [])];
     }
-    if (secret ? !text(secret, 8192) : !hasSecret) errors.secret = 'Enter a ' + secretKind(draft) + ', up to 8192 characters without line breaks.';
+    const lines = ['t3-vault run ' + id + ' -- <command>'];
+    if (fields.baseUrl) lines.push('t3-vault http ' + id + ' GET ' + C.quote(fields.testPath || '<path>'));
+    return lines;
+  };
+  const snippet = (credential, { aliases = true } = {}) => {
+    const id = credential.id, fields = credential.fields || {};
+    if (credential.type === 'ssh') return `Run commands on ${id} with its saved login:\n\n${aliases && fields.auth === 'key' ? `ssh ${id} '<command>'` : `t3-vault ssh ${id} -- '<command>'`}\n\nDon’t read or print credential files.`;
+    if (fields.baseUrl) return `Call ${host(fields.baseUrl)}’s API with its saved key:\n\nt3-vault http ${id} GET <path>\nt3-vault http ${id} POST <path> --stdin < body.json\n\nPaths are relative to ${fields.baseUrl}. Don’t read or print credential files.`;
+    return `Use ${id} for commands that need it:\n\nt3-vault run ${id} -- <command>\n\nThe command gets ${(credential.delivers || []).join(', ') || 'the saved values'}. Don’t read or print credential files.`;
+  };
+  const request = (draft, short = false) => {
+    const fields = draft.fields || {};
+    try {
+      const base = new URL(fields.baseUrl); if (!base.pathname.endsWith('/')) base.pathname += '/';
+      const url = new URL(fields.testPath || '.', base);
+      if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || url.origin !== base.origin || !url.pathname.startsWith(base.pathname)) return 'Enter a valid address and relative test path.';
+      if (fields.authType === 'query') url.searchParams.set(fields.authName || 'key', '••••••••');
+      const address = (short ? url.pathname + url.search : url.href).replace(/%E2%80%A2/gi, '•');
+      const header = fields.authType === 'query' ? '' : fields.authType === 'header' ? (fields.authName || 'X-API-Key') + ': ' + (fields.authPrefix ? fields.authPrefix + ' ' : '') + '••••••••\n' : 'Authorization: Bearer ••••••••\n';
+      return 'GET ' + address + '\n' + (short ? 'Host: ' + base.host + '\n' : '') + header + 'accept: application/json';
+    } catch { return 'Enter an address to preview the request.'; }
+  };
+
+  const validateField = (entry, value, fields) => {
+    const blank = value === undefined || value === null || value === '';
+    if (blank) return entry.optional || entry.kind === 'derived' ? null : entry.message || 'Enter ' + entry.label.toLowerCase() + '.';
+    if (entry.kind === 'number') return Number.isInteger(Number(value)) && Number(value) >= entry.min && Number(value) <= entry.max ? null : entry.message;
+    if (entry.kind === 'select') return entry.options.some(([option]) => option === value) ? null : 'Choose ' + entry.label.toLowerCase() + '.';
+    if (entry.kind === 'host') return validHost(value) ? null : entry.message;
+    if (!text(String(value), entry.max ?? 2048)) return entry.message || 'Use up to ' + (entry.max ?? 2048) + ' characters, on one line.';
+    if (entry.pattern && !new RegExp(entry.pattern).test(value)) return entry.message;
+    if (entry.key === 'baseUrl') {
+      let base; try { base = new URL(value); } catch {}
+      if (!base || !['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash) return 'Use an HTTP or HTTPS address without credentials, a query or a fragment.';
+    }
+    if (entry.key === 'authName' && fields.authType === 'header' && (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(value) || ['host', 'content-length', 'transfer-encoding', 'connection', 'upgrade', 'expect', 'trailer', 'te', 'accept', 'content-type'].includes(value.toLowerCase()))) return 'Use a valid authentication header, such as X-API-Key.';
+    if (entry.key === 'authPrefix' && (value.length > 128 || /[^\x20-\x7e]/.test(value))) return 'Use up to 128 printable characters for the prefix.';
+    if (entry.key === 'testPath') {
+      if (value.startsWith('/') || value.includes('\\') || /^[a-z][a-z0-9+.-]*:/i.test(value)) return 'Use a relative path, such as account.';
+      try {
+        const base = new URL(fields.baseUrl); if (!base.pathname.endsWith('/')) base.pathname += '/';
+        const url = new URL(value, base);
+        if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname) || url.hash) return 'The test path must stay under the address.';
+      } catch { /* The address reports its own error. */ }
+    }
+    return null;
+  };
+  /** Field errors, keyed like the inputs: id, fields.host, secrets.token, env.token, vars. */
+  const validate = (draft, { editing = false, names = [], secrets = {}, savedSecrets = [], needSecret = true } = {}) => {
+    const errors = {}, type = typeOf(draft.type);
+    if (!validName(draft.id)) errors.id = draft.id === 'new' ? 'That name is reserved. Choose another.' : 'Use up to 64 lowercase letters, numbers and single hyphens.';
+    else if (!editing && names.includes(draft.id)) errors.id = draft.id + ' is taken.';
+    if (!type) { errors.type = 'Choose a type.'; return errors; }
+    if (typeof draft.description === 'string' && draft.description.length > 200) errors.description = 'Use up to 200 characters.';
+    if (type.dynamic) {
+      const rows = draft.vars.filter(row => row.name || row.value), seen = new Set();
+      if (!rows.length) errors.vars = 'Add at least one variable.';
+      for (const row of rows) {
+        if (!validEnvName(row.name)) errors.vars = (row.name || 'Each variable') + ' needs a name of letters, numbers and underscores.';
+        else if (seen.has(row.name)) errors.vars = row.name + ' is listed twice.';
+        else if (row.secret && !row.value && !row.saved) errors.vars = 'Enter a value for ' + row.name + '.';
+        seen.add(row.name);
+      }
+      return errors;
+    }
+    for (const entry of type.fields) {
+      if (!applies(entry, draft.fields)) continue;
+      const problem = validateField(entry, draft.fields[entry.key], draft.fields);
+      if (problem) errors['fields.' + entry.key] = problem;
+    }
+    if (needSecret) for (const entry of type.secrets) {
+      if (!applies(entry, draft.fields) || entry.optional) continue;
+      const value = secrets[entry.key];
+      if (!value && !savedSecrets.includes(entry.key)) errors['secrets.' + entry.key] = 'Enter ' + entry.label.toLowerCase() + '.';
+      else if (value && !entry.multiline && !text(value.replace(/\r?\n$/, ''), 8192)) errors['secrets.' + entry.key] = 'Use up to 8192 characters, without line breaks.';
+      else if (value && entry.multiline && value.length > 48 * 1024) errors['secrets.' + entry.key] = 'Use up to 48 KiB.';
+    }
+    for (const entry of [...type.fields, ...type.secrets]) {
+      const value = draft.env?.[entry.key];
+      if (entry.editableEnv && value && !validEnvName(value)) errors['env.' + entry.key] = 'Use letters, numbers and underscores, and not a name the system relies on.';
+    }
     return errors;
   };
-  const changes = (previous, current) => fields.filter(field => field !== 'id' && field !== 'type' && String(previous?.[field] ?? '') !== String(current?.[field] ?? ''));
-  const fieldLabel = field => ({ host: 'Host', port: 'Port', username: 'Username', baseUrl: 'Base URL', authType: 'Authentication', authName: 'Authentication name', authPrefix: 'Prefix', testPath: 'Test path' }[field] || field);
-  const matches = (profile, query) => !query.trim() || [profile.id, profile.host, profile.username, profile.baseUrl, kind(profile), auth(profile), profile.type].filter(Boolean).join(' ').toLowerCase().includes(query.trim().toLowerCase());
-  const needsAttention = (profile, attention) => profile.type === 'ssh' && (!profile.hostKey || profile.test?.code === 'host-key-changed') || profile.test?.ok === false && (profile.test.code !== 'timeout' || attention?.some(row => row.id === profile.id));
-  return { fields, validName, defaults, draftOf, payload, kind, secretKind, auth, target, usageCount, day, keyType, keyCommand, commands, snippet, request, validate, changes, fieldLabel, matches, needsAttention, state: M.credentialState };
+  const changes = (previous, current) => {
+    const keys = new Set([...Object.keys(previous?.fields || {}), ...Object.keys(current?.fields || {})]);
+    return [...keys].filter(key => key !== 'publicKey' && String(previous?.fields?.[key] ?? '') !== String(current?.fields?.[key] ?? ''));
+  };
+  const fieldLabel = (key, type) => (typeOf(type)?.fields || []).find(entry => entry.key === key)?.label || key;
+  const matches = (credential, query) => !query.trim() || [credential.id, credential.description, target(credential), kind(credential), typeLabel(credential.type), credential.type, ...(credential.delivers || []), ...Object.values(credential.fields || {}).map(String)].filter(Boolean).join(' ').toLowerCase().includes(query.trim().toLowerCase());
+  const needsAttention = (credential, attention) => credential.type === 'ssh' && (credential.fields?.auth === 'password' && !credential.hostKey || credential.test?.code === 'host-key-changed') || credential.test?.ok === false && (credential.test.code !== 'timeout' || attention?.some(row => row.id === credential.id));
+  const threadUrl = (origin, environmentId) => origin?.threadId && environmentId ? '/' + encodeURIComponent(environmentId) + '/' + encodeURIComponent(origin.threadId) : null;
+  const usesPlainSsh = (credential, aliases) => aliases && credential.type === 'ssh' && credential.fields?.auth === 'key';
+  const originText = credential => credential.origin?.by === 'agent' ? 'Added by an agent' : credential.origin?.by === 'terminal' ? 'Added from a terminal' : null;
+
+  return { usesPlainSsh, givesPreview, setTypes, typeOf, typeList, iconFor, badge, typeLabel, validName, applies, withDefaults, primarySecret, envFor, resolveEnvName, defaults, draftOf, payload, kind, secretKind, target, delivery, canTest, usageCount, day, keyType, keyCommand, installLine, commands, snippet, request, validate, changes, fieldLabel, matches, needsAttention, threadUrl, originText, state: M.credentialState };
 })();

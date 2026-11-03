@@ -1,16 +1,16 @@
 ---
 name: service-api
-description: Use the saved project-api connection when asked to work with that service's API.
+description: Use the saved project-api credential when asked to work with that service's API.
 ---
 
-Use the saved `project-api` connection for HTTP API requests:
+Call the API through the Vault, which adds the saved key:
 
 ```sh
-t3-api project-api GET projects
-printf '%s' '{"name":"demo-project"}' | t3-api project-api POST projects --stdin
+t3-vault http project-api GET projects
+printf '%s' '{"name":"demo-project"}' | t3-vault http project-api POST projects --stdin
 ```
 
-Change the credential name and paths in this example to match your service. Paths
-are relative to its saved base URL, without a leading slash. Authentication,
-including the header or query parameter name, is configured in Setup →
-Credentials. Do not read or print credential files. Use `--stdin` for JSON bodies.
+Change the name and paths in this example to match your service. Paths are relative
+to the saved API address, without a leading slash. For a tool that reads its token
+from the environment, use `t3-vault run project-api -- <command>`. Don't read or
+print credential files.

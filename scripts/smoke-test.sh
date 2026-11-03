@@ -161,8 +161,8 @@ check "no harness executable is baked, only the root-owned dispatcher" only_the_
 check "mise ships" "docker exec $NAME mise --version"
 check "harness installer ships" "docker exec $NAME t3-harness --help"
 check "storage CLI ships" "docker exec $NAME t3-storage --help"
-check "SSH credential helper ships" "docker exec $NAME t3-ssh --help"
-check "API credential helper ships" "docker exec $NAME t3-api --help"
+check "Vault CLI ships" "docker exec $NAME t3-vault --help"
+check "old credential helpers are gone" "! docker exec $NAME sh -c 'command -v t3-ssh || command -v t3-api'"
 credentials_roundtrip() {
   docker cp "$SCRIPT_DIR/credentials-smoke.mjs" "$NAME:/tmp/t3-credentials-smoke.mjs" >/dev/null
   docker exec -u t3 "$NAME" node /tmp/t3-credentials-smoke.mjs
@@ -854,7 +854,7 @@ credentials_browser_works() {
   docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules -e T3_CREDENTIALS_UI_WIDTHS=390,640,1280 \
     "$NAME" node "$audit/scripts/credentials-ui-audit.mjs" >>"$UI_AUDIT_LOG" 2>&1
 }
-check "Credentials drafts, host trust, conflicts and recovery work on desktop, phone and Settings" credentials_browser_works
+check "Vault drafts, host trust, conflicts and recovery work on desktop, phone and Settings" credentials_browser_works
 
 files_browser_works() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0

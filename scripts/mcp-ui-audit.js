@@ -186,6 +186,26 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
       assert.equal(mcp.status().providers.find(p => p.provider === 'claude').diverged.includes('docs'), true, 'Differing copies untouched by default');
 
       await target.locator(phone ? '.tc-sk-phone-actions [data-cmd="mcp.add"]' : '.tc-sk-desktop-actions [data-cmd="mcp.add"]').click();
+      // Which agents get the server has to be reachable at every size.
+      {
+        const editor = target.locator('.tc-mcp-editor'), agents = editor.locator('.tc-agentpick'), bar = editor.locator('.tc-wizard-rail-toggle');
+        await editor.waitFor();
+        if (await bar.isVisible()) {
+          assert.equal(await agents.isVisible(), false, variant + ': the agent list starts collapsed behind its bar');
+          await bar.click(); await agents.waitFor({ timeout: 3000 });
+          const count = () => editor.locator('.tc-wizard-rail-toggle').innerText();
+          const before = await count();
+          const box = agents.locator('input[type=checkbox]:not(:disabled)').first();
+          if (await box.count()) {
+            await box.click(); await target.waitForTimeout(100);
+            assert.notEqual(await count(), before, variant + ': choosing an agent changes the count on the bar');
+            assert.equal(await agents.isVisible(), true, variant + ': the list stays open while choosing');
+            await agents.locator('input[type=checkbox]:not(:disabled)').first().click(); await target.waitForTimeout(100);
+            assert.equal(await count(), before, variant + ': the choice can be undone');
+          }
+          await bar.click(); await agents.waitFor({ state: 'hidden', timeout: 3000 });
+        } else assert.equal(await agents.isVisible(), true, variant + ': with no bar, the agent list is shown');
+      }
       parseGate = deferred();
       await target.locator('#mcp-snippet').fill('{"mcpServers":{"issues":{"command":"npx","args":["-y","@acme/issues-mcp",""],"env":{"ISSUES_TOKEN":"<your token>"}}}}');
       await target.locator('#mcp-name').waitFor();

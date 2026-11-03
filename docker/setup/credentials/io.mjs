@@ -11,6 +11,8 @@ const harness = existsSync(new URL('lock.mjs', localHarness)) ? localHarness : n
 const [{ acquireLock }, { createFs }] = await Promise.all([import(new URL('lock.mjs', harness)), import(new URL('io.mjs', harness))]);
 const queues = new Map();
 const unsafe = () => new CredentialError('A credential file is unsafe or exceeds its size limit. Repair it before continuing.', 500, 'store');
+const FOLDERS = new Set(['known_hosts', 'keys', 'usage']);
+const folderOf = name => { const at = name.indexOf('/'); return at > 0 ? name.slice(0, at) : ''; };
 
 export function createCredentialIO({ directory, readOnly = false, effects = fs }) {
   const root = path.resolve(directory);
@@ -20,7 +22,7 @@ export function createCredentialIO({ directory, readOnly = false, effects = fs }
     return target;
   };
   const prepare = async (relative = '') => {
-    if (relative && relative !== 'known_hosts') throw unsafe();
+    if (relative && !FOLDERS.has(relative)) throw unsafe();
     for (const target of relative ? [root, path.join(root, relative)] : [root]) {
       if (!readOnly) await effects.mkdir(target, { recursive: true, mode: 0o700 });
       let stat;
@@ -31,8 +33,8 @@ export function createCredentialIO({ directory, readOnly = false, effects = fs }
     }
     return true;
   };
-  const read = async (name, { maxBytes = 512 * 1024, missing = null } = {}) => {
-    if (!await prepare(name.startsWith('known_hosts/') ? 'known_hosts' : '')) return missing;
+  const read = async (name, { maxBytes = 4 * 1024 * 1024, missing = null } = {}) => {
+    if (!await prepare(folderOf(name))) return missing;
     let handle;
     try {
       handle = await effects.open(file(name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -49,10 +51,10 @@ export function createCredentialIO({ directory, readOnly = false, effects = fs }
     } catch (error) { if (error.code === 'ENOENT') return missing; throw error; }
     finally { await handle?.close(); }
   };
-  const write = async (name, text, { maxBytes = 512 * 1024, recover = false } = {}) => {
+  const write = async (name, text, { maxBytes = 4 * 1024 * 1024, recover = false } = {}) => {
     if (readOnly) throw new CredentialError('Helpers cannot change saved credentials.', 500, 'read-only');
     if (Buffer.byteLength(text) > maxBytes) throw new CredentialError('Saved credentials exceed their size limit.');
-    await prepare(name.startsWith('known_hosts/') ? 'known_hosts' : '');
+    await prepare(folderOf(name));
     if (!recover) await read(name, { maxBytes });
     const target = file(name), temporary = path.join(path.dirname(target), '.' + randomUUID() + '.tmp');
     try {
@@ -65,9 +67,13 @@ export function createCredentialIO({ directory, readOnly = false, effects = fs }
   };
   const remove = async name => {
     if (readOnly) throw new CredentialError('Helpers cannot change saved credentials.', 500, 'read-only');
-    await prepare(name.startsWith('known_hosts/') ? 'known_hosts' : '');
+    await prepare(folderOf(name));
     // Unlink the directory entry, never follow a damaged metadata symlink.
     await effects.rm(file(name), { force: true });
+  };
+  const list = async folder => {
+    if (!await prepare(folder)) return [];
+    try { return await effects.readdir(file(folder)); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   };
   const transaction = action => {
     if (readOnly) return Promise.resolve().then(action);
@@ -90,5 +96,5 @@ export function createCredentialIO({ directory, readOnly = false, effects = fs }
     void result.finally(() => { if (queues.get(root) === result) queues.delete(root); }).catch(() => {});
     return result;
   };
-  return { directory: root, readOnly, file, prepare, read, write, remove, transaction };
+  return { directory: root, readOnly, file, prepare, read, write, remove, list, transaction };
 }

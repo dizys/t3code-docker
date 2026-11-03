@@ -31,7 +31,7 @@ if(action==='list') {
   const port = socket.address().port; await new Promise((resolve) => socket.close(resolve));
   const home = path.join(root, 'home'); await fs.mkdir(home);
   const child = spawn(process.execPath, [fileURLToPath(new URL('../docker/setup/server.mjs', import.meta.url))], { env: {
-    ...process.env, HOME: home, T3CODE_HOME: path.join(home, '.t3'), T3_WORKSPACE: root,
+    ...process.env, HOME: home, T3CODE_HOME: path.join(home, '.t3'), CLAUDE_CONFIG_DIR: path.join(home, '.claude'), T3_WORKSPACE: root,
     MISE_DATA_DIR: path.join(root, 'mise-data'), MISE_STATE_DIR: path.join(root, 'mise-state'), MISE_CONFIG_DIR: path.join(root, 'mise-config'),
     T3_HARNESS_MODULE: fileURLToPath(new URL('../docker/harness/index.mjs', import.meta.url)),
     T3_SETUP_KEY: 'fixture', T3_SETUP_KEY_SOURCE: 'env', T3_SETUP_PORT: String(port), T3CODE_PORT: '1', T3_INFRA_LAUNCHER: launcher,

@@ -501,6 +501,7 @@
 [data-theme="dark"] .tc-toast { border-color: var(--border); }
 .tc-toast > .tc-icon { color: var(--ok); }
 .tc-toast[data-tone="danger"] > .tc-icon { color: var(--danger); }
+.tc-toast[data-tone="warn"] > .tc-icon { color: var(--warn); }
 .tc-toast[data-tone="info"] > .tc-icon { color: var(--info); }
 .tc-toast-text { display: flex; flex-direction: column; min-width: 0; }
 .tc-toast-text small { font-size: 0.75rem; color: var(--fg-muted); }

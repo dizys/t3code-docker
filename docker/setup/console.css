@@ -1571,6 +1571,7 @@ html.tc-locked { overflow: hidden; }
   :where(:root[data-compact]) body[data-console-route="mcp"] .tc-phonebar,
   :where(:root[data-compact]) body[data-console-route="mcp"] .tc-tabbar { display: none; }
   :where(:root[data-compact]) .tc-mcp-editor .tc-wizard-head > .tc-spacer { display: none; }
+  :where(:root[data-compact]) .tc-cred-editor .tc-wizard-head > .tc-spacer { display: none; }
   :where(:root[data-compact]) .tc-mcp-editor .tc-wizard-head > .tc-sheet-head-text { flex: 1; }
 
 .tc-mcp-editor .tc-mcp-secret-input { white-space: pre; scrollbar-width: none; }
@@ -3376,6 +3377,9 @@ body[data-console-route="files"]:has(.tc-layer) .tc-toaster { visibility: hidden
   :root[data-host="tab"] .tc-wizard-rail { min-height: 0; padding: 0 1rem 1rem; }
   :root[data-host="tab"] .tc-wizard-rail-wrap:not([data-open]) > .tc-wizard-rail { display: none; }
   :root[data-host="tab"] .tc-wizard-rail-wrap[data-open] .tc-wizard-rail-toggle > .tc-icon { transform: rotate(180deg); }
+  /* The Vault editor shows its whole panel at these widths, which leaves a toggle nothing to do. */
+  :root[data-host="tab"]:not([data-compact]) .tc-cred-editor .tc-wizard-rail-toggle { display: none; }
+  :root[data-host="tab"]:not([data-compact]) .tc-cred-editor .tc-wizard-rail { padding-top: 1rem; }
 }
 
 /* The selection lane can be much narrower than the console when Details is
@@ -3472,6 +3476,57 @@ body[data-console-route="files"]:has(.tc-layer) .tc-toaster { visibility: hidden
 .tc-cred-skill strong { font-weight: 500; }
 .tc-cred-skill small { display: block; font-size: 0.75rem; line-height: 1rem; color: var(--fg-muted); }
 .tc-cred-skill code { font-size: 0.6875rem; color: var(--fg-muted); }
+
+/* ------------------------------------------------------------ Vault additions --- */
+.tc-cred-toolbar .tc-sk-search { flex: 1 1 12rem; min-width: 9rem; width: auto; }
+.tc-cred-link { color: inherit; text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
+.tc-cred-link:hover { color: var(--fg); }
+.tc-cred-gives { margin: 0; font-size: 0.75rem; line-height: 1.25rem; color: var(--fg-muted); overflow-wrap: anywhere; }
+.tc-cred-gives code { font: 400 0.75rem/1.25rem var(--font-mono); color: var(--fg); }
+.tc-cred-optional { font-weight: 400; font-size: 0.75rem; color: var(--fg-muted); }
+.tc-cred-labelrow { display: flex; align-items: center; gap: 0.25rem; min-height: 1.5rem; }
+.tc-cred-file { cursor: pointer; }
+.tc-cred-file:focus-within { outline: 2px solid var(--ring, var(--accent)); outline-offset: 1px; }
+.tc-cred-textarea { height: auto; min-height: 6.5rem; padding-block: 0.5rem; resize: vertical; line-height: 1.25rem; white-space: pre; overflow: auto; }
+.tc-cred-masked { -webkit-text-security: disc; }
+@supports not (-webkit-text-security: disc) { .tc-cred-masked { color: transparent; text-shadow: 0 0 6px var(--fg); } }
+.tc-cred-start { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+.tc-cred-start > .tc-insp-label { margin: 0.25rem 0 -0.25rem; }
+.tc-cred-startgrid { grid-template-columns: minmax(0, 1fr) !important; }
+.tc-cred-drop { display: flex; flex-direction: column; border: 1.5px dashed var(--border-strong); border-radius: var(--radius-xl); background: var(--surface-sunken); transition: border-color 0.12s ease; }
+.tc-cred-drop:focus-within, .tc-cred-drop[data-dragging="true"] { border-color: var(--accent); border-style: solid; }
+.tc-cred-paste { appearance: none; display: block; width: 100%; min-height: 5rem; padding: 0.75rem 0.875rem 0.25rem; border: 0; outline: 0; resize: none; background: transparent; color: var(--fg); font: 400 0.8125rem/1.25rem var(--font-mono); }
+.tc-cred-paste::placeholder { -webkit-text-security: none; color: var(--fg-muted); font-family: var(--font-sans); font-size: 0.875rem; }
+.tc-cred-drop-foot { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.5rem 0.5rem 0.875rem; min-width: 0; }
+.tc-cred-drop-foot .tc-hint { margin: 0; display: inline-flex; align-items: center; gap: 0.375rem; }
+.tc-cred-types { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr)); gap: 0.5rem; }
+.tc-cred-typecard { appearance: none; display: flex; align-items: center; gap: 0.625rem; min-height: 2.75rem; padding: 0.5rem 0.75rem; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: transparent; color: var(--fg); font: inherit; font-size: 0.8125rem; line-height: 1.125rem; text-align: left; cursor: pointer; }
+.tc-cred-typecard:hover { background: var(--hover); border-color: var(--border); }
+.tc-cred-typecard:focus-visible { outline: 2px solid var(--ring, var(--accent)); outline-offset: 1px; }
+.tc-cred-typecard > .tc-icon { flex: none; width: 1rem; height: 1rem; color: var(--fg-muted); }
+.tc-cred-detect { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; border-radius: var(--radius-lg); font-size: 0.8125rem; line-height: 1.25rem; background: color-mix(in srgb, var(--ok) 8%, transparent); }
+.tc-cred-detect[data-sure="false"] { background: var(--surface-sunken); }
+.tc-cred-detect > .tc-icon { flex: none; width: 0.875rem; height: 0.875rem; color: var(--ok); }
+.tc-cred-detect[data-sure="false"] > .tc-icon { color: var(--fg-muted); }
+.tc-cred-detect > span { flex: 1; min-width: 0; }
+.tc-cred-detect .tc-btn--link { flex: none; height: auto; padding: 0; font-size: 0.75rem; font-weight: 400; color: var(--fg-muted); text-decoration: underline; text-underline-offset: 2px; }
+:where(:root:not([data-compact])) .tc-wizard.tc-cred-editor.tc-cred-editor--start { height: auto; }
+.tc-cred-options { display: flex; flex-direction: column; gap: 0.375rem; }
+.tc-cred-option { display: grid; grid-template-columns: 1rem minmax(0, 1fr); gap: 0.625rem; padding: 0.5625rem 0.75rem; border: 1px solid var(--hairline); border-radius: var(--radius-lg); cursor: pointer; }
+.tc-cred-option:hover { background: var(--hover); }
+.tc-cred-option[data-on="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.tc-cred-option:focus-within { outline: 2px solid var(--ring, var(--accent)); outline-offset: 1px; }
+.tc-cred-radio { width: 0.875rem; height: 0.875rem; margin-top: 0.1875rem; border-radius: 50%; border: 1.5px solid var(--border-strong); }
+.tc-cred-option[data-on="true"] .tc-cred-radio { border: 0.25rem solid var(--accent); }
+.tc-cred-option b { font-size: 0.8125rem; line-height: 1.25rem; font-weight: 500; color: var(--fg); }
+.tc-cred-option em { margin-left: 0.5rem; font-style: normal; font-size: 0.6875rem; font-weight: 500; color: var(--ok-text, var(--ok)); }
+.tc-cred-option small { display: block; font-size: 0.75rem; line-height: 1.0625rem; color: var(--fg-muted); }
+.tc-cred-install { display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem; padding: 0.625rem 0.75rem; border-radius: var(--radius-lg); border: 1px solid var(--hairline); background: var(--surface-sunken); min-width: 0; }
+.tc-cred-install code { font: 400 0.6875rem/1.0625rem var(--font-mono); color: var(--fg); overflow-wrap: anywhere; }
+.tc-cred-vars { display: flex; flex-direction: column; gap: 0.375rem; }
+.tc-cred-var { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto auto; gap: 0.25rem; align-items: center; }
+.tc-cred-var-add { align-self: flex-start; }
+:where(:root[data-compact]) .tc-cred-types { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 
 /* ---------------------------------------------------------------- editor --- */
 /* Desktop size only: in compact mode main's rules make it a 94dvh bottom sheet. */

@@ -24,15 +24,18 @@ const id = 'smoke-credential-' + process.pid;
 let created = false;
 try {
   await access('/opt/t3-setup/credentials/askpass.sh', constants.X_OK);
-  for (const cli of ['t3-ssh', 't3-api']) assert.match((await run('/usr/local/bin/' + cli, ['--help'])).stdout, /Manage connections/);
+  assert.match((await run('/usr/local/bin/t3-vault', ['--help'])).stdout, /Setup → Vault/);
+  assert.match(await readFile('/opt/t3-setup/credentials/SKILL.md', 'utf8'), /^---\nname: t3-vault\n/);
   let snapshot = await request('/credentials');
-  await request('/credentials/create', { credential: { id, label: 'Disposable image check', type: 'api', baseUrl: 'http://127.0.0.1:' + server.address().port + '/api/', authType: 'header', authName: 'X-API-Key', testPath: 'account', secret } });
+  await request('/credentials/create', { credential: { id, type: 'token', fields: { baseUrl: 'http://127.0.0.1:' + server.address().port + '/api/', authType: 'header', authName: 'X-API-Key', testPath: 'projects' }, secrets: { token: secret } } });
   created = true; snapshot = await request('/credentials');
   assert.equal(snapshot.credentials.find(profile => profile.id === id).hasSecret, true);
   assert.equal((await request('/credentials/test', { id })).result.code, 'ok');
-  const { stdout, stderr } = await run('/usr/local/bin/t3-api', [id, 'GET', 'projects']);
+  const { stdout, stderr } = await run('/usr/local/bin/t3-vault', ['http', id, 'GET', 'projects']);
   assert.deepEqual(JSON.parse(stdout), { status: 'ok', echo: '[redacted]' }); assert.equal(stderr, '');
-  console.log('PASS saved API credentials and installed SSH/API helpers');
+  const viaRun = await run('/usr/local/bin/t3-vault', ['run', id, '--', 'sh', '-c', 'printf "%s" "$' + id.toUpperCase().replace(/-/g, '_') + '_TOKEN"']);
+  assert.equal(viaRun.stdout, '[redacted]');
+  console.log('PASS saved API credentials and the installed t3-vault');
 } finally {
   try { if (created) { const snapshot = await request('/credentials'); await request('/credentials/remove', { id, revision: snapshot.credentials.find(row => row.id === id).revision }); } }
   finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }

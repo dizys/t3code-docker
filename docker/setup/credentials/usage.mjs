@@ -3,9 +3,26 @@ import path from 'node:path';
 import { scanSkillFiles, readSkillFile, skillMetadata, skillProviders } from '../skills.mjs';
 import { readAgentsMd } from '../context.mjs';
 
+const SINGLE = /(?:^|[^\w-])t3-vault\s+(?:ssh|http|show|test|replace|trust|use-key)\s+(['"]?)([a-z0-9]+(?:-[a-z0-9]+)*)\1(?![\w-])/g;
+const RUN = /(?:^|[^\w-])t3-vault\s+run\s+([^\n|;&]*)/g;
+const PLAIN_SSH = /(?:^|[^\w-])ssh\s+(['"]?)([a-z0-9]+(?:-[a-z0-9]+)*)\1(?![\w.@:-])/g;
+
+/** Names a skill uses through t3-vault. */
 export function credentialMentions(content) {
-  return new Set([...String(content).matchAll(/(?:^|[^\w-])t3-(?:ssh|api)\s+(['"]?)([a-z0-9]+(?:-[a-z0-9]+)*)\1(?![\w-])/g)].map(match => match[2]));
+  const text = String(content), names = new Set([...text.matchAll(SINGLE)].map(match => match[2]));
+  for (const match of text.matchAll(RUN)) {
+    for (const token of match[1].trim().split(/\s+/)) {
+      if (token === '--' || token === '') break;
+      const name = /^(['"]?)([a-z0-9]+(?:-[a-z0-9]+)*)(?:=[A-Za-z_][A-Za-z0-9_]*)?\1$/.exec(token)?.[2];
+      if (!name) break;
+      names.add(name);
+    }
+  }
+  return names;
 }
+/** Names a skill reaches with plain `ssh NAME`, which only count for SSH credentials. */
+export const sshMentions = content => new Set([...String(content).matchAll(PLAIN_SSH)].map(match => match[2]));
+
 export function createCredentialUsage({ home = process.env.HOME || '/home/t3', baseDir = process.env.T3CODE_HOME || path.join(home, '.t3'), env = process.env, io = fs, scan = scanSkillFiles, readFile = readSkillFile, instructions = readAgentsMd, installed = async () => [], clock = Date.now, ttlMs = 15000, limits } = {}) {
   let cache = null, pending = null, generation = 0;
   const scanAll = async () => {
@@ -36,12 +53,16 @@ export function createCredentialUsage({ home = process.env.HOME || '/home/t3', b
         const name = skillMetadata(read.content, path.basename(path.dirname(entry.row.path))).name;
         const where = installedIds.length && installedIds.every(id => entry.providers.has(id)) ? 'All agents' : providers.filter(provider => entry.providers.has(provider.id)).map(provider => provider.name).join(', ');
         for (const id of credentialMentions(read.content)) add(id, { kind: 'skill', name, where });
+        for (const id of sshMentions(read.content)) if (!credentialMentions(read.content).has(id)) add(id, { kind: 'skill', name, where, sshOnly: true });
       } catch { warnings.add('Some skills could not be read.'); }
     }
     try {
       const global = await instructions(io, baseDir);
       if (global.error) warnings.add('Global instructions could not be read.');
-      else if (global.content) for (const id of credentialMentions(global.content)) add(id, { kind: 'instructions', name: 'Global instructions' });
+      else if (global.content) {
+        for (const id of credentialMentions(global.content)) add(id, { kind: 'instructions', name: 'Global instructions' });
+        for (const id of sshMentions(global.content)) if (!credentialMentions(global.content).has(id)) add(id, { kind: 'instructions', name: 'Global instructions', sshOnly: true });
+      }
     } catch { warnings.add('Global instructions could not be read.'); }
     return { usage, usageAt: new Date(clock()).toISOString(), usageWarnings: [...warnings] };
   };
@@ -55,6 +76,6 @@ export function createCredentialUsage({ home = process.env.HOME || '/home/t3', b
   };
   return { invalidate() { generation++; cache = null; pending = null; }, async annotate(credentials) {
     const value = await read();
-    return { credentials: credentials.map(credential => ({ ...credential, usedIn: value.usage.get(credential.id) || [] })), usageAt: value.usageAt, usageWarnings: value.usageWarnings };
+    return { credentials: credentials.map(credential => ({ ...credential, usedIn: (value.usage.get(credential.id) || []).filter(item => !item.sshOnly || credential.type === 'ssh').map(({ sshOnly, ...item }) => item) })), usageAt: value.usageAt, usageWarnings: value.usageWarnings };
   } };
 }

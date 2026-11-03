@@ -54,7 +54,7 @@ else process.exit(1);
   const portProbe = createServer().listen(0, '127.0.0.1'); await once(portProbe, 'listening');
   const port = portProbe.address().port; await new Promise(resolve => portProbe.close(resolve));
   const home = path.join(root, 'home'); await fs.mkdir(home);
-  const env = { ...process.env, HOME: home, T3CODE_HOME: path.join(home, '.t3'), T3_WORKSPACE: root,
+  const env = { ...process.env, HOME: home, T3CODE_HOME: path.join(home, '.t3'), CLAUDE_CONFIG_DIR: path.join(home, '.claude'), T3_WORKSPACE: root,
     T3_SETUP_KEY: 'fixture', T3_SETUP_KEY_SOURCE: 'env', T3_SETUP_PORT: String(port), T3CODE_PORT: String(native.address().port),
     T3_INFRA_LAUNCHER: launcher, T3_HARNESS_MODULE: fileURLToPath(new URL('../docker/harness/index.mjs', import.meta.url)),
     MISE_DATA_DIR: path.join(root, 'mise-data'), MISE_STATE_DIR: path.join(root, 'mise-state'), MISE_CONFIG_DIR: path.join(root, 'mise-config') };

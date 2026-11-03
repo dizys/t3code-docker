@@ -40,7 +40,7 @@ test("storage API authenticates, validates, acknowledges durable jobs, and prese
   let child, logs = "";
   const start = async () => {
     child = spawn(process.execPath, [fileURLToPath(new URL("../docker/setup/server.mjs", import.meta.url))], { env: {
-      ...process.env, HOME: home, T3CODE_HOME: path.join(home, ".t3"), T3_WORKSPACE: workspace,
+      ...process.env, HOME: home, T3CODE_HOME: path.join(home, ".t3"), CLAUDE_CONFIG_DIR: path.join(home, ".claude"), T3_WORKSPACE: workspace,
       MISE_DATA_DIR: path.join(home, ".local/share/mise"), MISE_STATE_DIR: path.join(home, ".local/state/mise"),
       MISE_CONFIG_DIR: path.join(home, ".config/mise"), T3_HARNESS_MODULE: module, T3_SETUP_PORT: String(port),
       T3_SETUP_KEY: "fixture-key", T3_SETUP_KEY_SOURCE: "env", T3_INFRA_LAUNCHER: "/bin/false", T3CODE_PORT: "1",

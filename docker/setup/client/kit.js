@@ -523,6 +523,7 @@ const Kit = (() => {
 
   // --------------------------------------------------------------- toasts --
   const TOAST_MS = 4000;
+  const WARN_TOAST_MS = 10000;
   const TOAST_MAX = 3;
   /**
    * Bottom-right on desktop, bottom-centre above the tab bar on a phone. Three
@@ -536,12 +537,12 @@ const Kit = (() => {
     const tone = opts.tone || 'ok';
     const sticky = tone === 'danger' || opts.sticky;
     const actions=(opts.actions||(opts.action?[opts.action]:[])).slice(0,2);
-    const duration=Number.isFinite(opts.duration)?Math.max(1000,Math.min(60_000,opts.duration)):TOAST_MS;
+    const duration=Number.isFinite(opts.duration)?Math.max(1000,Math.min(60_000,opts.duration)):tone==='warn'?WARN_TOAST_MS:TOAST_MS;
     const node = document.createElement('div');
     node.className = 'tc-toast';
     node.setAttribute('data-tone', tone);
     node.setAttribute('role', tone === 'danger' ? 'alert' : 'status');
-    node.innerHTML = String(html`${icon(tone === 'danger' ? 'circle-alert' : tone === 'info' ? 'info' : 'circle-check')}<span class="tc-toast-text"><span>${text}</span>${opts.detail ? html`<small>${opts.detail}</small>` : ''}</span>${actions.map((action,index)=>html`<button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-toast-action="${index}">${action.label}</button>`)}${sticky ? html`<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs" type="button" data-toast-close aria-label="Dismiss">${icon('x')}</button>` : ''}`);
+    node.innerHTML = String(html`${icon(tone === 'danger' ? 'circle-alert' : tone === 'warn' ? 'triangle-alert' : tone === 'info' ? 'info' : 'circle-check')}<span class="tc-toast-text"><span>${text}</span>${opts.detail ? html`<small>${opts.detail}</small>` : ''}</span>${actions.map((action,index)=>html`<button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-toast-action="${index}">${action.label}</button>`)}${sticky ? html`<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs" type="button" data-toast-close aria-label="Dismiss">${icon('x')}</button>` : ''}`);
     let timer = null;
     const leave = () => {
       if (!node.isConnected || node.hasAttribute('data-leaving')) return;

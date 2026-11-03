@@ -9,11 +9,11 @@ const T3CredentialDialogs = (() => {
       const profile = ctx.row(id); if (!profile || ctx.busy.has(id) || removing.has(id)) return;
       removing.add(id);
       try {
-        const yes = await Kit.confirm({ title: 'Delete ' + id + '?', body: html`Skills that call <code>${(profile.type === 'ssh' ? 't3-ssh ' : 't3-api ') + id}</code> fail until a credential with this name exists again.`,
+        const yes = await Kit.confirm({ title: 'Delete ' + id + '?', body: html`Skills and commands that use <code>${id}</code> fail until a credential with this name exists again.`,
           consequences: [
             { icon: 'book-open', text: profile.usedIn?.length ? 'Mentioned in ' + M.listOf(profile.usedIn.map(item => item.name)) : ctx.usageWarnings()?.length ? 'Some skills couldn’t be read; there may be mentions.' : 'Not used in a skill' },
             ...(ctx.usageWarnings()?.length && profile.usedIn?.length ? [{ icon: 'info', text: 'Some skills couldn’t be read; there may be other mentions.' }] : []),
-            { icon: 'key-round', text: 'The saved ' + S.secretKind(profile) + ' is erased from this server' },
+            { icon: 'key-round', text: 'The saved ' + S.secretKind(profile) + ' is erased from this server, but keeps working at the service until you revoke it' },
             { icon: 'archive', text: 'Backups of this volume still hold it' },
             ...(profile.type === 'ssh' ? [{ icon: 'shield-alert', text: 'Its trusted host key is forgotten' }] : []),
           ], confirm: 'Delete credential', tone: 'danger' });
@@ -44,14 +44,14 @@ const T3CredentialDialogs = (() => {
         if (active !== view) return;
         view.busy = false;
         if (['changed', 'gone', 'not-found'].includes(response?.data?.code)) { view.stale = true; view.error = 'The saved connection details changed. Review the current host before trusting a key.'; }
-        else if (!response?.ok || !response.data.hostKey) view.error = response?.data?.result ? S.state({ ...profile, hostKey: profile.hostKey || {}, test: response.data.result }).desc : response?.error || 'Couldn’t read this server’s host key. Try again.';
+        else if (!response?.ok || !response.data.hostKey) view.error = response?.data?.result ? S.state({ ...profile, hostKey: profile.fields.hostKey || {}, test: response.data.result }).desc : response?.error || 'Couldn’t read this server’s host key. Try again.';
         else view.scanned = response.data.hostKey;
         paint(); view.layer.panel.querySelector('[data-cred-key="cancel"]')?.focus({ preventScroll: true });
       };
       view.layer = Kit.open({ kind: 'center', backdrop: 'ignore', panel: { class: 'tc-dialog tc-cred-dialog', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': 'cred-key-title', 'aria-describedby': 'cred-key-desc' }, focus: '[data-cred-key="cancel"]', onEscape: () => close('escape'), onClose: () => { if (active === view) active = null; }, render: () => html`
-        <div class="tc-dialog-body"><h2 class="tc-dialog-title" id="cred-key-title">${changed() ? id + '’s host key changed' : 'Trust ' + profile.host + '’s host key?'}</h2><p class="tc-dialog-desc" id="cred-key-desc">${changed() ? profile.host + ' now presents a different key. That’s expected after a reinstall, and also what an interception looks like. Agents can’t connect until you decide.' : 'Compare this fingerprint with the server’s own key before trusting it. No password is sent while the key is being checked.'}</p>
+        <div class="tc-dialog-body"><h2 class="tc-dialog-title" id="cred-key-title">${changed() ? id + '’s host key changed' : 'Trust ' + profile.fields.host + '’s host key?'}</h2><p class="tc-dialog-desc" id="cred-key-desc">${changed() ? profile.fields.host + ' now presents a different key. That’s expected after a reinstall, and also what an interception looks like. Agents can’t connect until you decide.' : 'Compare this fingerprint with the server’s own key before trusting it. No password is sent while the key is being checked.'}</p>
         ${view.busy ? html`<p class="tc-hint" role="status"><span class="tc-spinner" aria-hidden="true"></span>${view.scanned ? 'Checking the key again before trusting it…' : 'Reading the server’s host key…'}</p>` : ''}
-        ${view.scanned ? html`<ul class="tc-cred-keys">${view.scanned.trusted ? html`<li><span>Trusted ${profile.hostKey?.trustedAt ? S.day(profile.hostKey.trustedAt) : 'before'}</span><code>${S.keyType(view.scanned.trusted.type)}<br>${view.scanned.trusted.fingerprint}</code></li>` : ''}<li data-tone="warn"><span>Presented now</span><code>${S.keyType(view.scanned.presented.type)}<br>${view.scanned.presented.fingerprint}</code></li></ul><p class="tc-dialog-desc">On the server, this prints its real key:</p><ul class="tc-cred-cmds tc-group"><li><code>${S.keyCommand(view.scanned.presented.type)}</code><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs" type="button" data-cred-key="copy" aria-label="Copy host-key comparison command">${icon('copy')}</button></li></ul>` : ''}
+        ${view.scanned ? html`<ul class="tc-cred-keys">${view.scanned.trusted ? html`<li><span>Trusted ${profile.fields.hostKey?.trustedAt ? S.day(profile.fields.hostKey.trustedAt) : 'before'}</span><code>${S.keyType(view.scanned.trusted.type)}<br>${view.scanned.trusted.fingerprint}</code></li>` : ''}<li data-tone="warn"><span>Presented now</span><code>${S.keyType(view.scanned.presented.type)}<br>${view.scanned.presented.fingerprint}</code></li></ul><p class="tc-dialog-desc">On the server, this prints its real key:</p><ul class="tc-cred-cmds tc-group"><li><code>${S.keyCommand(view.scanned.presented.type)}</code><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs" type="button" data-cred-key="copy" aria-label="Copy host-key comparison command">${icon('copy')}</button></li></ul>` : ''}
         ${view.error ? html`<p class="tc-hint tc-danger" role="alert" tabindex="-1" id="cred-key-error">${view.error}</p>` : ''}${view.changedAgain ? html`<p class="tc-warning" role="alert">The key changed again. Compare this new fingerprint, then choose whether to trust it.</p>` : ''}</div>
         <div class="tc-dialog-foot"><button class="tc-btn tc-btn--ghost" type="button" data-cred-key="cancel"${disabled(view.busy)}>${changed() ? 'Keep blocking' : 'Cancel'}</button>${view.error && (!view.scanned || view.stale) ? html`<button class="tc-btn" type="button" data-cred-key="retry"${disabled(view.busy)}>${view.stale ? 'Review current host' : 'Try again'}</button>` : html`<button class="tc-btn ${changed() ? 'tc-btn--danger-solid' : 'tc-btn--primary'}" type="button" data-cred-key="trust"${disabled(view.busy || !view.scanned || view.stale)}>${view.busy && view.scanned ? html`<span class="tc-spinner" aria-hidden="true"></span>Trusting…` : changed() ? 'Trust new key' : 'Trust key'}</button>`}</div>` });
       view.layer.panel.addEventListener('click', async event => {
@@ -72,7 +72,16 @@ const T3CredentialDialogs = (() => {
       });
       await scan();
     };
-    return { remove, forget, review, beforeNavigate: () => !active?.busy };
+    // The password goes to the host once more, to install the key, then it's deleted.
+    const useKey = async id => {
+      const profile = ctx.row(id); if (!profile || ctx.busy.has(id)) return;
+      const yes = await Kit.confirm({ title: 'Switch ' + id + ' to a key?', body: html`Signs in to <code>${profile.fields.host}</code> with the saved password, adds a new key there, checks that the key works, then deletes the password.`, confirm: 'Switch to a key' });
+      if (!yes) return;
+      const response = await ctx.request(id, 'use-key', '/credentials/install-key', { id, revision: profile.revision });
+      if (response?.ok) Kit.toast(id + ' now signs in with a key', { detail: 'Its password has been deleted.' });
+      else if (response) Kit.toast('Couldn’t switch ' + id + ' to a key', { tone: 'danger', detail: response.error });
+    };
+    return { remove, forget, review, useKey, beforeNavigate: () => !active?.busy };
   };
   return { create };
 })();

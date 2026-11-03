@@ -16,6 +16,9 @@ test("skill endpoints require authentication and only read discovered installati
   const markdown = "---\nname: one\ndescription: Local fixture\n---\nOriginal instructions.\n";
   await fs.writeFile(file, markdown);
   const other = path.join(home, "unrelated.md"); await fs.writeFile(other, "Not a skill");
+  // This counts the skills it made, so its server treats the built-in Vault skill as removed by the user.
+  const vaultState = path.join(home, ".t3/server-credentials/skill.json"); await fs.mkdir(path.dirname(vaultState), { recursive: true, mode: 0o700 });
+  await fs.writeFile(vaultState, JSON.stringify({ digest: "removed-by-the-test" }) + "\n");
   const nativeFile = path.join(home, ".codex/skills/native/SKILL.md");
   await fs.mkdir(path.dirname(nativeFile), { recursive: true }); await fs.writeFile(nativeFile, markdown);
   const executable = path.join(home, "fake-codex");

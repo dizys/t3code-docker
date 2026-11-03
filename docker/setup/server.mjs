@@ -15,6 +15,7 @@ import { timingSafeEqual, randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 import { gzip as gzipCallback } from "node:zlib";
 import { readFileSync, writeFileSync, existsSync, rmSync, statSync } from "node:fs";
+import path from "node:path";
 import vm from "node:vm";
 import {
   withTimeout,
@@ -40,8 +41,9 @@ import { autoInstallable, autoUpdateCandidate } from "./skills/update-review.mjs
 import { createMcpService } from "./mcp.mjs";
 import { clientAddress } from "./client-address.mjs";
 import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
-import { createCredentialStore, credentialFailure, CredentialError } from "./credentials.mjs";
+import { createCredentialStore, credentialFailure, CredentialError, credentialDirectory } from "./credentials.mjs";
 import { createCredentialsService, CREDENTIAL_ROUTES } from "./credentials/service.mjs";
+import { installVaultSkill } from "./credentials/skill.mjs";
 import { createCredentialUsage } from "./credentials/usage.mjs";
 import { connectState, createConnectPreferences, jsonFrom, parseLinkOutput } from "./connect.mjs";
 import {
@@ -566,7 +568,7 @@ let credentialInstalled = null;
 const credentials = createCredentialsService({ store: credentialStore, usage: createCredentialUsage({
   home: CONTEXT_HOME, baseDir: STATE_DIR, env: process.env, io: await contextFs(),
   installed: async () => credentialInstalled || [...((await harnessCache.snapshotCheap()).harnesses || []).filter(row => row.installed).map(row => row.id), 'native-provider-not-yet-reported'],
-}) });
+}), environmentId: async () => (await readFile(path.join(STATE_DIR, 'userdata/environment-id'), 'utf8')).trim() });
 let filesPromise, filesInstance, filesPayloads = 0;
 const loadFiles = () => filesPromise ??= loadStorage().then(storage => createFilesService({
   home: CONTEXT_HOME, workspace: WORKSPACE, stateDir: STATE_DIR, env: process.env, storage, processSnapshot: harnessModule.processSnapshot, t3: t3Api, recordEvent, withStopped: action => filesHold.withStopped(action),
@@ -3283,7 +3285,9 @@ for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
 
 // The setup service alone migrates legacy stores before serving requests.
 try { await credentials.initialize(); }
-catch { console.warn('[setup] Saved credentials need attention; open Credentials to inspect the store.'); }
+catch { console.warn('[setup] Saved credentials need attention; open Vault to inspect the store.'); }
+try { await installVaultSkill({ home: CONTEXT_HOME, env: process.env, stateFile: path.join(credentialDirectory(), 'skill.json') }); }
+catch { console.warn('[setup] The t3-vault skill could not be installed; agents can still run t3-vault directly.'); }
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`[setup] listening on 0.0.0.0:${PORT}`);
   // Background facts: the storage check now, release lookups shortly after

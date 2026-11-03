@@ -43,7 +43,7 @@ test("version routes refresh reopened pickers and detach reads after a manual ch
   await new Promise((resolve) => reservation.close(resolve));
   let logs = "";
   const child = spawn(process.execPath, [fileURLToPath(new URL("../docker/setup/server.mjs", import.meta.url))], {
-    env: { ...process.env, HOME: home, T3CODE_HOME: path.join(home, ".t3"), T3_WORKSPACE: root,
+    env: { ...process.env, HOME: home, T3CODE_HOME: path.join(home, ".t3"), CLAUDE_CONFIG_DIR: path.join(home, ".claude"), T3_WORKSPACE: root,
       T3_SETUP_PORT: String(port), T3CODE_PORT: "1", T3_SETUP_KEY: "fixture", T3_SETUP_KEY_SOURCE: "env",
       T3_HARNESS_MODULE: harness, T3_INFRA_LAUNCHER: "/bin/false" },
     stdio: ["ignore", "pipe", "pipe"],

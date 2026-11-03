@@ -1517,15 +1517,34 @@ test("update check failures can be read for every source at once", () => {
   assert.equal(M.updateCheckView(status, "harness").failures.length, 1);
 });
 
-test('Credentials attention feeds Overview, navigation and host badges without counting untested credentials', () => {
+test('Vault attention feeds Overview, navigation and host badges without counting untested credentials', () => {
   const base = { credentials: { count: 3, attention: [{ id: 'build-server', code: 'host-key-untrusted' }, { id: 'project-api', code: 'rejected' }] } };
-  assert.deepEqual(plain(M.navBadges(base).credentials), { tone: 'warn', count: 2 });
+  assert.deepEqual(plain(M.navBadges(base).vault), { tone: 'warn', count: 2 });
+  assert.equal(M.navBadges(base).credentials, undefined);
   const items = plain(M.needsYou(base)).filter(row => row.target === 'credential');
   assert.equal(items.length, 2); assert.equal(items[0].id, 'project-api');
-  assert.equal(items[1].action.route, 'credentials/build-server'); assert.equal(items[1].tone, 'warn');
-  assert.equal(M.navBadges({ credentials: { count: 3, attention: [] } }).credentials, null);
-  assert.equal(M.credentialState({ type: 'ssh', hostKey: null, test: { code: 'ok' } }).code, 'host-key-untrusted');
-  assert.equal(M.credentialState({ type: 'api', test: { code: 'rejected', detail: { status: 401 } } }).label, 'Rejected · HTTP 401');
+  assert.equal(items[1].action.route, 'vault/build-server'); assert.equal(items[1].tone, 'warn');
+  assert.equal(M.navBadges({ credentials: { count: 3, attention: [] } }).vault, null);
+  const api = { type: 'token', fields: { baseUrl: 'https://api.example.test/v1/' } };
+  assert.equal(M.credentialState({ type: 'ssh', fields: { auth: 'password' }, hostKey: null, test: { code: 'ok' } }).code, 'host-key-untrusted');
+  assert.equal(M.credentialState({ ...api, test: { code: 'rejected', detail: { status: 401 } } }).label, 'Rejected · HTTP 401');
+  assert.equal(M.credentialState(api).code, 'untested');
+  // A key waits for its first connection, and a credential without an address has nothing to test.
+  assert.equal(M.credentialState({ type: 'ssh', fields: { auth: 'key' }, hostKey: null }).code, 'not-connected');
+  assert.equal(M.credentialState({ type: 'token', fields: {} }).code, 'no-test');
+  assert.equal(M.credentialState({ type: 'ssh', fields: { auth: 'key', host: 'example.net', username: 'deploy' }, hostKey: { fingerprint: 'x' }, test: { code: 'auth-rejected' } }).code, 'auth-rejected');
+});
+
+test('every SSH and API test result has words for the row and for the sheet', () => {
+  const when = '2026-10-30T10:00:00Z', fields = { ssh: { auth: 'key', host: 'example.net', port: 22, username: 'deploy' }, api: { baseUrl: 'https://api.example.test/v1/', testPath: 'account' } };
+  const results = [['ssh', ['ok', 'auth-rejected', 'host-key-changed', 'unreachable', 'timeout', 'scan-failed', 'failed']], ['token', ['ok', 'rejected', 'not-found', 'http-error', 'redirect', 'certificate', 'unreachable', 'timeout']]];
+  for (const [type, codes] of results) for (const code of codes) {
+    const state = M.credentialState({ id: 'row', type, fields: type === 'ssh' ? fields.ssh : fields.api, hostKey: type === 'ssh' ? { fingerprint: 'x' } : null, test: { code, at: when, detail: { status: 500 } } }, { now: Date.parse(when) + 1000 });
+    assert.equal(state.code, code);
+    assert.ok(state.label && state.title, type + ' ' + code);
+    assert.doesNotMatch(state.label + state.sub + state.title + state.desc, /\{\w+\}|undefined/, type + ' ' + code);
+    assert.ok(M.credentialProblem(code), code);
+  }
 });
 
 test("Pi signs in with a key per provider or a subscription, from one sheet", () => {

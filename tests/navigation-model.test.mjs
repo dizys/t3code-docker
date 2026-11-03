@@ -98,8 +98,23 @@ test('a future page follows the registry into metadata and empty groups disappea
   assert(M.navIcons(icons)['hard-drive'].length > 0);
 });
 
-test('credential destinations accept only a bounded immutable name', () => {
+test('vault destinations accept only a bounded immutable name', () => {
   const { R } = load();
-  for (const name of ['credentials/build-server', 'credentials/123', 'credentials/' + 'a'.repeat(64)]) assert.equal(R.destination(name), name);
-  for (const name of ['credentials/../server', 'credentials/a/b', 'credentials/a?secret=1', 'credentials/Bad', 'credentials/' + 'a'.repeat(65), 'credentials/a_']) assert.equal(R.destination(name), null);
+  for (const name of ['vault/build-server', 'vault/123', 'vault/' + 'a'.repeat(64)]) assert.equal(R.destination(name), name);
+  for (const name of ['vault/../server', 'vault/a/b', 'vault/a?secret=1', 'vault/Bad', 'vault/' + 'a'.repeat(65), 'vault/a_', 'vault/']) assert.equal(R.destination(name), null);
+});
+
+test('vault deep links open the new-credential form, optionally with a type and a suggested name', () => {
+  const { R } = load();
+  for (const name of ['vault', 'vault/new', 'vault/new/token', 'vault/new/ssh/build-server', 'vault/new/token/' + 'a'.repeat(64)]) assert.equal(R.destination(name), name);
+  for (const name of ['vault/new/Token', 'vault/new/token/Bad', 'vault/new/token/a/b', 'vault/new/token/' + 'a'.repeat(65), 'vault/new/to-ken', 'vault/new/']) assert.equal(R.destination(name), null);
+});
+
+test('the page is called Vault everywhere the registry reaches', () => {
+  const { R, M } = load();
+  const vault = R.page('vault');
+  assert.equal(vault.title, 'Vault'); assert.equal(vault.key, 'c', 'G C still opens it'); assert.equal(vault.doc, 'vault.md');
+  assert.equal(R.tabOf('vault'), 'more');
+  assert.equal(plain(R.paletteEntries()).find(entry => entry.route === 'vault').terms.includes('credentials'), true, 'searching the old name still finds it');
+  assert.equal(plain(M.navModel({ credentials: { attention: [{ id: 'build-server', code: 'rejected' }] } }, null, null, 'vault')).groups.flatMap(group => group.pages).find(page => page.route === 'vault').badge.count, 1);
 });

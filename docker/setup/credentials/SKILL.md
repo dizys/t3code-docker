@@ -43,3 +43,5 @@ Prefer keys, in this order:
 4. **The server doesn't allow keys:** `t3-vault add NAME --host HOST --user USER --password-file <file>`, then `t3-vault trust NAME` and follow what it prints.
 
 If a server's key has changed, stop and show the user what `t3-vault trust NAME` prints. Never get past it with `StrictHostKeyChecking=no` or by editing a known_hosts file.
+
+Saving stores the secret, trusting confirms the server's identity, and testing proves the sign-in works. A scanned key arrives over an unverified connection, so it is not independent proof: confirm its fingerprint out of band with the command `trust` prints (or your provider's console). Never relax the server's sshd throttling to make scans pass.

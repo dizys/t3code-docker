@@ -10,11 +10,17 @@ const T3SkillsUI = (() => {
     let installed = [], reach = null, rows = [], started = false, scan = null, query = '', agent = '', showAll = false, view = 'all', markup = null, highlighted = new Set();
     const filterKey = 't3-console-hide-bundled-skills';
     const viewKey = 't3-console-skill-view';
-    let hideBundled = false, checking = false, checkingSources = 0, hookData = null, hookRead = null, hookResponse = null, cardView = false;
-    try { hideBundled = localStorage.getItem(filterKey) === 'true'; showAll = localStorage.getItem('t3-console-skill-columns') === 'all'; cardView = localStorage.getItem(viewKey) === 'cards'; } catch { /* this session only */ }
+    const unifiedKey = 't3-console-skill-unified';
+    let hideBundled = false, checking = false, checkingSources = 0, hookData = null, hookRead = null, hookResponse = null, cardView = false, unified = false;
+    try { hideBundled = localStorage.getItem(filterKey) === 'true'; showAll = localStorage.getItem('t3-console-skill-columns') === 'all'; cardView = localStorage.getItem(viewKey) === 'cards'; unified = localStorage.getItem(unifiedKey) === 'true'; } catch { /* this session only */ }
     const columns = () => S.providers.filter(provider => showAll || installed.includes(provider.id));
     const roots = () => S.rootsFor(inventories, reach);
-    const library = () => ({ rows, inventories, errors, roots: roots(), installed, agents: columns().map(provider => provider.id), home: reach?.home || getStatus()?.paths?.volume,
+    // Unified view merges same-named folders into one row; the Updates view
+    // always stays physical because each installation tracks its own source.
+    const visibleRows = () => hideBundled ? rows.filter(row => row.scope !== 'system') : rows;
+    const displayRows = () => unified && view !== 'updates' ? S.unify(visibleRows()) : visibleRows();
+    const library = () => ({ rows: displayRows(), physicalRows: rows, inventories, errors, roots: roots(), installed, agents: columns().map(provider => provider.id), home: reach?.home || getStatus()?.paths?.volume,
+      unified,
       install: options => importer.open(options), reviewHooks: pluginId => hooks.open(pluginId), reviewUpdate: reviewSource,
       checkOne: key => checkUpdates([key]), checking: key => checking && (!checkKeys || checkKeys.has(key)), hooksReady: Boolean(hookData), hookSummary: S.hooksSummary(hookData?.hooks) });
     let checkKeys = null;
@@ -79,6 +85,12 @@ const T3SkillsUI = (() => {
       const label = S.nameOf(provider) + ' ' + (provider === 'claude' ? 'visibility' : provider === 'opencode' ? 'permission' : 'availability') + ' for ' + skill.name + ': ' + state.label;
       const key = 'skill-cell-' + provider + '-' + (row?.id || encodeURIComponent(skill.key)) + (full ? '-inspector' : '-table');
       if (errors[provider]) return html`<span class="tc-cell tc-cell--none" title="${errors[provider]}" aria-label="${S.nameOf(provider)} unavailable: ${errors[provider]}">—</span>`;
+      if (skill.unified) {
+        const copies = skill.installations.filter(copy => copy.byProvider[provider]);
+        const count = copies.filter(copy => S.available(copy.byProvider[provider])).length;
+        const summary = `Available in ${count} of ${copies.length} locations. Choose a location to view or change its setting.`;
+        return html`<button class="tc-cell" type="button" data-key="${key}" data-cmd="skills.view" data-id="${skill.key}" data-tone="${count ? '' : 'muted'}" title="${summary}" aria-label="${S.nameOf(provider)} availability for ${skill.name}: ${summary}">${count ? 'Available' : copies.length ? 'Unavailable' : 'Not found'}${icon('chevron-right')}</button>`;
+      }
       if (!row) return html`<button class="tc-cell tc-cell--none" type="button" data-cmd="skills.copy" data-id="${skill.key}" data-provider="${provider}" aria-label="Copy ${skill.name} to ${S.nameOf(provider)}"><span class="tc-cell-dash" aria-hidden="true">—</span><span class="tc-cell-add">${icon('plus')}Add</span></button>`;
       if (pending) return html`<span class="tc-cell" role="status"><span class="tc-spinner" aria-hidden="true"></span><span class="tc-sr">Saving ${label}</span></span>`;
       if (state.kind === 'policy') return full ? html`<select class="tc-select tc-select--sm" data-key="${key}" data-skill-policy="${row.id}" data-skill-provider="${provider}" aria-label="${label}"${disabled(busy)}>${row.stateOptions.map(option => html`<option value="${option.value}"${option.value === row.state ? raw(' selected') : ''}>${option.label}</option>`)}</select>`
@@ -110,12 +122,25 @@ const T3SkillsUI = (() => {
         items: row.stateOptions.map(option => ({ label: option.label, description: explanations[option.value], radio: true, checked: option.value === row.state, run: () => setState(id, provider, option.value) })),
         footer: html`${row.statePath ? html`Saved in <code>${S.displayPath(row.statePath, library().home)}</code>. ` : ''}Applies to new sessions.${provider === 'opencode' && row.effectiveStateText ? html`<br>${row.effectiveStateText}` : ''}` });
     };
+    const findRow = key => displayRows().find(row => row.key === key) || rows.find(row => row.key === key);
+    const expandKeys = keys => {
+      if (!keys) return null;
+      const expanded = new Set();
+      for (const key of keys) {
+        if (typeof key === 'string' && key.startsWith('unified:')) {
+          const unifiedRow = S.unify(rows).find(row => row.key === key);
+          for (const installation of unifiedRow?.installations || []) expanded.add(installation.key);
+        } else expanded.add(key);
+      }
+      return [...expanded];
+    };
     const checkUpdates = async (keys = null) => {
       if (checking || scan || loading.size) return;
-      const tracked = rows.filter(row => row.origin && !errors[row.provider] && (!keys || keys.includes(row.key))).map(row => ({ key: row.key, provider: row.provider, id: row.byProvider[row.provider].id, origin: row.origin,
+      const physicalKeys = expandKeys(keys);
+      const tracked = rows.filter(row => row.origin && !errors[row.provider] && (!physicalKeys || physicalKeys.includes(row.key))).map(row => ({ key: row.key, provider: row.provider, id: row.byProvider[row.provider].id, origin: row.origin,
         epoch: epochs[row.provider], inventory: inventories[row.provider] }));
       if (!tracked.length) return;
-      checking = true; checkKeys = keys ? new Set(keys) : null; checkingSources = new Set(tracked.map(skill => skill.origin.source)).size; paint();
+      checking = true; checkKeys = physicalKeys ? new Set([...physicalKeys, ...(keys || [])]) : null; checkingSources = new Set(tracked.map(skill => skill.origin.source)).size; paint();
       try {
         for (const source of new Set(tracked.map(skill => skill.origin.source))) {
           const batch = tracked.filter(skill => skill.origin.source === source && epochs[skill.provider] === skill.epoch && inventories[skill.provider] === skill.inventory);
@@ -135,7 +160,22 @@ const T3SkillsUI = (() => {
     };
     const updateBadge = (skill, phone = false) => skill.update?.status === 'available' ? html`<button class="tc-upd" type="button" data-key="update-${skill.key}" data-cmd="skills.update" data-id="${skill.key}" aria-label="Review the update for ${skill.name}" title="From ${skill.origin.source}. Review the changes before updating.">${icon('arrow-up')}Update available</button>`
       : skill.update?.status === 'error' ? html`<span class="tc-tagline tc-tagline--src" data-tone="warn" title="${skill.update.error}">${icon('triangle-alert')}${phone ? 'Check failed' : html`<code>${skill.origin.source}</code>`}<span class="tc-sr">Update check failed: ${skill.update.error}</span></span>` : '';
-    function reviewSource(skill, queue) { if (skill?.origin) updater.open(skill.provider, skill.byProvider[skill.provider].id, { queue }); }
+    function reviewSource(skill, queue) {
+      if (!skill) return;
+      if (skill.unified) {
+        const installation = skill.installations.find(row => row.key === skill.sourceKey);
+        if (!installation) return;
+        const physicalQueue = (queue || []).flatMap(key => {
+          if (typeof key === 'string' && key.startsWith('unified:')) {
+            const unifiedRow = S.unify(rows).find(row => row.key === key);
+            return (unifiedRow?.installations || []).filter(row => row.origin).map(row => row.key);
+          }
+          return [key];
+        });
+        return updater.open(installation.provider, installation.byProvider[installation.provider].id, { queue: physicalQueue });
+      }
+      if (skill.origin) updater.open(skill.provider, skill.byProvider[skill.provider].id, { queue });
+    }
     const skillBadges = skill => html`${updateBadge(skill)}${skill.packageManaged ? html`<span class="tc-tagline">${icon('lock')}Package${skill.packageSource ? html` <code>${skill.packageSource}</code>` : ''}</span>` : !Object.values(skill.byProvider).some(row => row.canEdit) ? html`<span class="tc-tagline">${icon('lock')}Read-only</span>` : ''}${skill.metadataError ? html`<span class="tc-badge tc-badge--warn" title="${skill.metadataError}">Check metadata</span>` : ''}`;
     const readersLabel = root => {
       const readers = (root.readers || []).filter(id => installed.includes(id));
@@ -146,7 +186,7 @@ const T3SkillsUI = (() => {
     const agentMenu = trigger => Kit.menu(trigger, { label: 'Available to', items: [{ label: 'Any agent', radio: true, checked: !agent, run: () => { agent = ''; paint(); } }, ...columns().map(provider => ({ label: provider.name, radio: true, checked: agent === provider.id, run: () => { agent = provider.id; paint(); } }))] });
     const groupClosed = group => collapsed.has(group.key) ? collapsed.get(group.key) : !query && view !== 'attention' && ['system', 'admin'].includes(group.root.scope);
     const attentionNotice = skill => {
-      const problem = Object.values(skill.byProvider).find(row => row.error || row.metadataError);
+      const problem = (skill.installations || [skill]).flatMap(copy => Object.values(copy.byProvider)).find(row => row.error || row.metadataError);
       return html`<div class="tc-notice tc-notice--warn tc-sk-skill-notice" role="status">${icon('triangle-alert')}<div class="tc-notice-body"><span class="tc-notice-title">${skill.name} may not load</span><span class="tc-notice-desc">${problem?.error || problem?.metadataError}</span></div>${Object.values(skill.byProvider).some(row => row.canEdit) ? html`<div class="tc-notice-actions"><button class="tc-btn tc-btn--sm" type="button" data-cmd="skills.edit" data-id="${skill.key}">Fix in SKILL.md</button></div>` : ''}</div>`;
     };
     const pluginOf = group => group.rows.find(row => row.byProvider.codex?.pluginId)?.byProvider.codex.pluginId;
@@ -158,7 +198,23 @@ const T3SkillsUI = (() => {
     };
     // A folder's header, shared by the table and the cards: the folder, where
     // it lives, who reads it, and a way to copy it to agents that don't.
-    const groupHead = group => html`<button class="tc-mx-group-toggle" type="button" data-cmd="skills.group" data-id="${group.key}" aria-expanded="${String(!groupClosed(group))}">${icon(groupClosed(group) ? 'chevron-right' : 'chevron-down')}${groupName(group)}</button><code title="${group.root.path}">${S.displayPath(group.root.path, library().home)}</code><span>·</span><span>${group.rows.length}</span><span>·</span><span class="tc-mx-readers" title="${(group.root.readers || []).map(S.nameOf).join(', ')}">${readersLabel(group.root)}</span><span class="tc-spacer"></span>${hookChip(group)}${groupClosed(group) ? html`<span class="tc-mx-collapsed-names" title="${group.rows.map(row => row.name).join(', ')}">${group.rows.map(row => row.name).join(', ')}</span>` : !pluginOf(group) && installed.some(id => !(group.root.readers || []).includes(id)) ? html`<button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-cmd="skills.copy-group" data-id="${group.key}">Copy to ${M.listOf(installed.filter(id => !(group.root.readers || []).includes(id)).map(S.nameOf))}…</button>` : ''}`;
+    // The unified group instead summarizes many folders sharing skill names.
+    const unifiedFolders = rows => [...new Set(rows.flatMap(row => row.folders || []))];
+    const unifiedReaders = rows => [...new Set(rows.flatMap(row => row.root?.readers || []))];
+    const locationsLine = skill => {
+      if (!skill.unified) return '';
+      const labels = skill.locationLabels || [];
+      const folders = skill.folders || [];
+      const text = M.plural(skill.installations.length, 'copy', 'copies') + (labels.length ? ' · ' + labels.join(', ') : '');
+      return html`<p class="tc-mx-desc" title="${folders.join(', ')}">${text}</p>`;
+    };
+    const groupHead = group => {
+      if (group.key === 'unified') {
+        const folders = unifiedFolders(group.rows), readers = unifiedReaders(group.rows).filter(id => installed.includes(id));
+        return html`<button class="tc-mx-group-toggle" type="button" data-cmd="skills.group" data-id="${group.key}" aria-expanded="${String(!groupClosed(group))}">${icon(groupClosed(group) ? 'chevron-right' : 'chevron-down')}All skills · unified by name</button><code title="${folders.join(', ')}">${M.plural(folders.length, 'folder')}</code><span>·</span><span>${group.rows.length}</span><span>·</span><span class="tc-mx-readers" title="${readers.map(S.nameOf).join(', ')}">Read by ${M.listOf(readers.map(S.nameOf)) || 'no agent'}</span><span class="tc-spacer"></span>${hookChip(group)}${groupClosed(group) ? html`<span class="tc-mx-collapsed-names" title="${group.rows.map(row => row.name).join(', ')}">${group.rows.map(row => row.name).join(', ')}</span>` : html`<button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-cmd="skills.unified-off">Show folders</button>`}`;
+      }
+      return html`<button class="tc-mx-group-toggle" type="button" data-cmd="skills.group" data-id="${group.key}" aria-expanded="${String(!groupClosed(group))}">${icon(groupClosed(group) ? 'chevron-right' : 'chevron-down')}${groupName(group)}</button><code title="${group.root.path}">${S.displayPath(group.root.path, library().home)}</code><span>·</span><span>${group.rows.length}</span><span>·</span><span class="tc-mx-readers" title="${(group.root.readers || []).map(S.nameOf).join(', ')}">${readersLabel(group.root)}</span><span class="tc-spacer"></span>${hookChip(group)}${groupClosed(group) ? html`<span class="tc-mx-collapsed-names" title="${group.rows.map(row => row.name).join(', ')}">${group.rows.map(row => row.name).join(', ')}</span>` : !pluginOf(group) && installed.some(id => !(group.root.readers || []).includes(id)) ? html`<button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-cmd="skills.copy-group" data-id="${group.key}">Copy to ${M.listOf(installed.filter(id => !(group.root.readers || []).includes(id)).map(S.nameOf))}…</button>` : ''}`;
+    };
     // The agents that can use a skill, and each agent that limits it.
     const access = skill => ({
       readers: installed.filter(id => !errors[id] && S.available(skill.byProvider[id])),
@@ -166,26 +222,28 @@ const T3SkillsUI = (() => {
     });
     // Cards keep the table's folders, so same-named skills stay apart and
     // bundled skills stay collapsed. Each card says which agents can use the
-    // skill and which limit it; the inspector has the rest.
+    // skill and which limit it; the inspector has the rest. Unified cards
+    // name every folder sharing the skill name.
     const card = skill => {
       const { readers, exceptions } = access(skill);
       return html`<article class="tc-skill-card tc-group" role="listitem" data-key="skill-card-${skill.key}"${(highlighted.has(skill.name) || highlighted.has(skill.key)) ? raw(' data-highlight') : ''}>
         <button class="tc-skill-card-main" type="button" data-cmd="skills.view" data-id="${skill.key}">
           <span class="tc-skill-card-top"><span class="tc-skill-card-name">${skill.name}</span>${skill.update?.status === 'available' ? html`<span class="tc-upd">${icon('arrow-up')}Update available</span>` : skill.attention ? html`<span class="tc-badge tc-badge--warn">Needs attention</span>` : skill.update?.status === 'error' ? html`<span class="tc-tagline" data-tone="warn" title="${skill.update.error}">${icon('triangle-alert')}Check failed<span class="tc-sr">Update check failed: ${skill.update.error}</span></span>` : ''}</span>
           <span class="tc-skill-card-desc" title="${skill.description}">${skill.description || 'No description.'}</span>
+          ${skill.unified ? html`<span class="tc-hint" title="${(skill.folders || []).join(', ')}">${M.plural(skill.installations.length, 'copy', 'copies')}${skill.locationLabels?.length ? ' · ' + skill.locationLabels.join(', ') : ''}</span>` : ''}
           <span class="tc-skill-card-agents"><span class="tc-agent-stack" aria-hidden="true">${readers.map(mark)}</span><span>${readers.length ? M.plural(readers.length, 'agent') + ' can use it' : 'No agent can use it yet'}${exceptions.length ? ' · ' + exceptions.join(', ') : ''}</span></span>
         </button>
       </article>`;
     };
     const cardGrid = filtered => html`<div class="tc-skill-cards">${S.groups(filtered).map(group => html`<section class="tc-skill-cards-group" data-key="card-group-${group.key}" aria-label="${groupName(group)}"><div class="tc-mx-group tc-skill-cards-head">${groupHead(group)}</div>${groupClosed(group) ? '' : html`<div class="tc-skill-grid" role="list" aria-label="${M.plural(group.rows.length, 'skill')}">${group.rows.map(card)}</div>`}</section>`)}</div>`;
     const table = filtered => html`<div class="tc-mx-scroll tc-sk-matrix" tabindex="0" aria-label="Skills by agent"><div class="tc-mx" role="table" aria-label="Skills and agent settings" style="--mx-agent-count:${columns().length};${!showAll && installed.length < S.providers.length && columns().length ? '--mx-cols:minmax(var(--mx-name-width), 1fr) ' + Array(Math.max(0, columns().length - 1)).fill('var(--mx-agent-width)').join(' ') + ' calc(var(--mx-agent-width) + 2.375rem);--mx-more-space:2.375rem' : ''}">
-      <div class="tc-mx-head" role="row"><div class="tc-mx-head-label" role="columnheader">Skill</div>${columns().map((provider, index) => html`<div class="tc-mx-agent" role="columnheader"${!installed.includes(provider.id) ? raw(' data-uninstalled title="Adding, editing and importing skills still work."') : ''}><span class="tc-mx-agent-name">${mark(provider.id)}${provider.name}${errors[provider.id] ? html`<span class="tc-dot tc-dot--warn" title="${errors[provider.id]}" aria-label="Couldn’t read ${provider.name} skills"></span>` : ''}</span><span class="tc-mx-agent-kind">${loading.has(provider.id) ? 'Reading…' : installed.includes(provider.id) ? provider.control : 'Not detected'}</span>${!showAll && installed.length < S.providers.length && index === columns().length - 1 ? html`<button class="tc-btn tc-btn--ghost tc-btn--xs tc-mx-more" type="button" data-cmd="skills.all-agents" aria-label="Show ${M.listOf(S.providers.filter(provider => !installed.includes(provider.id)).map(provider => provider.name))}, which aren’t detected here">+${S.providers.length - installed.length}</button>` : ''}</div>`)}</div>
+      <div class="tc-mx-head" role="row"><div class="tc-mx-head-label" role="columnheader">Skill${unified && view !== 'updates' ? ' · unified by name' : ''}</div>${columns().map((provider, index) => html`<div class="tc-mx-agent" role="columnheader"${!installed.includes(provider.id) ? raw(' data-uninstalled title="Adding, editing and importing skills still work."') : ''}><span class="tc-mx-agent-name">${mark(provider.id)}${provider.name}${errors[provider.id] ? html`<span class="tc-dot tc-dot--warn" title="${errors[provider.id]}" aria-label="Couldn’t read ${provider.name} skills"></span>` : ''}</span><span class="tc-mx-agent-kind">${loading.has(provider.id) ? 'Reading…' : installed.includes(provider.id) ? provider.control : 'Not detected'}</span>${!showAll && installed.length < S.providers.length && index === columns().length - 1 ? html`<button class="tc-btn tc-btn--ghost tc-btn--xs tc-mx-more" type="button" data-cmd="skills.all-agents" aria-label="Show ${M.listOf(S.providers.filter(provider => !installed.includes(provider.id)).map(provider => provider.name))}, which aren’t detected here">+${S.providers.length - installed.length}</button>` : ''}</div>`)}</div>
       ${S.groups(filtered).map(group => html`<div role="rowgroup" data-key="skill-group-${group.key}"><div role="row"><div class="tc-mx-group" role="cell" aria-colspan="${columns().length + 1}">${groupHead(group)}</div></div>
-        ${groupClosed(group) ? '' : group.rows.map(skill => html`<div class="tc-mx-row" role="row" data-key="skill-${skill.key}"${(highlighted.has(skill.name) || highlighted.has(skill.key)) ? raw(' data-highlight') : ''}><div class="tc-mx-skill" role="cell"><div class="tc-mx-skill-copy"><div class="tc-mx-name"><button class="tc-skill-name" type="button" data-key="skill-name-${skill.key}" data-cmd="skills.view" data-id="${skill.key}">${skill.name}</button>${skillBadges(skill)}</div><p class="tc-mx-desc" title="${skill.description}">${skill.description}</p></div><div class="tc-mx-actions"><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs" type="button" data-key="skill-menu-${skill.key}" data-cmd="skills.menu" data-id="${skill.key}" aria-label="Actions for ${skill.name}">${icon('ellipsis')}</button></div></div>${columns().map(provider => html`<div class="tc-cellwrap" role="cell" data-key="cell-${provider.id}">${availability(skill, provider.id)}</div>`)}</div>`)}</div>`)}
+        ${groupClosed(group) ? '' : group.rows.map(skill => html`<div class="tc-mx-row" role="row" data-key="skill-${skill.key}"${(highlighted.has(skill.name) || highlighted.has(skill.key)) ? raw(' data-highlight') : ''}><div class="tc-mx-skill" role="cell"><div class="tc-mx-skill-copy"><div class="tc-mx-name"><button class="tc-skill-name" type="button" data-key="skill-name-${skill.key}" data-cmd="skills.view" data-id="${skill.key}">${skill.name}</button>${skillBadges(skill)}</div><p class="tc-mx-desc" title="${skill.description}">${skill.description}</p>${locationsLine(skill)}</div><div class="tc-mx-actions"><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs" type="button" data-key="skill-menu-${skill.key}" data-cmd="skills.menu" data-id="${skill.key}" aria-label="Actions for ${skill.name}">${icon('ellipsis')}</button></div></div>${columns().map(provider => html`<div class="tc-cellwrap" role="cell" data-key="cell-${provider.id}">${availability(skill, provider.id)}</div>`)}</div>`)}</div>`)}
     </div></div>`;
-    const phoneList = filtered => html`<div class="tc-sk-phone-list">${S.groups(filtered).map(group => html`<div class="tc-plist" data-key="phone-group-${group.key}"><div class="tc-plist-group"><button class="tc-mx-group-toggle" type="button" data-cmd="skills.group" data-id="${group.key}" aria-expanded="${String(!groupClosed(group))}">${groupName(group)}</button><span>· ${group.rows.length}</span><span class="tc-spacer"></span>${hookChip(group) || html`<span>Read by ${M.plural((group.root.readers || []).filter(id => installed.includes(id)).length, 'agent')}</span>`}</div>${groupClosed(group) ? '' : group.rows.map(skill => {
+    const phoneList = filtered => html`<div class="tc-sk-phone-list">${S.groups(filtered).map(group => html`<div class="tc-plist" data-key="phone-group-${group.key}"><div class="tc-plist-group"><button class="tc-mx-group-toggle" type="button" data-cmd="skills.group" data-id="${group.key}" aria-expanded="${String(!groupClosed(group))}">${group.key === 'unified' ? 'All skills · unified by name' : groupName(group)}</button><span>· ${group.rows.length}</span><span class="tc-spacer"></span>${group.key === 'unified' ? html`<button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-cmd="skills.unified-off">Show folders</button>` : hookChip(group) || html`<span>Read by ${M.plural((group.root.readers || []).filter(id => installed.includes(id)).length, 'agent')}</span>`}</div>${groupClosed(group) ? '' : group.rows.map(skill => {
       const { readers, exceptions } = access(skill);
-      return html`<div class="tc-prow tc-sk-phone-row" data-key="phone-skill-${skill.key}" data-cmd="skills.view" data-id="${skill.key}"${(highlighted.has(skill.name) || highlighted.has(skill.key)) ? raw(' data-highlight') : ''}><span class="tc-prow-name-line"><button class="tc-skill-name tc-prow-name" type="button" data-key="phone-skill-open-${skill.key}" data-cmd="skills.view" data-id="${skill.key}">${skill.name}</button>${updateBadge(skill, true)}</span><span class="tc-prow-desc">${skill.description}</span><span class="tc-prow-agents"><span class="tc-agent-stack" aria-hidden="true">${readers.map(mark)}</span><span>${M.plural(readers.length, 'agent')}${exceptions.length ? ' · ' + exceptions.join(', ') : ''}</span></span>${icon('chevron-right')}</div>`;
+      return html`<div class="tc-prow tc-sk-phone-row" data-key="phone-skill-${skill.key}" data-cmd="skills.view" data-id="${skill.key}"${(highlighted.has(skill.name) || highlighted.has(skill.key)) ? raw(' data-highlight') : ''}><span class="tc-prow-name-line"><button class="tc-skill-name tc-prow-name" type="button" data-key="phone-skill-open-${skill.key}" data-cmd="skills.view" data-id="${skill.key}">${skill.name}</button>${updateBadge(skill, true)}</span><span class="tc-prow-desc">${skill.description}</span>${skill.unified ? html`<span class="tc-prow-desc" title="${(skill.folders || []).join(', ')}">${M.plural(skill.installations.length, 'copy', 'copies')}${skill.locationLabels?.length ? ' · ' + skill.locationLabels.join(', ') : ''}</span>` : ''}<span class="tc-prow-agents"><span class="tc-agent-stack" aria-hidden="true">${readers.map(mark)}</span><span>${M.plural(readers.length, 'agent')}${exceptions.length ? ' · ' + exceptions.join(', ') : ''}</span></span>${icon('chevron-right')}</div>`;
     })}</div>`)}</div>`;
     const inventoryNotices = () => {
       const failed = new Map();
@@ -198,8 +256,7 @@ const T3SkillsUI = (() => {
         ])}`;
     };
     const show = value => { view = value; if (value === 'all' && Kit.isPhone()) agent = ''; paint(); };
-    const visibleRows = () => hideBundled ? rows.filter(row => row.scope !== 'system') : rows;
-    const filteredRows = () => S.filter(agent && errors[agent] ? [] : visibleRows(), { query, agent, needsAttention: view === 'attention' });
+    const filteredRows = () => S.filter(agent && errors[agent] ? [] : displayRows(), { query, agent, needsAttention: view === 'attention' });
     const hookNotice = () => {
       const summary = S.hooksSummary(hookData?.hooks), waiting = summary.waiting;
       if (!waiting.length) return '';
@@ -225,10 +282,12 @@ const T3SkillsUI = (() => {
       return html`<div class="tc-plist tc-pnotes tc-sk-phone-summary">${summary.available.length ? html`<button class="tc-pnote" type="button" data-icon="accent" data-cmd="skills.show" data-id="updates">${icon('arrow-up')}<span><strong>${M.plural(summary.available.length, 'skill update')}</strong><small>${M.listOf(summary.available.map(row => row.name))}</small></span>${icon('chevron-right')}</button>` : ''}${waiting ? html`<button class="tc-pnote" type="button" data-icon="warn" data-cmd="skills.hooks">${icon('shield-alert')}<span><strong>${M.plural(waiting, 'plugin hook')} to review</strong><small>${M.listOf(hooks.plugins.filter(plugin => plugin.waiting.length).map(plugin => plugin.name))} won’t run them until you do</small></span>${icon('chevron-right')}</button>` : ''}${problems.length ? html`<button class="tc-pnote" type="button" data-icon="warn" data-cmd="${problems.length === 1 ? 'skills.view' : 'skills.show'}" data-id="${problems.length === 1 ? problems[0].key : 'attention'}">${icon('triangle-alert')}<span><strong>${problems.length === 1 ? problems[0].name + ' may not load' : problems.length + ' skills need attention'}</strong><small>${problems.length === 1 ? Object.values(problems[0].byProvider).find(row => row.metadataError || row.error)?.metadataError || 'Open the skill to review the problem.' : 'Review skills that may not load.'}</small></span>${icon('chevron-right')}</button>` : ''}</div>`;
     };
     const body = () => {
-      const visible = visibleRows(), bundled = rows.filter(row => row.scope === 'system'), filtered = filteredRows(), problems = visible.filter(row => row.attention);
+      const visible = displayRows(), physicalBundled = rows.filter(row => row.scope === 'system');
+      const bundled = unified && view !== 'updates' ? S.unify(physicalBundled) : physicalBundled;
+      const filtered = filteredRows(), problems = visible.filter(row => row.attention);
       const failed = installed.some(id => errors[id]), scanning = Boolean(scan) || loading.size > 0;
       const scannedAt = Math.min(...Object.values(inventories).map(inventory => inventory.scannedAt || Date.now()));
-      return html`<div class="tc-sk-toolbar"><label class="tc-sk-search">${icon('search')}<input class="tc-input" type="search" id="skill-search" data-key="skill-search" value="${query}" placeholder="Search ${rows.length || ''} skills" aria-label="Search skills"><kbd class="tc-kbd">/</kbd></label><button class="tc-btn tc-btn--ghost tc-btn--icon tc-sk-phone-view" type="button" data-key="skills-phone-view" data-cmd="skills.view-menu" aria-haspopup="menu" aria-label="View options">${icon('sliders-horizontal')}</button><div class="tc-sk-desktop-filters"><button class="tc-btn tc-btn--sm" type="button" data-cmd="skills.filter" aria-haspopup="menu">Available to <span class="tc-btn-value">${agent ? S.nameOf(agent) : 'Any agent'}</span>${icon('chevron-down', 'tc-chev')}</button></div><span class="tc-spacer"></span><div class="tc-sk-desktop-actions">${actions()}</div></div>
+      return html`<div class="tc-sk-toolbar"><label class="tc-sk-search">${icon('search')}<input class="tc-input" type="search" id="skill-search" data-key="skill-search" value="${query}" placeholder="Search ${visible.length || ''} skills" aria-label="Search skills"><kbd class="tc-kbd">/</kbd></label><button class="tc-btn tc-btn--ghost tc-btn--icon tc-sk-phone-view" type="button" data-key="skills-phone-view" data-cmd="skills.view-menu" aria-haspopup="menu" aria-label="View options">${icon('sliders-horizontal')}</button><div class="tc-sk-desktop-filters"><button class="tc-btn tc-btn--sm" type="button" data-cmd="skills.filter" aria-haspopup="menu">Available to <span class="tc-btn-value">${agent ? S.nameOf(agent) : 'Any agent'}</span>${icon('chevron-down', 'tc-chev')}</button></div><span class="tc-spacer"></span><div class="tc-sk-desktop-actions">${actions()}</div></div>
         <div class="tc-chipbar tc-sk-agent-chips" aria-label="Filter skills"><button class="tc-chip-btn" type="button" data-cmd="skills.show" data-id="all" aria-pressed="${String(view === 'all' && !agent)}">All <span class="tc-tab-count">${visible.length}</span></button>${visible.some(row => row.origin) ? html`<button class="tc-chip-btn" type="button" data-cmd="skills.show" data-id="updates" aria-pressed="${String(view === 'updates')}">${S.updateSummary(visible).available.length ? html`<span class="tc-dot" data-accent></span>` : ''}Updates${S.updateSummary(visible).checkedAt ? html`<span class="tc-tab-count">${S.updateSummary(visible).available.length}</span>` : ''}</button>` : ''}${problems.length ? html`<button class="tc-chip-btn" type="button" data-cmd="skills.show" data-id="attention" aria-pressed="${String(view === 'attention')}"><span class="tc-dot tc-dot--warn"></span>Needs attention <span class="tc-tab-count">${problems.length}</span></button>` : ''}${columns().map(provider => html`<button class="tc-chip-btn" type="button" data-cmd="skills.agent" data-provider="${provider.id}" aria-pressed="${String(agent === provider.id)}">${mark(provider.id)}${provider.name}<span class="tc-tab-count">${visible.filter(row => !errors[provider.id] && S.available(row.byProvider[provider.id])).length}</span></button>`)}</div>
         ${phoneSummary(visible, problems)}<div class="tc-sk-notices">${problems.slice(0, 3).map(attentionNotice)}${problems.length > 3 ? html`<button class="tc-btn tc-btn--ghost tc-btn--sm" type="button" data-cmd="skills.show" data-id="attention">and ${problems.length - 3} more</button>` : ''}${inventoryNotices()}${hookNotice()}</div>
         <div class="tc-group tc-sk-card" data-view="${view}"${checking ? raw(' data-checking') : ''}>${listHeader(visible, problems)}${view === 'updates' ? updatesTable(filtered) : !rows.length && scanning ? html`<div class="tc-sk-skeleton" role="status" aria-label="Reading skill inventories">${[1, 2, 3, 4].map(i => html`<div class="tc-row"><span class="tc-skeleton"></span><span class="tc-hint">${i === 1 ? 'Reading skills across your agents…' : ''}</span></div>`)}</div>` : !filtered.length ? html`<div class="tc-empty tc-sk-empty"><span class="tc-empty-media"><span class="tc-empty-icon">${icon('sparkles')}</span></span><span class="tc-empty-title">${rows.length ? 'No skills match these filters' : failed ? 'Skills couldn’t be read' : 'No skills yet'}</span><span class="tc-empty-desc">${rows.length ? 'Try another search or clear the library filters.' : failed ? 'Some agent inventories are unavailable. Retry the scan to check for skills.' : 'Add one, or install some from a source.'}</span><div class="tc-sk-empty-actions">${rows.length ? html`<button class="tc-btn" type="button" data-cmd="skills.clear">Clear filters</button>` : failed ? html`<button class="tc-btn" type="button" data-cmd="skills.refresh">Retry scan</button>` : actions()}</div></div>` : html`${cardView ? cardGrid(filtered) : table(filtered)}${phoneList(filtered)}`}
@@ -245,15 +304,30 @@ const T3SkillsUI = (() => {
       if (showAll) for (const provider of S.providers) if (!inventories[provider.id] && !loading.has(provider.id)) void loadProvider(provider.id);
     };
     const toggleBundled = () => { hideBundled = !hideBundled; try { localStorage.setItem(filterKey, String(hideBundled)); } catch { /* this session only */ } paint(); };
+    const toggleUnified = () => { unified = !unified; try { localStorage.setItem(unifiedKey, String(unified)); } catch { /* this session only */ } paint(); };
+    const unifiedCount = () => {
+      const names = new Map();
+      for (const row of visibleRows()) names.set(row.name, (names.get(row.name) || 0) + 1);
+      return [...names.values()].filter(count => count > 1).length;
+    };
     const viewMenu = trigger => Kit.menu(trigger, { label: 'Skill view options', head: { title: cardView && !Kit.isPhone() ? 'Agents' : 'Agent columns' }, items: [
       { label: 'Installed agents', description: 'The ' + M.plural(installed.length, 'agent') + ' on this server.', radio: true, checked: !showAll, run: () => chooseColumns(false) },
       { label: 'All agents', description: installed.length < S.providers.length ? 'Also ' + M.listOf(S.providers.filter(provider => !installed.includes(provider.id)).map(provider => provider.name)) + '. They aren’t detected here, but you can still add skills for them.' : 'Every supported agent is installed here.', radio: true, checked: showAll, run: () => chooseColumns(true) },
       ...(rows.some(row => row.scope === 'system') ? [{ sep: true }, { label: 'Show bundled skills', description: M.plural(rows.filter(row => row.scope === 'system').length, 'skill') + ' that ship with Codex. Codex manages them, so they can’t be edited here.', checkbox: true, checked: !hideBundled, run: toggleBundled }] : []),
+      ...((() => { const dupes = unifiedCount(); return dupes ? [{ sep: true }, { label: 'Unified view · one row per skill name', description: dupes + (dupes === 1 ? ' name lives' : ' names live') + ' in several folders. Every location is kept; editing still picks a location.', checkbox: true, checked: unified, run: toggleUnified }] : unified ? [{ sep: true }, { label: 'Unified view · one row per skill name', description: 'Same-named skills in different folders appear once, with every location kept.', checkbox: true, checked: unified, run: toggleUnified }] : []; })()),
     ], footer: 'Remembered in this browser.' });
     // Table or cards on wider screens; phones always show the grouped list.
     const setCardView = value => { cardView = value === true; try { localStorage.setItem(viewKey, cardView ? 'cards' : 'table'); } catch { /* this session only */ } paint(); };
     const menu = (key, trigger) => {
-      const skill = rows.find(row => row.key === key); if (!skill) return;
+      const skill = findRow(key); if (!skill) return;
+      if (skill.unified) {
+        Kit.menu(trigger, { label: skill.name + ' actions', items: [
+          { label: 'View locations…', icon: 'file-text', run: () => inspector.open(key) },
+          ...(skill.origin ? [{ label: skill.update?.status === 'available' ? 'Review update…' : 'Review source…', icon: 'download', run: () => reviewSource(skill) }, { label: 'Check for updates', icon: 'refresh-cw', disabled: checking, run: () => checkUpdates([key]) }] : []),
+          { label: skill.installations.length > 1 ? 'Copy paths' : 'Copy path', icon: 'copy', run: () => Kit.copy(skill.installations.map(row => S.directory(row.path)).join('\n'), trigger, 'Skill folder paths copied') },
+        ] });
+        return;
+      }
       Kit.menu(trigger, { label: skill.name + ' actions', items: [
         { label: 'View', icon: 'file-text', run: () => inspector.open(key) },
         ...(skill.canEdit ? [{ label: 'Edit SKILL.md', icon: 'pencil', run: () => inspector.open(key, true) }] : []),
@@ -266,10 +340,18 @@ const T3SkillsUI = (() => {
     return {
       content: () => html`<div class="tc-skills-library" id="skill-library" data-key="skill-library" data-keep>${markup || (markup = body())}</div>`, actions,
       activate: navigation => { if (!started || navigation && installed.join() !== S.providers.filter(provider => getStatus()?.harnesses?.some(row => row.id === provider.id && row.installed)).map(provider => provider.id).join()) return loadAll(); },
-      checkUpdates, toggleBundled, show, viewMenu, allAgents: () => chooseColumns(true), layout: id => setCardView(id === 'cards'),
-      update: key => reviewSource(rows.find(row => row.key === key)), checkOne: key => checkUpdates([key]),
-      reviewUpdates: () => { const queue = filteredRows().filter(row => row.origin && row.update?.status === 'available').sort(S.updateOrder); if (queue.length) reviewSource(queue[0], queue.map(row => row.key)); },
-      count: () => rows.length, refresh: () => { if (installed.includes('codex')) void loadHooks(true); return loadAll(true); }, setState, policyMenu, menu,
+      checkUpdates, toggleBundled, toggleUnified, show, viewMenu, allAgents: () => chooseColumns(true), layout: id => setCardView(id === 'cards'),
+      unifiedOff: () => { if (unified) toggleUnified(); },
+      update: key => reviewSource(findRow(key)), checkOne: key => checkUpdates([key]),
+      reviewUpdates: () => {
+        if (unified && view !== 'updates') {
+          const physical = filteredRows().flatMap(row => row.unified ? (row.installations || []).filter(installation => installation.origin && installation.update?.status === 'available') : (row.origin && row.update?.status === 'available' ? [row] : []));
+          const ordered = physical.sort(S.updateOrder);
+          if (ordered.length) return reviewSource(rows.find(row => row.key === ordered[0].key) || ordered[0], ordered.map(row => row.key));
+        }
+        const queue = filteredRows().filter(row => row.origin && row.update?.status === 'available').sort(S.updateOrder); if (queue.length) reviewSource(queue[0], queue.map(row => row.key));
+      },
+      count: () => unified ? S.unify(rows).length : rows.length, refresh: () => { if (installed.includes('codex')) void loadHooks(true); return loadAll(true); }, setState, policyMenu, menu,
       beforeNavigate: () => hooks.close() && updater.close() && importer.closeForNavigation() ? inspector.close('route') : false,
       hooks: pluginId => hooks.open(pluginId),
       view: (id, editing = false) => inspector.open(id, editing), add: async () => {
@@ -282,11 +364,17 @@ const T3SkillsUI = (() => {
       focusSearch: () => document.getElementById('skill-search')?.focus(),
       select: value => { agent = value; paint(); }, attention: () => show(view === 'attention' ? 'all' : 'attention'),
       clear: () => { query = agent = ''; hideBundled = false; view = 'all'; try { localStorage.setItem(filterKey, 'false'); } catch { /* this session only */ } paint(); const field = document.getElementById('skill-search'); if (field) field.value = ''; },
-      group: key => { const group = S.groups(rows).find(group => group.key === key); if (group) collapsed.set(key, !groupClosed(group)); paint(); },
+      group: key => {
+        if (key === 'unified') { collapsed.set(key, !groupClosed({ key, root: { scope: 'user' } })); paint(); return; }
+        const group = S.groups(displayRows()).find(group => group.key === key); if (group) collapsed.set(key, !groupClosed(group)); paint();
+      },
       columns: viewMenu,
-      copy: (key, provider) => { const skill = rows.find(row => row.key === key); if (skill) importer.open({ source: S.directory(skill.path), names: [skill.name], agents: provider ? [provider] : undefined, step: 2 }); },
-      copyGroup: key => { const group = S.groups(rows).find(group => group.key === key); if (group) importer.open({ source: group.root.path, agents: installed.filter(id => !(group.root.readers || []).includes(id)), step: 2 }); },
-      paletteItems: () => [{ id: 'skills-install', label: 'Install skills from source…', desc: 'Preview and install skills into agent folders', icon: 'download', cmd: { cmd: 'skills.import' } }, { id: 'skills-new', label: 'New skill', desc: 'Write a local SKILL.md', icon: 'plus', cmd: { cmd: 'skills.add' } }, { id: 'skills-rescan', label: 'Rescan skills', desc: 'Refresh all agent inventories', icon: 'refresh-cw', cmd: { cmd: 'skills.refresh' } }, ...rows.map(row => ({ id: 'skill-' + row.key, quiet: true, label: row.name, desc: row.description, icon: 'file-text', cmd: { cmd: 'skills.view', id: row.key } }))],
+      copy: (key, provider) => { const skill = findRow(key); if (skill) importer.open({ source: S.directory(skill.path), names: [skill.name], agents: provider ? [provider] : undefined, step: 2 }); },
+      copyGroup: key => {
+        if (key === 'unified') { if (unified) toggleUnified(); return; }
+        const group = S.groups(displayRows()).find(group => group.key === key); if (group) importer.open({ source: group.root.path, agents: installed.filter(id => !(group.root.readers || []).includes(id)), step: 2 });
+      },
+      paletteItems: () => [{ id: 'skills-install', label: 'Install skills from source…', desc: 'Preview and install skills into agent folders', icon: 'download', cmd: { cmd: 'skills.import' } }, { id: 'skills-new', label: 'New skill', desc: 'Write a local SKILL.md', icon: 'plus', cmd: { cmd: 'skills.add' } }, { id: 'skills-rescan', label: 'Rescan skills', desc: 'Refresh all agent inventories', icon: 'refresh-cw', cmd: { cmd: 'skills.refresh' } }, ...displayRows().map(row => ({ id: 'skill-' + row.key, quiet: true, label: row.name + (row.unified ? ' (' + row.installations.length + ' locations)' : ''), desc: row.description, icon: 'file-text', cmd: { cmd: 'skills.view', id: row.key } }))],
     };
   };
   return { create, stateOf: row => ({ text: S.state(row).label, tone: row.error ? 'warn' : S.available(row) ? 'ok' : '' }) };

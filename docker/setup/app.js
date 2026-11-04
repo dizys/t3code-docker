@@ -3813,6 +3813,8 @@
     'skills.check-one': a => skillsUI.checkOne(a.id),
     'skills.review-updates': () => skillsUI.reviewUpdates(),
     'skills.bundled': () => skillsUI.toggleBundled(),
+    'skills.unified': () => skillsUI.toggleUnified(),
+    'skills.unified-off': () => skillsUI.unifiedOff(),
     'skills.view': (a) => skillsUI.view(a.id),
     'skills.add': () => skillsUI.add(),
     'skills.import': () => skillsUI.install(),

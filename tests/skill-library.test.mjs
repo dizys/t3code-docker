@@ -123,3 +123,40 @@ test('path boundaries, environment paths and collapsed system grouping are indep
     { roots: [...roots, { owner: null, scope: 'system', source: 'System', path: '/custom/codex/skills/.system', readers: ['codex'] }] });
   assert.equal(rows[0].groupLabel, 'Codex system skills');
 });
+
+test('unified view merges same-named folders into one row and keeps singletons physical', () => {
+  const codexRow = (name, file, extra = {}) => ({ id: 'codex-' + name + '-' + file, name, description: name + ' workflow', path: '/custom/codex/skills/' + file + '/SKILL.md', resolvedPath: '/custom/codex/skills/' + file + '/SKILL.md', scope: 'user', source: 'Provider', canEdit: true, ...extra });
+  const sharedRow = (name, extra = {}) => ({ id: 'shared-' + name, name, description: name, path: '/shared/skills/' + name + '/SKILL.md', resolvedPath: '/shared/skills/' + name + '/SKILL.md', scope: 'user', source: 'Shared .agents', canEdit: true, ...extra });
+  const physical = [
+    { key: '/custom/codex/skills/review/SKILL.md', path: '/custom/codex/skills/review/SKILL.md', name: 'review', description: 'Review', provider: 'codex', byProvider: { codex: codexRow('review', 'review') }, aliases: [], root: { path: '/custom/codex/skills', readers: ['codex'] }, groupKey: '/custom/codex/skills', groupLabel: 'Codex folder' },
+    { key: '/shared/skills/review/SKILL.md', path: '/shared/skills/review/SKILL.md', name: 'review', description: 'Review shared', provider: 'codex', byProvider: { codex: codexRow('review', 'review', { path: '/shared/skills/review/SKILL.md' }) }, aliases: [], root: { path: '/shared/skills', readers: ['codex', 'opencode'] }, groupKey: '/shared/skills', groupLabel: 'Shared .agents folder' },
+    { key: '/custom/codex/skills/unique/SKILL.md', path: '/custom/codex/skills/unique/SKILL.md', name: 'unique', description: 'Only here', provider: 'codex', byProvider: { codex: codexRow('unique', 'unique') }, aliases: [], root: { path: '/custom/codex/skills', readers: ['codex'] }, groupKey: '/custom/codex/skills', groupLabel: 'Codex folder' },
+  ];
+  const unified = model.unify(physical);
+  assert.equal(unified.length, 2);
+  const merged = unified.find(row => row.name === 'review');
+  assert.ok(merged.unified);
+  assert.equal(merged.key, 'unified:review');
+  assert.equal(merged.installations.length, 2);
+  assert.equal(merged.groupKey, 'unified');
+  assert.deepEqual([...merged.folders].sort(), ['/custom/codex/skills/review', '/shared/skills/review']);
+  assert.ok(merged.byProvider.codex);
+  const singleton = unified.find(row => row.name === 'unique');
+  assert.equal(singleton.key, '/custom/codex/skills/unique/SKILL.md');
+  assert.equal(singleton.unified, undefined);
+  const grouped = model.groups(unified).sort((a, b) => a.key.localeCompare(b.key));
+  assert.ok(grouped.some(group => group.key === 'unified' && group.rows.length === 1 && group.rows[0].name === 'review'));
+  assert.ok(grouped.some(group => group.key === '/custom/codex/skills/skills/review' || group.rows.some(row => row.name === 'unique')));
+});
+
+test('unified availability includes an available copy even when another copy has native controls', () => {
+  const row = (key, entry, extra = {}) => ({ key, path: key, name: 'review', description: '', provider: 'codex', byProvider: { codex: entry }, root: { readers: ['codex'] }, ...extra });
+  const rows = [row('/a/SKILL.md', { id: 'off', state: 'disabled', canToggle: true }, { description: 'needle', origin: { source: 'first/repo' }, update: { status: 'current' } }),
+    row('/b/SKILL.md', { id: 'found' }, { description: 'A longer description from the other copy', origin: { source: 'second/repo' }, update: { status: 'available' } })];
+  const [unified] = model.unify(rows);
+  assert.equal(model.available(unified.byProvider.codex), true);
+  assert.equal(unified.byProvider.codex.id, 'found');
+  assert.equal(unified.origin.source, 'second/repo', 'source and update must describe the same physical copy');
+  assert.equal(model.filter([unified], { query: 'needle' }).length, 1, 'search includes every location description');
+  assert.equal(rows[0].byProvider.codex.state, 'disabled', 'grouping does not change native settings');
+});

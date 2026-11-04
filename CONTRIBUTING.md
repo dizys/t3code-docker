@@ -66,6 +66,9 @@ Issues and pull requests are welcome. Before opening one:
   serialization, stale saves/plans, late replies, replacement consent and partial
   retry. Like the other audits it uses the existing Playwright installation
   (`NODE_PATH` if needed) and `CHROME_PATH` for Chromium.
+  `T3_SKILLS_UI_UNIFIED_ONLY=1` narrows an iteration to grouped locations,
+  draft guards, the selected save target, and failed/late location reads.
+  These cases also run in the full audit.
   Review console changes beyond the populated mockup: empty, loading, unavailable,
   expanded, hover and keyboard-focus states, long paths, and both scroll edges.
   Compare the changed states at the same viewport in light and dark, including a

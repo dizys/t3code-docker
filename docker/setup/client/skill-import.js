@@ -108,7 +108,7 @@ const T3SkillImport = (() => {
         render(true);
       };
       const filteredSkills = () => (view.preview?.skills || []).filter(skill => (skill.name + ' ' + skill.description).toLocaleLowerCase().includes(view.query.toLocaleLowerCase()));
-      const installedName = name => getLibrary().rows.some(row => row.name === name && row.root.owner && getLibrary().installed.includes(row.root.owner));
+      const installedName = name => [...(getLibrary().rows || []), ...(getLibrary().physicalRows || [])].some(row => row.name === name && row.root?.owner && getLibrary().installed.includes(row.root.owner));
       const sourceSummary = () => {
         const info = view.preview?.sourceInfo;
         return html`<div class="tc-source-found">${icon('check')}<strong>${info?.type === 'git' ? /github\.com/.test(info.source) ? 'GitHub' : /gitlab\.com/.test(info.source) ? 'GitLab' : 'Git repository' : info?.type === 'local' ? 'Container folder' : 'Source'}</strong><code>${info?.source || view.source}</code>${info?.commit ? html`<span>·</span><code title="${info.commit}">${info.ref || 'HEAD'} @ ${info.commit.slice(0, 7)}</code>` : ''}<span>· ${M.plural(view.preview?.skills?.length || 0, 'skill')}</span></div>`;

@@ -93,7 +93,16 @@ The **Skills** tab is one library across installed Claude Code, Codex,
 OpenCode, Cursor, Grok Build, Muse Code and Antigravity agents. Each physical
 `SKILL.md` is one row, joined by resolved path, with one column per installed
 agent. A name appearing in two different folders remains two installations.
-The **Installed agents** menu in the Skill header switches to **All agents**,
+The **View** menu offers **Unified view · one row per skill name** for the
+opposite: same-named folders collapse into one row, with the copy count and
+every folder kept alongside it. Availability columns merge, so an agent shows
+as able when any copy serves it. Select a cell to open the inspector, then
+choose a location before changing its setting, copying, editing, linking or
+removing it. Unsaved drafts require confirmation before switching locations.
+The **Updates** view always stays physical,
+because each installation tracks its own repository source. The choice is
+remembered in this browser. The **Installed agents** menu in the Skill header
+switches to **All agents**,
 including agents that are not installed. Skill names, row actions and folder
 context stay visible while scrolling across agent columns. On phones, the
 matrix becomes a grouped list with available-agent chips and a fixed install bar.

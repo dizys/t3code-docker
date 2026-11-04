@@ -2,7 +2,7 @@
 const T3SkillInspector = (() => {
   'use strict';
   const { html, raw, icon } = Kit;
-  const S = T3SkillModel;
+  const S = T3SkillModel, M = T3Model;
   const disabled = value => value ? raw(' disabled') : '';
   const bytes = value => T3Model.formatBytes(value || 0);
   const code = (text, label = 'SKILL.md contents') => {
@@ -14,17 +14,24 @@ const T3SkillInspector = (() => {
     const repaint = () => { if (active && !active.layer.closed) active.layer.render(); };
     const open = async (key, editing = false, creating = false) => {
       if (active && !await active.close('replaced')) return;
-      const library = getLibrary(), skill = creating ? null : library.rows.find(row => row.key === key);
+      const library = getLibrary();
+      const findSkill = lookup => library.rows.find(row => row.key === lookup) || library.physicalRows?.find(row => row.key === lookup);
+      const skill = creating ? null : findSkill(key);
       if (!creating && !skill) return;
       const targets = S.providers.flatMap(provider => (library.inventories[provider.id]?.creationTargets || []).map(target => ({ ...target, provider: provider.id, value: provider.id + ':' + target.id })));
       if (creating && !targets.length) return;
       const initial = '---\nname: my-skill\ndescription: Describe when to use this skill.\n---\n\nWrite the skill instructions here.\n';
       const view = { key, skill, data: null, creating, editing: editing || creating, draft: creating ? initial : '', original: creating ? initial : '', slug: '',
         target: targets.find(target => library.installed.includes(target.provider))?.value || targets[0]?.value,
+        selectedKey: skill?.unified ? (skill.installations.find(row => row.canEdit)?.key || skill.installations[0]?.key) : key,
         generated: true, loading: !creating, saving: false, linking: false, linkError: null, error: null, layer: null };
       active = view;
       const editor = T3CodeEditor.create({ id: 'skill-content', label: 'SKILL.md contents', describedBy: 'skill-editor-meta' });
-      const row = () => getLibrary().rows.find(row => row.key === key) || skill;
+      const findCurrent = lookup => getLibrary().rows.find(row => row.key === lookup) || getLibrary().physicalRows?.find(row => row.key === lookup);
+      const row = () => {
+        if (!skill?.unified) return findCurrent(key) || skill;
+        return findCurrent(view.selectedKey) || skill.installations.find(row => row.key === view.selectedKey) || skill;
+      };
       const detail = () => view.data || row();
       const dirty = () => view.draft !== view.original || (creating && Boolean(view.slug));
       const beforeUnload = event => { if (view.saving || view.editing && dirty()) { event.preventDefault(); event.returnValue = ''; } };
@@ -39,6 +46,18 @@ const T3SkillInspector = (() => {
         view.layer.close(reason); return true;
       };
       const renderLocations = () => {
+        if (skill?.unified) {
+          const installations = skill.installations || [];
+          const file = detail(), status = getStatus(), target = file.resolvedPath || file.path;
+          const stateVolume = status?.paths?.stateKind === 'durable' && S.contains(status.paths.state, target);
+          const homeVolume = status?.paths?.volumeKind === 'durable' && S.contains(status.paths.volume, target);
+          return html`<section class="tc-insp-section"><div class="tc-insp-label">Where it lives<span class="tc-spacer"></span><span class="tc-hint">${M.plural(installations.length, 'copy', 'copies')}</span></div>
+            <div class="tc-field"><label class="tc-label" for="skill-location">Location</label><select class="tc-select" id="skill-location" aria-describedby="skill-location-hint"${disabled(view.loading || view.saving || view.linking)}>${installations.map(installation => html`<option value="${installation.key}"${installation.key === row().key ? raw(' selected') : ''}>${S.displayPath(S.directory(installation.path), library.home)} · ${installation.groupLabel}</option>`)}</select>
+              <p class="tc-hint" id="skill-location-hint">Same name in ${M.plural(installations.length, 'folder')}. Editing, removal and source tracking apply to the selected location only. Other copies stay in place.</p></div>
+            <dl class="tc-group tc-pathlist">${installations.map(installation => html`<dt title="${installation.path}">${installation.groupLabel}</dt><dd><code>${S.displayPath(S.directory(installation.path), library.home)}</code></dd>`)}
+              ${stateVolume || homeVolume ? html`<dt>Kept on</dt><dd>${icon('hard-drive', 'tc-icon--sm')}<span>${stateVolume ? 'State volume' : 'Home volume'}, survives a recreate</span></dd>` : ''}</dl>
+          </section>`;
+        }
         const file = detail(), status = getStatus(), target = file.resolvedPath || file.path;
         const stateVolume = status?.paths?.stateKind === 'durable' && S.contains(status.paths.state, target);
         const homeVolume = status?.paths?.volumeKind === 'durable' && S.contains(status.paths.volume, target);
@@ -104,10 +123,10 @@ const T3SkillInspector = (() => {
         focus: '[data-inspect-close]', backdrop: 'ignore', onEscape: () => { if (!editor.escape()) void view.close('escape'); },
         onRender: layer => editor.sync(layer.panel, { value: view.draft, disabled: view.loading || view.saving, readOnly: !view.editing }),
         onClose: () => { editor.destroy(); window.removeEventListener('beforeunload', beforeUnload); if (active === view) active = null; },
-        render: () => html`<div class="tc-insp-head"><span class="tc-tile tc-tile--icon" aria-hidden="true">${icon('file-text')}</span><div class="tc-insp-title"><h2 id="skill-view-title">${creating ? 'New skill' : skill.name}</h2><div class="tc-insp-meta">${creating ? 'Write instructions for your agents' : html`${skill.groupLabel}<span>·</span>${detail()?.canEdit ? 'Editable' : 'Read-only'}${view.data?.files ? html`<span>·</span>${T3Model.plural(view.data.files.length, 'file')}` : ''}${view.data ? html`<span>·</span>${bytes(view.data.bytes)}` : ''}`}</div></div><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-inspect-close aria-label="Close skill inspector"${disabled(view.saving)}>${icon('x')}</button></div>
+        render: () => html`<div class="tc-insp-head"><span class="tc-tile tc-tile--icon" aria-hidden="true">${icon('file-text')}</span><div class="tc-insp-title"><h2 id="skill-view-title">${creating ? 'New skill' : skill.name}</h2><div class="tc-insp-meta">${creating ? 'Write instructions for your agents' : html`${skill.unified ? 'Unified · ' + M.plural(skill.installations.length, 'location') : skill.groupLabel}<span>·</span>${detail()?.canEdit ? 'Editable' : 'Read-only'}${view.data?.files ? html`<span>·</span>${T3Model.plural(view.data.files.length, 'file')}` : ''}${view.data ? html`<span>·</span>${bytes(view.data.bytes)}` : ''}`}</div></div><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-inspect-close aria-label="Close skill inspector"${disabled(view.saving)}>${icon('x')}</button></div>
           <div class="tc-insp-body" aria-busy="${String(view.loading || view.saving)}">
             ${view.error ? html`<div class="tc-notice tc-notice--danger" role="alert">${icon('circle-alert')}<div><strong>${view.data || creating ? 'Couldn’t complete this change' : 'Couldn’t read this skill'}</strong><p>${view.error}</p></div></div>` : ''}
-            ${creating ? html`<section class="tc-insp-section"><label class="tc-label" for="skill-target">Location</label><select class="tc-select" id="skill-target"${disabled(view.saving)}>${targets.map(target => html`<option value="${target.value}"${target.value === view.target ? raw(' selected') : ''}>${S.nameOf(target.provider)} · ${target.name}</option>`)}</select><p class="tc-hint">Other agents may read this folder too. Shared file changes affect everyone using it.</p><label class="tc-label" for="skill-slug">Folder name</label><input class="tc-input tc-mono" id="skill-slug" data-key="skill-slug" value="${view.slug}" placeholder="my-skill" maxlength="64" spellcheck="false" autocapitalize="none"${disabled(view.saving)}><p class="tc-hint">Lowercase letters, numbers and hyphens. The frontmatter name must match.</p></section>` : html`${renderBanner()}<p class="tc-insp-desc">${skill.description}</p>${renderOrigin()}${renderAvailability()}${renderLocations()}${renderFiles()}`}
+            ${creating ? html`<section class="tc-insp-section"><label class="tc-label" for="skill-target">Location</label><select class="tc-select" id="skill-target"${disabled(view.saving)}>${targets.map(target => html`<option value="${target.value}"${target.value === view.target ? raw(' selected') : ''}>${S.nameOf(target.provider)} · ${target.name}</option>`)}</select><p class="tc-hint">Other agents may read this folder too. Shared file changes affect everyone using it.</p><label class="tc-label" for="skill-slug">Folder name</label><input class="tc-input tc-mono" id="skill-slug" data-key="skill-slug" value="${view.slug}" placeholder="my-skill" maxlength="64" spellcheck="false" autocapitalize="none"${disabled(view.saving)}><p class="tc-hint">Lowercase letters, numbers and hyphens. The frontmatter name must match.</p></section>` : html`${renderBanner()}<p class="tc-insp-desc">${row()?.description || skill.description}</p>${renderOrigin()}${renderAvailability()}${renderLocations()}${renderFiles()}`}
             ${!creating ? renderPlugin() : ''}${renderEditor()}
           </div><div class="tc-sheet-foot tc-insp-foot">${footer()}</div>` });
       window.addEventListener('beforeunload', beforeUnload);
@@ -128,6 +147,22 @@ const T3SkillInspector = (() => {
       });
       view.layer.panel.addEventListener('change', async event => {
         if (event.target.id === 'skill-target') view.target = event.target.value;
+        if (event.target.id === 'skill-location' && skill?.unified) {
+          if (view.saving || view.editing && (view.draft !== view.original)) {
+            const yes = await Kit.confirm({ title: 'Switch location?', body: 'Your unsaved changes will be lost. You can keep editing and download a copy first.', confirm: 'Discard draft', tone: 'danger' });
+            if (!yes || active !== view) { event.target.value = row().key; return; }
+          }
+          view.selectedKey = event.target.value; view.data = null; view.draft = view.original = ''; view.error = null; view.linkError = null;
+          view.editing = false; view.loading = true; repaint();
+          const current = row();
+          const response = await api('/context/skills/read?provider=' + encodeURIComponent(current.provider) + '&id=' + encodeURIComponent(current.byProvider[current.provider].id));
+          if (active !== view) return;
+          view.loading = false;
+          if (response.ok) { view.data = response.data; view.draft = view.original = response.data.content; }
+          else view.error = response.error;
+          repaint();
+          return;
+        }
         if (event.target.id !== 'skill-file' || !event.target.files?.[0]) return;
         const file = event.target.files[0]; event.target.value = '';
         view.loading = true; view.error = null; repaint();
@@ -220,8 +255,9 @@ const T3SkillInspector = (() => {
           if (!yes || active !== view) return;
         }
         view.saving = true; view.error = null; repaint();
-        const [provider, target] = creating ? view.target.split(':') : [skill.provider];
-        const response = await api('/context/skills/' + (remove ? 'remove' : creating ? 'create' : 'save'), { body: { provider, id: creating ? undefined : skill.byProvider[provider].id, target, slug: view.slug, content: view.draft, revision: view.data?.revision, removalRevision: view.data?.removalRevision } });
+        const currentRow = row();
+        const [provider, target] = creating ? view.target.split(':') : [currentRow.provider];
+        const response = await api('/context/skills/' + (remove ? 'remove' : creating ? 'create' : 'save'), { body: { provider, id: creating ? undefined : currentRow.byProvider[provider].id, target, slug: view.slug, content: view.draft, revision: view.data?.revision, removalRevision: view.data?.removalRevision } });
         view.saving = false;
         if (!response.ok) { view.error = response.error; repaint(); return; }
         view.editing = false; view.layer.close('saved');
@@ -235,7 +271,8 @@ const T3SkillInspector = (() => {
         if (action) void act(action, button);
       });
       if (creating) return;
-      const response = await api('/context/skills/read?provider=' + encodeURIComponent(skill.provider) + '&id=' + encodeURIComponent(skill.byProvider[skill.provider].id));
+      const initialRow = row();
+      const response = await api('/context/skills/read?provider=' + encodeURIComponent(initialRow.provider) + '&id=' + encodeURIComponent(initialRow.byProvider[initialRow.provider].id));
       if (active !== view || view.layer.closed) return;
       view.loading = false;
       if (response.ok) { view.data = response.data; view.draft = view.original = response.data.content; view.editing = editing && Boolean(response.data.canEdit); }

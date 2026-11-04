@@ -169,6 +169,25 @@ const run = async base => {
     expect(pin.outside&&pin.visible,'the pin is outside the native scrolling list and visible');
     expect(Math.abs(pin.height-pin.nativeHeight)<=1&&Math.abs(pin.width-pin.nativeWidth)<=1&&Math.abs(pin.left-pin.nativeLeft)<=1,'the pin copies a native page row, including its geometry',JSON.stringify(pin));
     expect(pin.label.startsWith('Setup'),'the pin has an accessible name');
+    const footer=await page.locator(ENTRY).evaluate(button=>{
+      const pin=button.closest('[data-t3-setup-entry]'),nav=pin.parentElement,next=pin.nextSibling;
+      const native=nav.querySelector(':scope > [data-sidebar="footer"]'),empty=native?.matches(':empty');
+      const probe=document.createElement('div');probe.dataset.sidebar='footer';probe.style.padding='4px 8px 8px';nav.append(probe);
+      let result;
+      try{
+        result={nativeHeight:empty?native.getBoundingClientRect().height:null,emptyHeight:probe.getBoundingClientRect().height};
+        const action=document.createElement('button');action.textContent='Native footer action';probe.append(action);
+        result.actionVisible=getComputedStyle(probe).display!=='none'&&action.getBoundingClientRect().height>0;
+        action.remove();pin.remove();
+        result.withoutSetup=probe.getBoundingClientRect().height;
+      }finally{nav.insertBefore(pin,next);probe.remove();}
+      result.gap=empty?nav.getBoundingClientRect().bottom-button.getBoundingClientRect().bottom:null;
+      result.padding=parseFloat(getComputedStyle(pin).paddingBottom);
+      return result;
+    });
+    expect(footer.emptyHeight===0&&(footer.nativeHeight===null||footer.nativeHeight===0),'empty native footers add no space below Setup',JSON.stringify(footer));
+    expect(footer.gap===null||Math.abs(footer.gap-footer.padding)<=1,'Setup keeps only its own bottom inset',JSON.stringify(footer));
+    expect(footer.actionVisible&&footer.withoutSetup===12,'native footer actions stay visible and removing Setup restores native spacing',JSON.stringify(footer));
     const badge=await page.locator('[data-t3-setup-entry] .t3-setup-badge').evaluate(el=>el.hidden?'':el.textContent);
     expect(badge===(hello.attention>99?'99+':hello.attention?String(hello.attention):''),'the pin count matches authenticated hello');
     await captureSettings(page,'desktop');

@@ -344,7 +344,7 @@
   ].join('') + `
 /* Setup as a native Settings tab. Native custom properties keep the host
    in step with built-in and custom themes. Row geometry is borrowed from
-   native page-row attributes; these rules style only Setup-owned elements. */
+   native page-row attributes; these rules stay scoped to Setup's integration. */
 
 /* ---------------------------------------------------------------- the pin */
 /* Pinned between T3's list (the ScrollArea holding [data-sidebar=content]) and
@@ -357,6 +357,9 @@
   background: var(--sidebar, #fafafa);
 }
 .t3-setup-pin > ul { margin: 0; }
+/* Web clients can leave a padded native footer empty. The pin supplies the
+   bottom inset; native footer controls keep their original layout. */
+nav:has(> .t3-setup-pin) > [data-sidebar="footer"]:empty { display: none; }
 .t3-setup-pin [data-sidebar="menu-button"] { position: relative; }
 .t3-setup-chev {
   width: 14px; height: 14px; flex: none; margin-left: 2px;

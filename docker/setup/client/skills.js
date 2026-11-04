@@ -19,7 +19,7 @@ const T3SkillsUI = (() => {
     // always stays physical because each installation tracks its own source.
     const visibleRows = () => hideBundled ? rows.filter(row => row.scope !== 'system') : rows;
     const displayRows = () => unified && view !== 'updates' ? S.unify(visibleRows()) : visibleRows();
-    const library = () => ({ rows: unified ? S.unify(rows) : rows, physicalRows: rows, inventories, errors, roots: roots(), installed, agents: columns().map(provider => provider.id), home: reach?.home || getStatus()?.paths?.volume,
+    const library = () => ({ rows: displayRows(), physicalRows: rows, inventories, errors, roots: roots(), installed, agents: columns().map(provider => provider.id), home: reach?.home || getStatus()?.paths?.volume,
       unified,
       install: options => importer.open(options), reviewHooks: pluginId => hooks.open(pluginId), reviewUpdate: reviewSource,
       checkOne: key => checkUpdates([key]), checking: key => checking && (!checkKeys || checkKeys.has(key)), hooksReady: Boolean(hookData), hookSummary: S.hooksSummary(hookData?.hooks) });
@@ -85,6 +85,12 @@ const T3SkillsUI = (() => {
       const label = S.nameOf(provider) + ' ' + (provider === 'claude' ? 'visibility' : provider === 'opencode' ? 'permission' : 'availability') + ' for ' + skill.name + ': ' + state.label;
       const key = 'skill-cell-' + provider + '-' + (row?.id || encodeURIComponent(skill.key)) + (full ? '-inspector' : '-table');
       if (errors[provider]) return html`<span class="tc-cell tc-cell--none" title="${errors[provider]}" aria-label="${S.nameOf(provider)} unavailable: ${errors[provider]}">—</span>`;
+      if (skill.unified) {
+        const copies = skill.installations.filter(copy => copy.byProvider[provider]);
+        const count = copies.filter(copy => S.available(copy.byProvider[provider])).length;
+        const summary = `Available in ${count} of ${copies.length} locations. Choose a location to view or change its setting.`;
+        return html`<button class="tc-cell" type="button" data-key="${key}" data-cmd="skills.view" data-id="${skill.key}" data-tone="${count ? '' : 'muted'}" title="${summary}" aria-label="${S.nameOf(provider)} availability for ${skill.name}: ${summary}">${count ? 'Available' : copies.length ? 'Unavailable' : 'Not found'}${icon('chevron-right')}</button>`;
+      }
       if (!row) return html`<button class="tc-cell tc-cell--none" type="button" data-cmd="skills.copy" data-id="${skill.key}" data-provider="${provider}" aria-label="Copy ${skill.name} to ${S.nameOf(provider)}"><span class="tc-cell-dash" aria-hidden="true">—</span><span class="tc-cell-add">${icon('plus')}Add</span></button>`;
       if (pending) return html`<span class="tc-cell" role="status"><span class="tc-spinner" aria-hidden="true"></span><span class="tc-sr">Saving ${label}</span></span>`;
       if (state.kind === 'policy') return full ? html`<select class="tc-select tc-select--sm" data-key="${key}" data-skill-policy="${row.id}" data-skill-provider="${provider}" aria-label="${label}"${disabled(busy)}>${row.stateOptions.map(option => html`<option value="${option.value}"${option.value === row.state ? raw(' selected') : ''}>${option.label}</option>`)}</select>`
@@ -157,8 +163,7 @@ const T3SkillsUI = (() => {
     function reviewSource(skill, queue) {
       if (!skill) return;
       if (skill.unified) {
-        const installation = skill.installations.find(row => row.origin && row.update?.status === 'available')
-          || skill.installations.find(row => row.origin);
+        const installation = skill.installations.find(row => row.key === skill.sourceKey);
         if (!installation) return;
         const physicalQueue = (queue || []).flatMap(key => {
           if (typeof key === 'string' && key.startsWith('unified:')) {
@@ -181,7 +186,7 @@ const T3SkillsUI = (() => {
     const agentMenu = trigger => Kit.menu(trigger, { label: 'Available to', items: [{ label: 'Any agent', radio: true, checked: !agent, run: () => { agent = ''; paint(); } }, ...columns().map(provider => ({ label: provider.name, radio: true, checked: agent === provider.id, run: () => { agent = provider.id; paint(); } }))] });
     const groupClosed = group => collapsed.has(group.key) ? collapsed.get(group.key) : !query && view !== 'attention' && ['system', 'admin'].includes(group.root.scope);
     const attentionNotice = skill => {
-      const problem = Object.values(skill.byProvider).find(row => row.error || row.metadataError);
+      const problem = (skill.installations || [skill]).flatMap(copy => Object.values(copy.byProvider)).find(row => row.error || row.metadataError);
       return html`<div class="tc-notice tc-notice--warn tc-sk-skill-notice" role="status">${icon('triangle-alert')}<div class="tc-notice-body"><span class="tc-notice-title">${skill.name} may not load</span><span class="tc-notice-desc">${problem?.error || problem?.metadataError}</span></div>${Object.values(skill.byProvider).some(row => row.canEdit) ? html`<div class="tc-notice-actions"><button class="tc-btn tc-btn--sm" type="button" data-cmd="skills.edit" data-id="${skill.key}">Fix in SKILL.md</button></div>` : ''}</div>`;
     };
     const pluginOf = group => group.rows.find(row => row.byProvider.codex?.pluginId)?.byProvider.codex.pluginId;
@@ -320,7 +325,6 @@ const T3SkillsUI = (() => {
           { label: 'View locations…', icon: 'file-text', run: () => inspector.open(key) },
           ...(skill.origin ? [{ label: skill.update?.status === 'available' ? 'Review update…' : 'Review source…', icon: 'download', run: () => reviewSource(skill) }, { label: 'Check for updates', icon: 'refresh-cw', disabled: checking, run: () => checkUpdates([key]) }] : []),
           { label: skill.installations.length > 1 ? 'Copy paths' : 'Copy path', icon: 'copy', run: () => Kit.copy(skill.installations.map(row => S.directory(row.path)).join('\n'), trigger, 'Skill folder paths copied') },
-          { label: 'Copy to…', icon: 'copy', run: () => importer.open({ source: S.directory(skill.path), names: [skill.name], step: 2 }) },
         ] });
         return;
       }

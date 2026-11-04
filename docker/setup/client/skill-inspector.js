@@ -2,7 +2,7 @@
 const T3SkillInspector = (() => {
   'use strict';
   const { html, raw, icon } = Kit;
-  const S = T3SkillModel;
+  const S = T3SkillModel, M = T3Model;
   const disabled = value => value ? raw(' disabled') : '';
   const bytes = value => T3Model.formatBytes(value || 0);
   const code = (text, label = 'SKILL.md contents') => {
@@ -51,7 +51,12 @@ const T3SkillInspector = (() => {
           const file = detail(), status = getStatus(), target = file.resolvedPath || file.path;
           const stateVolume = status?.paths?.stateKind === 'durable' && S.contains(status.paths.state, target);
           const homeVolume = status?.paths?.volumeKind === 'durable' && S.contains(status.paths.volume, target);
-          return html`<section class="tc-insp-section"><div class="tc-insp-label">Where it lives<span class="tc-spacer"></span><span class="tc-hint">${M.plural(installations.length, 'copy', 'copies')}</span></div><div class="tc-group"><label class="tc-label" for="skill-location">Location</label><select class="tc-select" id="skill-location"${disabled(view.loading || view.saving)}>${installations.map(installation => html`<option value="${installation.key}"${installation.key === row().key ? raw(' selected') : ''}>${S.displayPath(S.directory(installation.path), library.home)} · ${installation.groupLabel}</option>`)}</select><p class="tc-hint">Same name in ${M.plural(installations.length, 'folder')}. Editing, removal and source tracking apply to the selected location only. Other copies stay in place.</p><dl class="tc-pathlist">${installations.map(installation => html`<dt title="${installation.path}">${installation.groupLabel}</dt><dd><code>${S.displayPath(S.directory(installation.path), library.home)}</code></dd>`)}</dl>${stateVolume || homeVolume ? html`<p class="tc-hint">${icon('hard-drive', 'tc-icon--sm')}<span>${stateVolume ? 'State volume' : 'Home volume'}, survives a recreate</span></p>` : ''}</div></section>`;
+          return html`<section class="tc-insp-section"><div class="tc-insp-label">Where it lives<span class="tc-spacer"></span><span class="tc-hint">${M.plural(installations.length, 'copy', 'copies')}</span></div>
+            <div class="tc-field"><label class="tc-label" for="skill-location">Location</label><select class="tc-select" id="skill-location" aria-describedby="skill-location-hint"${disabled(view.loading || view.saving || view.linking)}>${installations.map(installation => html`<option value="${installation.key}"${installation.key === row().key ? raw(' selected') : ''}>${S.displayPath(S.directory(installation.path), library.home)} · ${installation.groupLabel}</option>`)}</select>
+              <p class="tc-hint" id="skill-location-hint">Same name in ${M.plural(installations.length, 'folder')}. Editing, removal and source tracking apply to the selected location only. Other copies stay in place.</p></div>
+            <dl class="tc-group tc-pathlist">${installations.map(installation => html`<dt title="${installation.path}">${installation.groupLabel}</dt><dd><code>${S.displayPath(S.directory(installation.path), library.home)}</code></dd>`)}
+              ${stateVolume || homeVolume ? html`<dt>Kept on</dt><dd>${icon('hard-drive', 'tc-icon--sm')}<span>${stateVolume ? 'State volume' : 'Home volume'}, survives a recreate</span></dd>` : ''}</dl>
+          </section>`;
         }
         const file = detail(), status = getStatus(), target = file.resolvedPath || file.path;
         const stateVolume = status?.paths?.stateKind === 'durable' && S.contains(status.paths.state, target);
@@ -121,7 +126,7 @@ const T3SkillInspector = (() => {
         render: () => html`<div class="tc-insp-head"><span class="tc-tile tc-tile--icon" aria-hidden="true">${icon('file-text')}</span><div class="tc-insp-title"><h2 id="skill-view-title">${creating ? 'New skill' : skill.name}</h2><div class="tc-insp-meta">${creating ? 'Write instructions for your agents' : html`${skill.unified ? 'Unified · ' + M.plural(skill.installations.length, 'location') : skill.groupLabel}<span>·</span>${detail()?.canEdit ? 'Editable' : 'Read-only'}${view.data?.files ? html`<span>·</span>${T3Model.plural(view.data.files.length, 'file')}` : ''}${view.data ? html`<span>·</span>${bytes(view.data.bytes)}` : ''}`}</div></div><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-inspect-close aria-label="Close skill inspector"${disabled(view.saving)}>${icon('x')}</button></div>
           <div class="tc-insp-body" aria-busy="${String(view.loading || view.saving)}">
             ${view.error ? html`<div class="tc-notice tc-notice--danger" role="alert">${icon('circle-alert')}<div><strong>${view.data || creating ? 'Couldn’t complete this change' : 'Couldn’t read this skill'}</strong><p>${view.error}</p></div></div>` : ''}
-            ${creating ? html`<section class="tc-insp-section"><label class="tc-label" for="skill-target">Location</label><select class="tc-select" id="skill-target"${disabled(view.saving)}>${targets.map(target => html`<option value="${target.value}"${target.value === view.target ? raw(' selected') : ''}>${S.nameOf(target.provider)} · ${target.name}</option>`)}</select><p class="tc-hint">Other agents may read this folder too. Shared file changes affect everyone using it.</p><label class="tc-label" for="skill-slug">Folder name</label><input class="tc-input tc-mono" id="skill-slug" data-key="skill-slug" value="${view.slug}" placeholder="my-skill" maxlength="64" spellcheck="false" autocapitalize="none"${disabled(view.saving)}><p class="tc-hint">Lowercase letters, numbers and hyphens. The frontmatter name must match.</p></section>` : html`${renderBanner()}<p class="tc-insp-desc">${skill.description}</p>${renderOrigin()}${renderAvailability()}${renderLocations()}${renderFiles()}`}
+            ${creating ? html`<section class="tc-insp-section"><label class="tc-label" for="skill-target">Location</label><select class="tc-select" id="skill-target"${disabled(view.saving)}>${targets.map(target => html`<option value="${target.value}"${target.value === view.target ? raw(' selected') : ''}>${S.nameOf(target.provider)} · ${target.name}</option>`)}</select><p class="tc-hint">Other agents may read this folder too. Shared file changes affect everyone using it.</p><label class="tc-label" for="skill-slug">Folder name</label><input class="tc-input tc-mono" id="skill-slug" data-key="skill-slug" value="${view.slug}" placeholder="my-skill" maxlength="64" spellcheck="false" autocapitalize="none"${disabled(view.saving)}><p class="tc-hint">Lowercase letters, numbers and hyphens. The frontmatter name must match.</p></section>` : html`${renderBanner()}<p class="tc-insp-desc">${row()?.description || skill.description}</p>${renderOrigin()}${renderAvailability()}${renderLocations()}${renderFiles()}`}
             ${!creating ? renderPlugin() : ''}${renderEditor()}
           </div><div class="tc-sheet-foot tc-insp-foot">${footer()}</div>` });
       window.addEventListener('beforeunload', beforeUnload);
@@ -147,7 +152,7 @@ const T3SkillInspector = (() => {
             const yes = await Kit.confirm({ title: 'Switch location?', body: 'Your unsaved changes will be lost. You can keep editing and download a copy first.', confirm: 'Discard draft', tone: 'danger' });
             if (!yes || active !== view) { event.target.value = row().key; return; }
           }
-          view.selectedKey = event.target.value; view.data = null; view.error = null; view.linkError = null;
+          view.selectedKey = event.target.value; view.data = null; view.draft = view.original = ''; view.error = null; view.linkError = null;
           view.editing = false; view.loading = true; repaint();
           const current = row();
           const response = await api('/context/skills/read?provider=' + encodeURIComponent(current.provider) + '&id=' + encodeURIComponent(current.byProvider[current.provider].id));

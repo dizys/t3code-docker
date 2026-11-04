@@ -148,3 +148,15 @@ test('unified view merges same-named folders into one row and keeps singletons p
   assert.ok(grouped.some(group => group.key === 'unified' && group.rows.length === 1 && group.rows[0].name === 'review'));
   assert.ok(grouped.some(group => group.key === '/custom/codex/skills/skills/review' || group.rows.some(row => row.name === 'unique')));
 });
+
+test('unified availability includes an available copy even when another copy has native controls', () => {
+  const row = (key, entry, extra = {}) => ({ key, path: key, name: 'review', description: '', provider: 'codex', byProvider: { codex: entry }, root: { readers: ['codex'] }, ...extra });
+  const rows = [row('/a/SKILL.md', { id: 'off', state: 'disabled', canToggle: true }, { description: 'needle', origin: { source: 'first/repo' }, update: { status: 'current' } }),
+    row('/b/SKILL.md', { id: 'found' }, { description: 'A longer description from the other copy', origin: { source: 'second/repo' }, update: { status: 'available' } })];
+  const [unified] = model.unify(rows);
+  assert.equal(model.available(unified.byProvider.codex), true);
+  assert.equal(unified.byProvider.codex.id, 'found');
+  assert.equal(unified.origin.source, 'second/repo', 'source and update must describe the same physical copy');
+  assert.equal(model.filter([unified], { query: 'needle' }).length, 1, 'search includes every location description');
+  assert.equal(rows[0].byProvider.codex.state, 'disabled', 'grouping does not change native settings');
+});

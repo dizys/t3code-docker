@@ -96,8 +96,10 @@ agent. A name appearing in two different folders remains two installations.
 The **View** menu offers **Unified view · one row per skill name** for the
 opposite: same-named folders collapse into one row, with the copy count and
 every folder kept alongside it. Availability columns merge, so an agent shows
-as able when any copy serves it; the inspector then picks which location to
-read, edit, link or remove. The **Updates** view always stays physical,
+as able when any copy serves it. Select a cell to open the inspector, then
+choose a location before changing its setting, copying, editing, linking or
+removing it. Unsaved drafts require confirmation before switching locations.
+The **Updates** view always stays physical,
 because each installation tracks its own repository source. The choice is
 remembered in this browser. The **Installed agents** menu in the Skill header
 switches to **All agents**,

@@ -126,12 +126,12 @@ const T3SkillModel = (() => {
   };
   const filter = (rows, { query = '', agent = '', needsAttention = false } = {}) => {
     const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-    return rows.filter(row => words.every(word => (row.name + ' ' + row.description).toLocaleLowerCase().includes(word))
+    return rows.filter(row => words.every(word => [row, ...(row.installations || [])].some(copy => (copy.name + ' ' + copy.description).toLocaleLowerCase().includes(word)))
       && (!agent || available(row.byProvider[agent])) && (!needsAttention || row.attention));
   };
   // One row per skill name, even when the same name lives in several folders.
   // Physical installations are kept on `installations`; the merged byProvider
-  // picks the most capable entry per agent so availability stays accurate.
+  // prefers available entries per agent so disabled copies cannot hide them.
   // Singletons pass through untouched to preserve existing row identity.
   const unify = rows => {
     const byName = new Map();
@@ -142,9 +142,9 @@ const T3SkillModel = (() => {
     }
     const rank = entry => {
       if (!entry || entry.error) return 0;
+      if (available(entry)) return 10 + (entry.canSetState ? 4 : entry.canToggle ? 3 : 2);
       if (entry.canSetState) return 4;
       if (entry.canToggle) return 3;
-      if (available(entry)) return 2;
       return 1;
     };
     const out = [];
@@ -161,10 +161,10 @@ const T3SkillModel = (() => {
       const aliases = [...new Set(ordered.flatMap(row => [row.key, ...(row.aliases || [])]))];
       const description = ordered.map(row => row.description).filter(Boolean).sort((a, b) => b.length - a.length)[0] || '';
       const withOrigin = ordered.filter(row => row.origin);
-      const origin = withOrigin[0]?.origin;
-      const update = (withOrigin.find(row => row.update?.status === 'available')
+      const sourceRow = (withOrigin.find(row => row.update?.status === 'available')
         || withOrigin.find(row => row.update?.status === 'error')
-        || withOrigin.find(row => row.update?.status === 'current'))?.update;
+        || withOrigin.find(row => row.update?.status === 'current') || withOrigin[0]);
+      const origin = sourceRow?.origin, update = sourceRow?.update;
       const scopes = new Set(ordered.map(row => row.scope));
       const scope = scopes.size === 1 ? ordered[0].scope : scopes.has('user') ? 'user' : ordered[0].scope;
       out.push({ ...firstEditable, key: 'unified:' + name, name, description, byProvider, aliases,
@@ -175,7 +175,7 @@ const T3SkillModel = (() => {
         metadataError: ordered.find(row => row.metadataError)?.metadataError || null, error: null,
         root: { path: 'Multiple folders', resolvedPath: 'unified', readers, source: 'Unified', scope },
         groupKey: 'unified', groupLabel: 'All skills · unified by name', attention: ordered.some(row => row.attention),
-        update, origin, unified: true, folders: [...new Set(ordered.map(row => directory(row.path)))],
+        update, origin, sourceKey: sourceRow?.key, unified: true, folders: [...new Set(ordered.map(row => directory(row.path)))],
         locationLabels: [...new Set(ordered.map(row => row.groupLabel))] });
     }
     return out.sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));

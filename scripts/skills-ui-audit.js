@@ -69,6 +69,7 @@ const checkSelect = async (page, select, theme) => {
       let stateGate, stateStarted, planGate, planStarted, sourceGate, sourceStarted, readGate, readStarted, installGate, installStarted, saveGate, saveStarted, reachGate, reachStarted;
       let updateStatus = 'available', updateGate, updateStarted;
       let stateFail = false, saveFail = false, partial = false, blocked = false, expire = false, providerError = null, loseInstallResponse = false;
+      let readFailId = null, readGateId = null;
       await page.route('**/*', async route => {
         const request = route.request(), url = new URL(request.url()), method = request.method();
         const input = method === 'POST' ? request.postDataJSON() : {};
@@ -87,7 +88,8 @@ const checkSelect = async (page, select, theme) => {
             if (stateFail) return route.fulfill({ status: 409, json: { ok: false, error: 'Settings changed outside the console. Rescan before trying again.' } });
           }
           if (at('/install') && installGate) { installStarted.resolve(); await installGate.promise; installGate = null; }
-          if (at('/read') && readGate) { readStarted.resolve(); await readGate.promise; readGate = null; }
+          if (at('/read') && readGate && (!readGateId || url.searchParams.get('id') === readGateId)) { readStarted.resolve(); await readGate.promise; readGate = null; }
+          if (at('/read') && readFailId && url.searchParams.get('id') === readFailId) return route.fulfill({ status: 404, json: { ok: false, error: 'This location was removed. Choose another location.' } });
           if (at('/source') && sourceGate) { sourceStarted.resolve(); await sourceGate.promise; sourceGate = null; }
           if (at('/plan') && planGate) { planStarted.resolve(); await planGate.promise; planGate = null; }
           if (at('/save') && saveGate) { saveStarted.resolve(); await saveGate.promise; saveGate = null; }
@@ -95,6 +97,10 @@ const checkSelect = async (page, select, theme) => {
           if (at('/save') && saveFail) return route.fulfill({ status: 409, json: { ok: false, error: 'The skill changed outside the console. Your draft is kept.' } });
         }
         let response = api.respond(method, url, input);
+        if (response && at('/read') && url.searchParams.get('id')?.startsWith('unified-check-')) {
+          response.body.content += '\nLocation: ' + url.searchParams.get('id');
+          response.body.bytes = Buffer.byteLength(response.body.content);
+        }
         if (response && at('/reach') && reachStarted) {
           response = structuredClone(response);
           response.body.roots[0].paths = [...(response.body.roots[0].paths || []), '/fixture/additional-alias'];
@@ -158,6 +164,13 @@ const checkSelect = async (page, select, theme) => {
         await target.getByRole('menuitemradio',{name:/Installed agents/}).click();
         await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent').length === 5);
       };
+      if (process.env.T3_SKILLS_UI_UNIFIED_ONLY === '1') {
+        await checkUnifiedLocations();
+        assert.deepEqual(errors, []);
+        await page.close();
+        console.log(`${theme} ${width}${embedded ? ' embedded' : ''}: unified locations, draft protection, exact save target and failed/late reads passed`);
+        continue;
+      }
       await navigate('instructions/skills');
       await target.locator('.tc-mx-row').first().waitFor({ state: 'attached' });
       await target.waitForFunction(() => !document.querySelector('.tc-mx-agent-kind')?.textContent.includes('Reading'));
@@ -265,6 +278,7 @@ const checkSelect = async (page, select, theme) => {
       }
       await target.getByRole('alert').filter({ hasText: 'Your draft is kept' }).waitFor();
       assert.equal(await target.locator('#skill-content').inputValue(), draft);
+      saveFail = false;
       await page.keyboard.press('Escape');
       await target.getByRole('alertdialog').waitFor();
       await target.getByRole('button', { name: 'Discard draft', exact: true }).click();
@@ -563,6 +577,7 @@ const checkSelect = async (page, select, theme) => {
         assert.equal(await visible(target, '[data-key=skills-layout-cards]').count(), 0, 'phones have no layout switch');
         assert(await visible(target, '.tc-sk-phone-row').count() > 0, 'phones keep the grouped list');
       }
+      await checkUnifiedLocations();
       await navigate('instructions');
       await target.locator('.tc-doc-preview .tc-code').waitFor();
       assert.equal(await target.locator('.tc-reads-row').count(), 3);
@@ -574,6 +589,81 @@ const checkSelect = async (page, select, theme) => {
       assert.deepEqual(errors, []);
       await page.close();
       console.log(`${theme} ${width}${embedded ? ' embedded' : ''}: library, policies, safe inspector, draft conflicts, placement, consent, results and instructions passed`);
+      async function checkUnifiedLocations() {
+        // Same-named files retain their own availability, reads and write target.
+        await navigate('instructions/skills');
+        await target.locator('.tc-mx-row').first().waitFor({ state: 'attached' });
+        await target.waitForFunction(() => ![...document.querySelectorAll('.tc-mx-agent-kind')].some(el => el.textContent.includes('Reading')));
+        const copyA = '/home/t3/.codex/skills/location-review/SKILL.md', copyB = '/home/t3/.agents/skills/location-review/SKILL.md';
+        const template = api.inventories.codex.skills.find(skill => skill.canEdit && skill.canToggle);
+        api.inventories.codex.skills.push(...[copyA, copyB].map((file, index) => ({ ...template,
+          id: 'unified-check-' + (index ? 'b' : 'a'), name: 'location-review', path: file, resolvedPath: file,
+          description: 'Review the ' + (index ? 'shared' : 'Codex') + ' copy.', source: index ? 'Shared .agents' : 'Provider',
+          state: index ? 'enabled' : 'disabled', origin: null, update: null })));
+        await visible(target, '[data-cmd="skills.refresh"]').click();
+        await target.locator('#skill-search').fill('location-review');
+        await target.waitForFunction(() => document.querySelectorAll('.tc-mx-row').length === 2);
+        await visible(target, '[data-cmd="skills.view-menu"]').click();
+        await target.getByRole('menuitemcheckbox', { name: /Unified view/ }).click();
+        assert.equal(await target.locator('.tc-mx-row').count(), 1);
+        assert.equal(await target.evaluate(() => localStorage.getItem('t3-console-skill-unified')), 'true');
+        const unifiedRow = target.locator('.tc-mx-row');
+        assert.equal(await unifiedRow.locator('[data-cmd="skills.state"], [data-cmd="skills.policy"], [data-cmd="skills.copy"]').count(), 0, 'grouped cells require a location before changing a copy');
+        if (width >= (TAB ? 640 : 1024)) await unifiedRow.getByRole('button', { name: /Codex availability.*Available in 1 of 2 locations/ }).click();
+        else await visible(target, 'button[data-cmd="skills.view"]').filter({ hasText: 'location-review' }).click();
+        const location = target.locator('#skill-location'), content = target.locator('#skill-content');
+        await content.waitFor();
+        assert.equal(await location.inputValue(), copyB);
+        assert.match(await content.inputValue(), /Location: unified-check-b/);
+        assert.equal(await target.locator('.tc-insp-desc').innerText(), 'Review the shared copy.');
+        await checkSelect(page, location, theme);
+        await target.locator('[data-inspect-edit]').click();
+        await content.fill('---\nname: location-review\ndescription: A local draft\n---\nKeep this draft.');
+        await location.selectOption(copyA);
+        await target.getByRole('alertdialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+        assert.equal(await location.inputValue(), copyB);
+        assert.match(await content.inputValue(), /Keep this draft/);
+        await location.selectOption(copyA);
+        await target.getByRole('button', { name: 'Discard draft', exact: true }).click();
+        await target.waitForFunction(() => document.querySelector('#skill-content')?.value.includes('Location: unified-check-a'));
+        assert.equal(await target.locator('.tc-insp-desc').innerText(), 'Review the Codex copy.');
+        await shot('unified-location');
+        await target.locator('[data-inspect-edit]').click();
+        const savedCopy = '---\nname: location-review\ndescription: A local edit\n---\nOnly change the Codex copy.';
+        await content.fill(savedCopy);
+        await target.locator('[data-inspect-save]').click();
+        await target.locator('.tc-skill-inspector').waitFor({ state: 'hidden' });
+        const save = writes.findLast(write => write.path.endsWith('/save'));
+        assert.equal(save.input.provider, 'codex'); assert.equal(save.input.id, 'unified-check-a'); assert.equal(save.input.content, savedCopy);
+        await visible(target, 'button[data-cmd="skills.view"]').filter({ hasText: 'location-review' }).click();
+        await content.waitFor();
+        readFailId = 'unified-check-a';
+        await location.selectOption(copyA);
+        await target.getByRole('alert').filter({ hasText: 'This location was removed' }).waitFor();
+        assert.equal(await content.count(), 0, 'failed reads never leave the previous copy in the editor');
+        assert.equal(await target.locator('[data-inspect-edit], [data-inspect-save]').count(), 0);
+        readFailId = null;
+        await location.selectOption(copyB);
+        await content.waitFor();
+        assert.match(await content.inputValue(), /Location: unified-check-b/);
+        readGateId = 'unified-check-a'; readGate = deferred(); readStarted = deferred();
+        await location.selectOption(copyA); await readStarted.promise;
+        assert(await location.isDisabled(), 'locations cannot change during a pending read');
+        await close();
+        await visible(target, 'button[data-cmd="skills.view"]').filter({ hasText: 'location-review' }).click();
+        await content.waitFor();
+        const lateRead = page.waitForResponse(response => new URL(response.url()).searchParams.get('id') === 'unified-check-a');
+        readGate.resolve(); await lateRead;
+        assert.match(await content.inputValue(), /Location: unified-check-b/, 'a closed location read cannot replace the current inspector');
+        readGateId = null;
+        await close();
+        await shot('unified-library');
+        await visible(target, '[data-cmd="skills.view-menu"]').click();
+        await target.getByRole('menuitemcheckbox', { name: /Unified view/ }).click();
+        await target.locator('#skill-search').fill('');
+        const overflow = await target.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+        assert.equal(overflow, false, 'the page never scrolls sideways');
+      }
     }
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

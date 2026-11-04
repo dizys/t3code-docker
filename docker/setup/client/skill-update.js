@@ -26,7 +26,7 @@ const T3SkillUpdate = (() => {
     };
     const open = (provider, id, { queue = [] } = {}) => {
       if (active && !active.layer.closed) { active.layer.panel.focus(); return; }
-      const allRows = () => [...(getLibrary().rows || []), ...(getLibrary().physicalRows || [])];
+      const allRows = () => getLibrary().physicalRows || getLibrary().rows || [];
       const lookup = (provider, id) => allRows().find(row => row.byProvider[provider]?.id === id);
       const original = lookup(provider, id);
       const media = window.matchMedia('(max-width: 639.98px)');

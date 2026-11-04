@@ -205,3 +205,28 @@ test('unified view merges same-named folders into one row and remembers the choi
   assert.doesNotMatch(separate, /unified by name/);
   assert.match(separate, /data-key="skill-\/codex\/review/);
 });
+
+test('unified cells choose a location rather than changing an arbitrary copy', async () => {
+  const copies = [
+    { id: 'off', name: 'review', path: '/a/review/SKILL.md', state: 'disabled', canToggle: true, canEdit: true },
+    { id: 'on', name: 'review', path: '/b/review/SKILL.md', state: 'enabled', canToggle: true, canEdit: true },
+  ].map(row => ({ ...row, resolvedPath: row.path, description: 'Review', scope: 'user' }));
+  const { ui, requests, menus } = await fixture(copies, new Map([['t3-console-skill-unified', 'true']]), null, ['codex']);
+  const content = ui.content();
+  assert.match(content, /Available in 1 of 2 locations/);
+  assert.doesNotMatch(content, /data-cmd="skills\.(state|policy|copy)"/);
+  assert.equal(requests.filter(r => r.url.endsWith('/state')).length, 0);
+  ui.menu('unified:review', {});
+  assert.ok(menus.at(-1).items.some(item => item.label === 'View locations…'));
+  assert.ok(!menus.at(-1).items.some(item => item.label === 'Copy to…'), 'copying must follow explicit location selection');
+});
+
+test('a unified source badge reviews the same installation that supplied its status', async () => {
+  const copies = ['a', 'b'].map(id => ({ id, name: 'review', description: 'Review', path: '/' + id + '/SKILL.md',
+    resolvedPath: '/' + id + '/SKILL.md', scope: 'user', canEdit: true,
+    origin: { source: 'org/' + id, name: 'review' }, update: { status: id === 'a' ? 'current' : 'error', error: 'Cannot reach org/b' } }));
+  const { ui, updates } = await fixture(copies, new Map([['t3-console-skill-unified', 'true']]), null, ['codex']);
+  assert.match(ui.content(), /org\/b/);
+  ui.update('unified:review');
+  assert.deepEqual(JSON.parse(JSON.stringify(updates)), [{ provider: 'codex', id: 'b' }]);
+});

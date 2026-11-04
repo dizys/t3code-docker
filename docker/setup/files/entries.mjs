@@ -49,7 +49,10 @@ export async function uniqueName(parent,name,{suffix='',start=2,reserved=new Set
   validateName(name);if(!reserved.has(name)&&!await maybeStat(path.join(parent,name)))return name;
   const ext=path.extname(name),stem=name.slice(0,name.length-ext.length);
   for(let count=start;count<10000;count++){
-    let trimmed=stem;const ending=(suffix?(count===start?' ('+suffix+')':' ('+suffix+' '+(count-start+1)+')'):' ('+count+')')+ext;while(Buffer.byteLength(trimmed+ending)>255)trimmed=[...trimmed].slice(0,-1).join('');
+    let trimmed=stem;const ending=(suffix?(count===start?' ('+suffix+')':' ('+suffix+' '+(count-start+1)+')'):' ('+count+')')+ext;
+    // An oversized ending cannot be shortened by trimming the stem.
+    if(Buffer.byteLength(ending)>255)fail('invalid','That name is too long.');
+    while(Buffer.byteLength(trimmed+ending)>255)trimmed=[...trimmed].slice(0,-1).join('');
     const next=validateName(trimmed+(suffix?(count===start?' ('+suffix+')':' ('+suffix+' '+(count-start+1)+')'):' ('+count+')')+ext);
     if(!reserved.has(next)&&!await maybeStat(path.join(parent,next)))return next;
   }

@@ -327,9 +327,9 @@ instructions and backups, before replacing directory links. Shared skill links
 to `~/.agents/skills` or `~/.claude/skills` need no copy because OpenCode discovers
 them natively. Other linked skill/agent folders keep their contents. A migrated
 real home directory remains at `opencode.t3-migrated` until that home is replaced;
-original symlink targets stay intact. Only the invalid legacy `"skills": [...]`
-array is removed from JSON/JSONC, including on MCP saves. Valid OpenCode 1
-`skills` objects, comments, permissions and unrelated settings are preserved.
+original symlink targets stay intact. Startup and MCP saves preserve OpenCode V2
+`skills` arrays and OpenCode V1 `skills` objects, alongside comments, permissions
+and unrelated settings.
 Review resolves
 these paths, combines destinations pointing at the same physical folder, and
 refuses retargeted roots. Compatibility discovery can expose a selected provider's

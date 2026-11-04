@@ -139,8 +139,11 @@ export async function runWith(credentials, command, { stdout = process.stdout, s
   };
   for (const { credential, rename } of credentials) {
     const given = delivery(credential, { rename, base: merged, askpass: askpassPath });
-    // Clear an inherited token, while preserving one explicitly supplied by another credential.
-    if (credential.type === 'aws' && given.env.AWS_SESSION_TOKEN === undefined && !set.has('AWS_SESSION_TOKEN')) delete merged.AWS_SESSION_TOKEN;
+    // Botocore checks the legacy alias first, so clear both inherited tokens.
+    // Keep values explicitly supplied by other selected credentials.
+    if (credential.type === 'aws') for (const name of ['AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN']) {
+      if (given.env[name] === undefined && !set.has(name)) delete merged[name];
+    }
     for (const [name, value] of Object.entries(given.env)) { if (!name.startsWith('GIT_CONFIG_')) claim(name, credential.id); merged[name] = value; }
     for (const file of given.files) { claim(file.env, credential.id); files.push(file); }
     masks.push(...given.masks);

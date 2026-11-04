@@ -25,24 +25,29 @@ test('the variable reaches the child, alongside the environment it was given', a
   assert.equal(code, 0, err); assert.deepEqual(JSON.parse(out), { same: true, kept: 'yes' });
 });
 
-test('an AWS credential without a session token clears one inherited from the parent', async () => {
+test('AWS credentials clear inherited modern and legacy session tokens', async () => {
   const aws = (secrets) => normalize({ id: 'aws', type: 'aws', fields: { accessKeyId: 'AKIAFIXTURE' }, secrets });
   // Secret values are masked in output, so the child only reports booleans.
-  const show = `process.stdout.write(JSON.stringify({ hasKey: 'AWS_SECRET_ACCESS_KEY' in process.env, hasToken: 'AWS_SESSION_TOKEN' in process.env, tokenIsSaved: process.env.AWS_SESSION_TOKEN === 'fixture-session' }))`;
-  const without = await run([aws({ secretAccessKey: 'fixture-secret-key' })], script(show), { env: { PATH: process.env.PATH, AWS_SESSION_TOKEN: 'stale-parent-token' } });
+  const show = `process.stdout.write(JSON.stringify({ hasKey: 'AWS_SECRET_ACCESS_KEY' in process.env, hasToken: 'AWS_SESSION_TOKEN' in process.env, hasLegacyToken: 'AWS_SECURITY_TOKEN' in process.env, tokenIsSaved: process.env.AWS_SESSION_TOKEN === 'fixture-session' }))`;
+  const inherited = { PATH: process.env.PATH, AWS_SESSION_TOKEN: 'stale-parent-token', AWS_SECURITY_TOKEN: 'stale-parent-legacy' };
+  const without = await run([aws({ secretAccessKey: 'fixture-secret-key' })], script(show), { env: inherited });
   assert.equal(without.code, 0, without.err);
-  assert.deepEqual(JSON.parse(without.out), { hasKey: true, hasToken: false, tokenIsSaved: false }, 'a permanent key must not inherit a stale session token');
-  const within = await run([aws({ secretAccessKey: 'fixture-secret-key', sessionToken: 'fixture-session' })], script(show), { env: { PATH: process.env.PATH, AWS_SESSION_TOKEN: 'stale-parent-token' } });
-  assert.deepEqual(JSON.parse(within.out), { hasKey: true, hasToken: true, tokenIsSaved: true }, 'a saved session token still wins');
+  assert.deepEqual(JSON.parse(without.out), { hasKey: true, hasToken: false, hasLegacyToken: false, tokenIsSaved: false }, 'a permanent key must not inherit either stale token alias');
+  const within = await run([aws({ secretAccessKey: 'fixture-secret-key', sessionToken: 'fixture-session' })], script(show), { env: inherited });
+  assert.deepEqual(JSON.parse(within.out), { hasKey: true, hasToken: true, hasLegacyToken: false, tokenIsSaved: true }, 'an inherited legacy token must not shadow the saved session token');
+  assert.equal(inherited.AWS_SESSION_TOKEN, 'stale-parent-token', 'the caller environment stays intact');
+  assert.equal(inherited.AWS_SECURITY_TOKEN, 'stale-parent-legacy', 'the caller legacy token stays intact');
 });
 
 test('explicit custom AWS tokens are preserved in either credential order', async () => {
   const aws = normalize({ id: 'aws', type: 'aws', fields: { accessKeyId: 'AKIAFIXTURE' }, secrets: { secretAccessKey: 'fixture-key' } });
-  const custom = normalize({ id: 'session', type: 'custom', secrets: { AWS_SESSION_TOKEN: 'explicit-session' } });
-  for (const entries of [[aws, custom], [custom, aws]]) {
-    const result = await run(entries, script("process.stdout.write(String(process.env.AWS_SESSION_TOKEN === 'explicit-session'))"), { env: { AWS_SESSION_TOKEN: 'stale-parent' } });
-    assert.equal(result.code, 0, result.err);
-    assert.equal(result.out, 'true');
+  for (const name of ['AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN']) {
+    const custom = normalize({ id: 'session', type: 'custom', secrets: { [name]: 'explicit-session' } });
+    for (const entries of [[aws, custom], [custom, aws]]) {
+      const result = await run(entries, script(`process.stdout.write(String(process.env[${JSON.stringify(name)}] === 'explicit-session'))`), { env: { [name]: 'stale-parent' } });
+      assert.equal(result.code, 0, result.err);
+      assert.equal(result.out, 'true');
+    }
   }
 });
 

@@ -21,15 +21,36 @@ async function fixture(t, options = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'credential-service-')), io = createCredentialIO({ directory });
   // Always pass home: saving an SSH credential adds a line to <home>/.ssh/config.
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'credential-service-home-'));
-  const key = credentialKey(); let offered = key, reachable = { ok: true }, signins = 0, scans = 0;
-  const keys = createHostKeys({ io, home, reach: async () => reachable, run: async (program, args) => {
-    if (program.endsWith('keyscan')) { scans++; if (!offered) return { code: 1, stdout: '' }; return { code: 0, stdout: `host ${offered.type} ${offered.key}\n` }; }
-    return { code: 0, stdout: offered ? '256 ' + offered.fingerprint + ' (ED25519)' : '' };
+  const key = credentialKey(); let offered = key, netFail = null, signins = 0, scans = 0, reachCalls = 0;
+  const keys = createHostKeys({ io, home, reach: async () => { reachCalls++; throw new Error('preflight must not run'); }, run: async (program, args) => {
+    if (program.endsWith('keyscan')) {
+      scans++;
+      if (netFail === 'unreachable') return { code: 1, stdout: '', stderr: 'ssh: connect to host: Connection refused' };
+      if (netFail === 'timeout') return { code: 1, stdout: '', stderr: 'Connection timed out' };
+      if (netFail === 'throttled') return { code: 1, stdout: '', stderr: 'Connection closed by remote host' };
+      if (!offered) return { code: 1, stdout: '# host:22 SSH-2.0-fixture\n', stderr: '' };
+      const wanted = String(args[args.indexOf('-t') + 1] || '').split(',');
+      const match = wanted.some(kind => kind === 'ed25519' ? offered.type === 'ssh-ed25519' : kind === 'rsa' ? offered.type === 'ssh-rsa' : kind === 'ecdsa' ? offered.type.startsWith('ecdsa-') : false);
+      if (!match) return { code: 1, stdout: '# host:22 SSH-2.0-fixture\n', stderr: '' };
+      return { code: 0, stdout: `host ${offered.type} ${offered.key}\n`, stderr: '' };
+    }
+    return { code: 0, stdout: offered ? '256 ' + offered.fingerprint + ' (ED25519)' : '', stderr: '' };
   } });
   const store = createCredentialStore({ directory, io, hostKeys: keys, home });
-  const service = createCredentialsService({ store, usage, keygen: async () => made, keyOpener: opener, test: async (profile, options) => { signins++; return options.test ? options.test(profile) : { ok: true, code: 'ok', detail: { user: profile.fields.username } }; }, ...options });
+  const strictTest = async profile => {
+    signins++;
+    if (netFail) return { ok: false, code: netFail, detail: {} };
+    if (profile.knownHostsFile) {
+      try {
+        const pinned = String(await fs.readFile(profile.knownHostsFile, 'utf8')).trim().split(/\s+/).pop();
+        if (!offered || offered.key !== pinned) return { ok: false, code: 'host-key-changed', detail: {} };
+      } catch { return { ok: false, code: 'host-key-changed', detail: {} }; }
+    }
+    return { ok: true, code: 'ok', detail: { user: profile.fields.username } };
+  };
+  const service = createCredentialsService({ store, usage, keygen: async () => made, keyOpener: opener, test: async (profile, testOptions) => testOptions.test ? testOptions.test(profile) : strictTest(profile), ...options });
   t.after(() => { service.close(); return Promise.all([directory, home].map(folder => fs.rm(folder, { recursive: true, force: true }))); });
-  return { directory, home, io, key, keys, store, service, create: credential => store.save({ create: true, credential }), offered(value) { offered = value; }, reachable(value) { reachable = value; }, get signins() { return signins; }, get scans() { return scans; } };
+  return { directory, home, io, key, keys, store, service, create: credential => store.save({ create: true, credential }), offered(value) { offered = value; }, reachable(value) { netFail = value?.ok ? null : value.code; }, failNet(code) { netFail = code; }, get signins() { return signins; }, get scans() { return scans; }, get reachCalls() { return reachCalls; } };
 }
 
 test('scan only reads host details and never signs in, persists state or reads a secret', async t => {
@@ -46,13 +67,12 @@ test('saved tests block before authentication until explicit fresh fingerprint t
   let result = await f.service.handle('/credentials/test', { id: ssh.id });
   assert.equal(result.ok, true); assert.equal(result.result.code, 'host-key-untrusted'); assert.equal(f.signins, 0);
   await f.service.handle('/credentials/trust', { id: ssh.id, fingerprint: f.key.fingerprint });
+  const scansBefore = f.scans;
   result = await f.service.handle('/credentials/test', { id: ssh.id });
-  assert.equal(result.result.code, 'ok'); assert.equal(f.signins, 1);
+  assert.equal(result.result.code, 'ok'); assert.equal(f.signins, 1); assert.equal(f.scans, scansBefore, 'a pinned test must not rescan');
   const next = credentialKey(); f.offered(next);
   result = await f.service.handle('/credentials/test', { id: ssh.id });
-  assert.equal(result.result.code, 'host-key-changed'); assert.equal(f.signins, 1);
-  assert.equal(result.result.detail.trusted.fingerprint, f.key.fingerprint);
-  assert.equal(result.result.detail.presented.fingerprint, next.fingerprint);
+  assert.equal(result.result.code, 'host-key-changed'); assert.equal(f.signins, 2, 'strict verification still blocks a changed key');
   assert.equal((await f.store.public(ssh.id)).revision, saved.revision);
   await assert.rejects(f.service.handle('/credentials/trust', { id: ssh.id, fingerprint: f.key.fingerprint }), { status: 409, code: 'key-changed' });
   assert.equal((await f.store.public(ssh.id)).hostKey.fingerprint, f.key.fingerprint);
@@ -214,10 +234,11 @@ test('a key sign-in pins a new host on first use, and from then on a different k
   const answer = await f.service.handle('/credentials/create', { credential: keyed });
   assert.deepEqual([answer.trust.ok, answer.trust.firstUse], [true, true]);
   assert.equal(answer.credential.hostKey.fingerprint, f.key.fingerprint); assert.equal(answer.credential.hostKey.firstUse, true);
-  assert.equal((await f.service.handle('/credentials/test', { id: keyed.id })).result.code, 'ok'); assert.equal(f.signins, 1);
+  const scansAfterPin = f.scans;
+  assert.equal((await f.service.handle('/credentials/test', { id: keyed.id })).result.code, 'ok'); assert.equal(f.signins, 1); assert.equal(f.scans, scansAfterPin, 'a pinned test must not rescan');
   const next = credentialKey(); f.offered(next);
   const changed = await f.service.handle('/credentials/test', { id: keyed.id });
-  assert.equal(changed.result.code, 'host-key-changed'); assert.equal(f.signins, 1);
+  assert.equal(changed.result.code, 'host-key-changed'); assert.equal(f.signins, 2, 'strict verification still blocks a changed key');
   assert.equal((await f.store.public(keyed.id)).hostKey.fingerprint, f.key.fingerprint);
 });
 
@@ -294,6 +315,61 @@ test('a key that fails after a one-time install leaves nothing saved and says th
   const f = await fixture(t, { ssh: async () => ({ ok: true, code: 'ok', detail: {} }), test: async () => ({ ok: false, code: 'auth-rejected', detail: {} }) });
   await assert.rejects(f.service.save({ credential: { ...keyed, secrets: {} }, generate: true, install: { password: 'synthetic-one-time-password' }, trust: { fingerprint: f.key.fingerprint } }, { create: true }), error => error.code === 'install-failed' && /wasn’t saved/.test(error.message));
   assert.deepEqual((await f.store.list()).credentials, []);
+});
+
+test('discovery prefers one Ed25519 query with no preflight connection', async t => {
+  const f = await fixture(t); await f.create(ssh);
+  const seen = [];
+  const keys = createHostKeys({ io: f.io, home: f.home, reach: async () => { throw new Error('preflight must not run'); }, run: async (program, args) => {
+    if (program.endsWith('keyscan')) { seen.push(args[args.indexOf('-t') + 1]); return { code: 0, stdout: `host ${f.key.type} ${f.key.key}\n`, stderr: '' }; }
+    return { code: 0, stdout: '256 ' + f.key.fingerprint + ' (ED25519)', stderr: '' };
+  } });
+  const scanned = await keys.scan({ host: '192.0.2.10', port: 22 });
+  assert.equal(scanned.ok, true); assert.deepEqual(seen, ['ed25519'], 'one query, Ed25519 first');
+  assert.equal(f.reachCalls, 0);
+});
+
+test('discovery falls back to RSA before ECDSA, and never retries a throttled scan', async t => {
+  const f = await fixture(t);
+  const { randomBytes, createHash } = await import('node:crypto');
+  const synthetic = type => {
+    const name = Buffer.from(type), length = Buffer.alloc(4), keyLength = Buffer.alloc(4);
+    length.writeUInt32BE(name.length); keyLength.writeUInt32BE(32);
+    const wire = Buffer.concat([length, name, keyLength, randomBytes(32)]);
+    return { type, key: wire.toString('base64'), fingerprint: 'SHA256:' + createHash('sha256').update(wire).digest('base64').replace(/=+$/, '') };
+  };
+  const rsaKey = synthetic('ssh-rsa');
+  const seen = [];
+  const keys = createHostKeys({ io: f.io, home: f.home, reach: async () => { throw new Error('preflight must not run'); }, run: async (program, args) => {
+    if (program.endsWith('keyscan')) { const kind = args[args.indexOf('-t') + 1]; seen.push(kind);
+      if (kind === 'ed25519') return { code: 1, stdout: '# host:22 SSH-2.0-fixture\n', stderr: '' };
+      return { code: 0, stdout: `host ${rsaKey.type} ${rsaKey.key}\n`, stderr: '' }; }
+    return { code: 0, stdout: `256 ${rsaKey.fingerprint} (RSA)`, stderr: '' };
+  } });
+  const scanned = await keys.scan({ host: '192.0.2.10', port: 22 });
+  assert.equal(scanned.ok, true); assert.equal(scanned.key.type, 'ssh-rsa'); assert.deepEqual(seen, ['ed25519', 'rsa']);
+
+  const throttledSeen = [];
+  const throttled = createHostKeys({ io: f.io, home: f.home, reach: async () => { throw new Error('preflight must not run'); }, run: async program => {
+    if (String(program).endsWith('keyscan')) { throttledSeen.push(1); return { code: 1, stdout: '', stderr: 'Connection closed by remote host' }; }
+    return { code: 1, stdout: '', stderr: '' };
+  } });
+  const blocked = await throttled.scan({ host: '192.0.2.10', port: 22 });
+  assert.equal(blocked.code, 'scan-failed'); assert.equal(throttledSeen.length, 1, 'a throttled scan must not try the next type');
+  let attempts = 0;
+  const silent = createHostKeys({ io: f.io, run: async () => { attempts++; return { code: 1, stdout: '', stderr: '' }; } });
+  assert.equal((await silent.scan({ host: '127.0.0.1', port: 1 })).code, 'unreachable');
+  assert.equal(attempts, 1, 'a silent failure must not try the next type');
+});
+
+test('discovery classifies network failures without a preflight', async t => {
+  const f = await fixture(t); await f.create(ssh);
+  f.failNet('unreachable');
+  assert.equal((await f.service.handle('/credentials/test', { id: ssh.id })).result.code, 'unreachable');
+  f.failNet('timeout');
+  assert.equal((await f.service.handle('/credentials/test', { id: ssh.id })).result.code, 'timeout');
+  f.failNet(null); f.offered(null);
+  assert.equal((await f.service.handle('/credentials/test', { id: ssh.id })).result.code, 'scan-failed');
 });
 
 test('reachHost reports what happened without throwing', async () => {

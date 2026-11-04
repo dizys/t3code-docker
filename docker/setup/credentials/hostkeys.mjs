@@ -30,6 +30,14 @@ const choose = keys => [...keys].sort((a, b) => TYPES.indexOf(a.type) - TYPES.in
 const row = (id, key) => `${id} ${key.type} ${key.key}\n`;
 const result = (code, detail = {}) => ({ ok: false, code, detail });
 
+// ECDSA is last because its query opens connections for three curve sizes.
+const SCAN_ORDER = ['ed25519', 'rsa', 'ecdsa'];
+const networkCode = text => {
+  if (/Connection timed out|Operation timed out/i.test(text)) return 'timeout';
+  if (/Could not resolve|Name or service not known|Connection refused|No route to host|Network is unreachable/i.test(text)) return 'unreachable';
+  return null;
+};
+
 export const reachHost = ({ host, port }, { signal, connect = createConnection } = {}) => new Promise(resolve => {
   if (signal?.aborted) return resolve(result('timeout'));
   let socket, settled = false;
@@ -44,7 +52,7 @@ export const reachHost = ({ host, port }, { signal, connect = createConnection }
   } catch { finish(result('unreachable')); }
 });
 
-export function createHostKeys({ io, run = execute, reach = reachHost, home = process.env.HOME || '/home/t3', clock = () => new Date().toISOString() }) {
+export function createHostKeys({ io, run = execute, home = process.env.HOME || '/home/t3', clock = () => new Date().toISOString() }) {
   const validate = profile => {
     if (!validText(profile?.host, 253) || !(isIP(profile.host) || /^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(profile.host)) || !Number.isInteger(profile.port) || profile.port < 1 || profile.port > 65535) throw new CredentialError('Enter a valid host and port.');
   };
@@ -57,17 +65,30 @@ export function createHostKeys({ io, run = execute, reach = reachHost, home = pr
   };
   const scan = async (profile, { signal = AbortSignal.timeout(10000) } = {}) => {
     validate(profile);
-    const reachable = await reach(profile, { signal });
-    if (!reachable.ok) return reachable;
-    try {
-      const answer = await run('/usr/bin/ssh-keyscan', ['-T', '5', '-p', String(profile.port), '-t', 'ed25519,ecdsa,rsa', '--', profile.host], { signal, timeout: 5000 });
-      const keys = answer.stdout.split(/\r?\n/).map(parseKey).filter(Boolean);
+    for (const kind of SCAN_ORDER) {
+      let answer;
+      try {
+        answer = await run('/usr/bin/ssh-keyscan', ['-T', '5', '-p', String(profile.port), '-t', kind, '--', profile.host], { signal, timeout: 5000 });
+      } catch (error) { return result(signal.aborted || error?.killed || error?.code === 'ABORT_ERR' ? 'timeout' : 'scan-failed'); }
+      if (signal?.aborted) return result('timeout');
+      const keys = String(answer.stdout || '').split(/\r?\n/).map(parseKey).filter(Boolean);
       const key = choose(keys);
-      if (!key) return result('scan-failed');
-      const checked = await run('/usr/bin/ssh-keygen', ['-lf', '-', '-E', 'sha256'], { input: `${key.type} ${key.key}\n`, signal, timeout: 2000 });
-      if (checked.code !== 0 || !checked.stdout.split(/\s+/).includes(key.fingerprint)) return result('scan-failed');
-      return { ok: true, key };
-    } catch (error) { return result(signal.aborted || error?.killed || error?.code === 'ABORT_ERR' ? 'timeout' : 'scan-failed'); }
+      if (key) {
+        try {
+          const checked = await run('/usr/bin/ssh-keygen', ['-lf', '-', '-E', 'sha256'], { input: `${key.type} ${key.key}\n`, signal, timeout: 2000 });
+          if (checked.code !== 0 || !String(checked.stdout || '').split(/\s+/).includes(key.fingerprint)) return result('scan-failed');
+        } catch (error) { return result(signal.aborted || error?.killed || error?.code === 'ABORT_ERR' ? 'timeout' : 'scan-failed'); }
+        return { ok: true, key };
+      }
+      const diagnostics = `${answer.stderr || ''}\n${answer.stdout || ''}`;
+      const network = networkCode(diagnostics);
+      if (network) return result(network);
+      if (String(answer.stderr || '').trim()) return result('scan-failed');
+      // Only an SSH banner proves the host answered without this key type.
+      // Silent failures (including closed ports) must not trigger more scans.
+      if (!/^# .+ SSH-2\.0-/m.test(answer.stdout || '')) return result('unreachable');
+    }
+    return result('scan-failed');
   };
   const inspect = async (profile, options) => {
     const scanned = await scan(profile, options);

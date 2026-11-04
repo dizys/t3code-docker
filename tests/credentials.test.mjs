@@ -119,6 +119,17 @@ test('normalizing keeps only what a type holds and treats a pasted value the way
   assert.deepEqual([edited.fields, edited.secrets], [{ REGION: 'us' }, { KEEP: secret }]);
 });
 
+test('an omitted or blank optional secret is kept, an explicit null removes it', () => {
+  const aws = secrets => ({ id: 'cloud', type: 'aws', fields: { accessKeyId: 'AKIAFIXTURE' }, secrets });
+  const previous = normalize(aws({ secretAccessKey: 'fixture-secret', sessionToken: 'fixture-session' }));
+  assert.equal(normalize(aws({ secretAccessKey: '' }), previous).secrets.sessionToken, 'fixture-session', 'omitted keeps');
+  assert.equal(normalize(aws({ secretAccessKey: '', sessionToken: '' }), previous).secrets.sessionToken, 'fixture-session', 'blank keeps');
+  const cleared = normalize(aws({ secretAccessKey: '', sessionToken: null }), previous);
+  assert.equal(Object.hasOwn(cleared.secrets, 'sessionToken'), false, 'null removes an optional secret');
+  assert.equal(cleared.secrets.secretAccessKey, 'fixture-secret');
+  assert.equal(normalize(aws({ secretAccessKey: null }), previous).secrets.secretAccessKey, 'fixture-secret', 'a required secret still keeps on null');
+});
+
 test('output filtering masks literal and encoded values across every chunk boundary', () => {
   for (const value of [secret, 'password-with-"quotes"&slashes\\and-more', 'key +/~']) {
     const variants = [value, JSON.stringify(value).slice(1, -1), encodeURIComponent(value), new URLSearchParams([['', value]]).toString().slice(1), Buffer.from(value).toString('base64')];

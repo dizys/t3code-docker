@@ -108,6 +108,24 @@ test('drafts and payloads hold only what each type needs, and a saved secret is 
   assert.deepEqual(plain(S.givesPreview({ ...S.defaults('custom'), vars: [{ name: 'ONE' }, { name: '' }] })), [{ name: 'ONE' }]);
 });
 
+test('removing a saved optional secret survives the page payload and the server', () => {
+  const draft = S.draftOf({ id: 'cloud', type: 'aws', fields: { accessKeyId: 'AKIAFIXTURE' }, secretNames: ['secretAccessKey', 'sessionToken'] });
+  const sent = plain(S.payload(draft, { sessionToken: null }));
+  assert.equal(sent.secrets.sessionToken, null, 'the page carries an explicit removal');
+  assert.deepEqual(plain(S.validate(draft, { secrets: { sessionToken: null }, savedSecrets: ['secretAccessKey'] })), {}, 'validation allows removing an optional secret');
+  const previous = normalize({ id: 'cloud', type: 'aws', fields: { accessKeyId: 'AKIAFIXTURE' }, secrets: { secretAccessKey: 'fixture-secret', sessionToken: 'fixture-session' } });
+  const cleared = normalize(sent, previous);
+  assert.equal(cleared.secrets.secretAccessKey, 'fixture-secret', 'an omitted secret is still kept');
+  assert.equal(Object.hasOwn(cleared.secrets, 'sessionToken'), false, 'the server drops the removed secret');
+});
+
+test('the editor offers removal for saved optional secrets and sends it as null', () => {
+  const editor = readFileSync(new URL('../docker/setup/client/credential-editor.js', import.meta.url), 'utf8');
+  assert.match(editor, /data-cred-editor="remove"/, 'a Remove action exists');
+  assert.match(editor, /removing/, 'removed secrets are tracked');
+  assert.match(editor, /: null/, 'removal is sent as an explicit null');
+});
+
 test('result precedence, attention filtering and metadata searches agree with the server', () => {
   const profile = { ...api, hasSecret: true, test: { ok: false, code: 'timeout' } };
   assert.equal(Boolean(S.needsAttention(profile, [])), false);

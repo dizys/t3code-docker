@@ -417,6 +417,29 @@ try {
       await editor.waitFor({ state: 'hidden' }); check(true, 'an untouched ' + type.id + ' form closes without asking');
     }
 
+    // Removing an optional AWS token is explicit, undoable, and persisted by the real API.
+    await store.save({ create: true, credential: { id: 'fixture-aws', type: 'aws', fields: { accessKeyId: 'AKIAFIXTURE' }, secrets: { secretAccessKey: secret, sessionToken: token } } });
+    await refresh(); await row('fixture-aws').waitFor(); await edit('fixture-aws');
+    editor = target.locator('.tc-cred-editor');
+    const optionalToken = editor.locator('[data-key="cred-field-secrets.sessionToken"]');
+    check(await editor.locator('[data-cred-editor="remove"]').count() === 1, 'only the optional saved secret can be removed');
+    await optionalToken.getByRole('button', { name: 'Remove', exact: true }).click();
+    await optionalToken.getByText('Removed on save', { exact: true }).waitFor();
+    await optionalToken.getByRole('button', { name: 'Undo', exact: true }).click();
+    check(await optionalToken.getByRole('button', { name: 'Remove', exact: true }).isVisible(), 'Undo keeps the saved session token');
+    await optionalToken.getByRole('button', { name: 'Remove', exact: true }).click();
+    await fits('remove optional token'); await capture('remove-aws-token');
+    await editor.locator('[data-cred-editor="save"]').click(); await editor.waitFor({ state: 'hidden' });
+    const permanent = await store.forUse('fixture-aws');
+    check(!Object.hasOwn(permanent.secrets, 'sessionToken'), 'removed token is absent from the real store');
+    check(permanent.secrets.secretAccessKey === secret, 'removal keeps the required AWS secret');
+    await edit('fixture-aws'); editor = target.locator('.tc-cred-editor');
+    check(await editor.locator('#cred-secrets-sessionToken').isVisible(), 'reopening shows an empty optional token');
+    await discard(editor);
+    const awsPublic = await store.public('fixture-aws');
+    await store.remove({ id: awsPublic.id, revision: awsPublic.revision }); await refresh();
+    await row('fixture-aws').waitFor({ state: 'hidden' });
+
     // ---- The side panel's toggle does something wherever it shows. ---------------
     editor = await addDialog(); await pick(editor, 'token');
     const railToggle = editor.locator('.tc-wizard-rail-toggle'), railWrap = editor.locator('.tc-wizard-rail-wrap');

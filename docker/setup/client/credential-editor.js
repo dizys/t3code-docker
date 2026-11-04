@@ -21,7 +21,7 @@ const T3CredentialEditor = (() => {
     const open = async (profile, { replace = false, type = null, name = '' } = {}) => {
       if (!await close('replaced')) return;
       const view = { original: profile || null, draft: profile ? S.draftOf(profile) : S.defaults(type || 'token'), revision: profile?.revision, create: !profile, step: profile || type ? 'form' : 'start',
-        secrets: {}, replacing: new Set(), signin: 'generate', generated: null, passphrase: '', needsPassphrase: false, pasteText: '', detected: null, detecting: false, fileError: null, dragging: false,
+        secrets: {}, replacing: new Set(), removing: new Set(), signin: 'generate', generated: null, passphrase: '', needsPassphrase: false, pasteText: '', detected: null, detecting: false, fileError: null, dragging: false,
         touched: new Set(), busy: null, error: null, conflict: null, taken: false, result: null, scanned: null, trusted: false, revealed: new Set(), railOpen: false, generation: 0, closing: false };
       // A name from a link may be taken already, and Save can't explain that by itself.
       if (name) { view.draft.id = name; view.touched.add('id'); }
@@ -48,9 +48,9 @@ const T3CredentialEditor = (() => {
       const baseline = () => JSON.stringify(S.payload(view.original ? S.draftOf(view.original) : { ...S.defaults(view.draft.type), id: name }));
       const dirty = () => {
         if (view.step === 'start') return Boolean(view.pasteText);
-        return Boolean(Object.values(view.secrets).some(Boolean) || view.trusted || view.detected || view.draft.vars?.some(row => row.value) || JSON.stringify(S.payload(view.draft)) !== baseline());
+        return Boolean(Object.values(view.secrets).some(Boolean) || view.removing.size || view.trusted || view.detected || view.draft.vars?.some(row => row.value) || JSON.stringify(S.payload(view.draft)) !== baseline());
       };
-      const savedSecrets = () => view.original?.secretNames?.filter(key => !view.replacing.has(key)) || [];
+      const savedSecrets = () => view.original?.secretNames?.filter(key => !view.replacing.has(key) && !view.removing.has(key)) || [];
       const errors = () => {
         const found = S.validate(view.draft, { editing: !view.create, names: ctx.rows().filter(row => row.id !== view.recreateId).map(row => row.id), secrets: view.secrets, savedSecrets: savedSecrets(), needSecret: !(creatingSsh() && view.signin === 'generate') });
         return { ...found, ...(view.taken ? { id: view.draft.id + ' is taken.' } : {}) };
@@ -143,11 +143,12 @@ const T3CredentialEditor = (() => {
         return input(path, entry.label, { optional: entry.optional, type: entry.kind === 'number' ? 'number' : 'text', max: entry.kind === 'number' ? null : entry.max, placeholder: entry.placeholder, hint: entry.hint });
       };
       const fileButton = target => html`<label class="tc-btn tc-btn--ghost tc-btn--xs tc-cred-file">${icon('upload')}Choose file…<input class="tc-sr" type="file" data-cred-file="${target}" tabindex="-1"${disabled(view.busy)}></label>`;
-      const savedLine = (entry, path) => html`<div class="tc-cred-secret">${icon('circle-check')}<span>Saved <small>${view.original.secretChangedAt ? '· changed ' + S.day(view.original.secretChangedAt) : '· from before the upgrade'}</small></span><button class="tc-btn tc-btn--ghost tc-btn--xs" id="${domId(path)}-replace" type="button" data-cred-editor="replace" data-secret="${entry.key}"${disabled(view.busy)}>Replace…</button></div>`;
+      const savedLine = (entry, path) => html`<div class="tc-cred-secret">${icon('circle-check')}<span>Saved <small>${view.original.secretChangedAt ? '· changed ' + S.day(view.original.secretChangedAt) : '· from before the upgrade'}</small></span><button class="tc-btn tc-btn--ghost tc-btn--xs" id="${domId(path)}-replace" type="button" data-cred-editor="replace" data-secret="${entry.key}"${disabled(view.busy)}>Replace…</button>${entry.optional ? html`<button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-cred-editor="remove" data-secret="${entry.key}"${disabled(view.busy)}>Remove</button>` : ''}</div>`;
+      const removedLine = (entry, path) => html`<div class="tc-cred-secret">${icon('triangle-alert')}<span>Removed on save</span><button class="tc-btn tc-btn--link tc-cred-keep" type="button" data-cred-editor="keep-saved" data-secret="${entry.key}"${disabled(view.busy)}>Undo</button></div>`;
       const secretInput = (entry, options = {}) => {
         const path = 'secrets.' + entry.key, label = options.label || entry.label, showing = view.revealed.has(entry.key), invalid = view.touched.has(path) && Boolean(errors()[path]);
         const isSaved = view.original?.secretNames?.includes(entry.key);
-        if (isSaved && !view.replacing.has(entry.key)) return html`<div class="tc-form-field" data-key="cred-field-${path}"><span class="tc-label">${label}</span>${savedLine(entry, path)}</div>`;
+        if (isSaved && !view.replacing.has(entry.key)) return html`<div class="tc-form-field" data-key="cred-field-${path}"><span class="tc-label">${label}${entry.optional ? html` <small class="tc-cred-optional">optional</small>` : ''}</span>${view.removing.has(entry.key) ? removedLine(entry, path) : savedLine(entry, path)}</div>`;
         const help = options.hint || (isSaved ? 'Leaving this empty keeps the saved ' + entry.label.toLowerCase() + '.' : 'Not shown again after you save.');
         const keep = isSaved ? html`<button class="tc-btn tc-btn--link tc-cred-keep" type="button" data-cred-editor="keep-saved" data-secret="${entry.key}"${disabled(view.busy)}>Keep saved</button>` : '';
         const reveal = html`<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--xs tc-reveal" type="button" data-cred-editor="reveal" data-secret="${entry.key}" aria-label="${showing ? 'Hide' : 'Show'} newly typed ${entry.label.toLowerCase()}" aria-pressed="${String(showing)}"${disabled(view.busy)}>${icon(showing ? 'eye-off' : 'eye')}</button>`;
@@ -217,12 +218,14 @@ const T3CredentialEditor = (() => {
 
       // ---- talking to the server ----------------------------------------------------------
       const trustField = () => view.trusted && view.scanned ? { trust: { fingerprint: view.scanned.presented.fingerprint } } : {};
+      // A removed optional secret travels as an explicit null, which the server drops.
+      const withRemovals = secrets => { const out = { ...secrets }; for (const key of view.removing) out[key] = null; return out; };
       const testBody = () => {
-        const draft = S.payload(view.draft, view.secrets);
+        const draft = S.payload(view.draft, withRemovals(view.secrets));
         return { draft, ...(!view.create ? { id: view.draft.id } : {}), ...trustField(), ...(creatingSsh() && view.signin === 'generate' ? { generatedKeyId: view.generated?.keyId } : {}), ...(view.passphrase ? { passphrase: view.passphrase } : {}) };
       };
       const saveBody = () => {
-        const credential = S.payload(view.draft, view.secrets), body = { credential, ...(!view.create ? { revision: view.revision } : {}), ...trustField(), ...(view.passphrase ? { passphrase: view.passphrase } : {}) };
+        const credential = S.payload(view.draft, withRemovals(view.secrets)), body = { credential, ...(!view.create ? { revision: view.revision } : {}), ...trustField(), ...(view.passphrase ? { passphrase: view.passphrase } : {}) };
         if (creatingSsh() && view.signin === 'generate') body.generatedKeyId = view.generated.keyId;
         if (creatingSsh() && view.signin === 'once') {
           credential.fields.auth = 'key'; body.generate = true; body.install = { password: view.secrets.password }; delete credential.secrets.password;
@@ -368,8 +371,9 @@ const T3CredentialEditor = (() => {
           return;
         }
         if (action === 'change-type') { view.generation++; view.step = 'start'; view.detected = null; view.secrets = {}; view.result = null; view.scanned = null; view.trusted = false; view.error = null; view.touched.clear(); paint(); view.layer.panel.querySelector('#cred-paste')?.focus(); return; }
-        if (action === 'replace') { view.replacing.add(secret); paint(); view.layer.panel.querySelector('#' + domId('secrets.' + secret))?.focus(); return; }
-        if (action === 'keep-saved') { delete view.secrets[secret]; view.replacing.delete(secret); view.revealed.delete(secret); view.touched.delete('secrets.' + secret); view.result = null; paint(); view.layer.panel.querySelector('#' + domId('secrets.' + secret) + '-replace')?.focus(); return; }
+        if (action === 'replace') { view.replacing.add(secret); view.removing.delete(secret); paint(); view.layer.panel.querySelector('#' + domId('secrets.' + secret))?.focus(); return; }
+        if (action === 'remove') { view.removing.add(secret); view.replacing.delete(secret); delete view.secrets[secret]; view.revealed.delete(secret); view.touched.delete('secrets.' + secret); view.result = null; paint(); return; }
+        if (action === 'keep-saved') { delete view.secrets[secret]; view.replacing.delete(secret); view.removing.delete(secret); view.revealed.delete(secret); view.touched.delete('secrets.' + secret); view.result = null; paint(); view.layer.panel.querySelector('#' + domId('secrets.' + secret) + '-replace')?.focus(); return; }
         if (action === 'reveal') { if (view.revealed.has(secret)) view.revealed.delete(secret); else view.revealed.add(secret); paint(); return; }
         if (action === 'select') {
           view.draft.fields[button.dataset.field] = button.dataset.value; view.result = null;
@@ -381,7 +385,7 @@ const T3CredentialEditor = (() => {
         if (action === 'var-secret') { const row = view.draft.vars[Number(button.dataset.index)]; row.secret = !row.secret; row.saved = false; paint(); return; }
         if (action === 'theirs') {
           const current = view.conflict.current, keep = view.original.secretChangedAt === current.secretChangedAt;
-          if (!keep) { view.secrets = {}; view.replacing.clear(); }
+          if (!keep) { view.secrets = {}; view.replacing.clear(); view.removing.clear(); }
           view.revealed.clear(); view.original = current; view.draft = S.draftOf(current); view.revision = current.revision; view.conflict = null; view.scanned = null; view.trusted = false; view.result = null; view.touched.clear(); paint(); return;
         }
         if (action === 'mine') { view.revision = view.conflict.current.revision; view.conflict = null; return void submit(); }

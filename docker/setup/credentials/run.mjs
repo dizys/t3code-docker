@@ -139,6 +139,8 @@ export async function runWith(credentials, command, { stdout = process.stdout, s
   };
   for (const { credential, rename } of credentials) {
     const given = delivery(credential, { rename, base: merged, askpass: askpassPath });
+    // Clear an inherited token, while preserving one explicitly supplied by another credential.
+    if (credential.type === 'aws' && given.env.AWS_SESSION_TOKEN === undefined && !set.has('AWS_SESSION_TOKEN')) delete merged.AWS_SESSION_TOKEN;
     for (const [name, value] of Object.entries(given.env)) { if (!name.startsWith('GIT_CONFIG_')) claim(name, credential.id); merged[name] = value; }
     for (const file of given.files) { claim(file.env, credential.id); files.push(file); }
     masks.push(...given.masks);

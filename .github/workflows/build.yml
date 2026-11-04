@@ -111,6 +111,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Docker builds and agent lifecycle installs need the same runner disk.
+      # These host SDKs are unused: all product tools run inside the image.
+      - name: Free unused hosted-runner SDKs
+        if: runner.environment == 'github-hosted' && runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          df -h /
+          df -i /
+          sudo du -sh /usr/local/lib/android /usr/share/dotnet 2>/dev/null || true
+          sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet
+          df -h /
+          df -i /
+
       - name: Lowercase the image path
         id: image
         run: echo "slug=$(printf '%s' '${{ env.IMAGE }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
@@ -289,6 +302,13 @@ jobs:
           path: /tmp/evidence/build-*.json
           if-no-files-found: error
           retention-days: 7
+
+      - name: Disk usage after failure
+        if: failure()
+        run: |
+          df -h /
+          df -i /
+          docker system df || true
 
   # Promote the tested digests into the release tags. No image is rebuilt: the
   # manifest list is assembled from the digests the build jobs pushed, and

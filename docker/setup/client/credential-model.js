@@ -58,7 +58,7 @@ const T3CredentialModel = (() => {
       const value = draft.fields[entry.key];
       if (value !== undefined && value !== '') fields[entry.key] = entry.kind === 'number' ? Number(value) : value;
     }
-    return { ...base, fields, env: draft.env || {}, secrets: Object.fromEntries(Object.entries(secrets).filter(([, value]) => value)) };
+    return { ...base, fields, env: draft.env || {}, secrets: Object.fromEntries(Object.entries(secrets).filter(([, value]) => value || value === null)) };
   };
 
   const kind = credential => credential.type === 'ssh' ? (credential.fields?.auth === 'key' ? 'Key' : 'Password') : credential.fields?.baseUrl ? (credential.fields.authType === 'header' ? credential.fields.authName || 'Header key' : credential.fields.authType === 'query' ? '?' + (credential.fields.authName || 'key') : 'Bearer token') : null;

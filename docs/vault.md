@@ -180,6 +180,9 @@ Saved secrets are write-only. **Replace…** takes a new value, and **Keep saved
 an empty replacement keeps the current one. Show/hide only reveals a value you just
 typed. Closing the editor clears it. Unsaved changes ask before they're discarded.
 
+For optional fields such as an AWS session token, **Remove** marks the saved value
+for removal when you save. **Undo** keeps it.
+
 If another window or an agent changes the same credential while you're editing, the
 editor shows what changed. **Use theirs** adopts the current details, **Keep mine**
 retries your draft, and a credential deleted elsewhere can be **Saved as new**.

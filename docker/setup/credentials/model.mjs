@@ -57,6 +57,9 @@ function normalizeField(entry, raw) {
 }
 
 function normalizeSecret(entry, raw, previous) {
+  // An explicit null removes a saved optional secret. Anything merely left out
+  // or blank keeps what is saved, so an untouched field never loses its value.
+  if (raw === null && entry.optional) return undefined;
   const value = raw === undefined || raw === null || raw === '' ? previous : raw;
   if (value === undefined) { if (entry.optional) return undefined; fail(`Enter ${entry.label.toLowerCase()}.`, entry.key); }
   if (typeof value !== 'string' || !value.isWellFormed()) fail(`Enter ${entry.label.toLowerCase()} as plain text.`, entry.key);

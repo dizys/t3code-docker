@@ -11,12 +11,62 @@ const key = process.argv[3] || 'dev';
 const output = process.env.T3_EDITOR_UI_OUTPUT || '/tmp/t3-editor-ui-audit';
 fs.mkdirSync(output,{recursive:true});
 const variants = [['desktop',1440,900],['laptop',1280,800],['tablet',820,900],['phone',390,844],['tab-narrow',480,900,true],['tab-medium',704,900,true],['tab-wide',1040,900,true]];
+const requested = (process.env.T3_EDITOR_UI_VARIANTS || '').split(',').filter(Boolean);
+const selected = variants.filter(([name])=>!requested.length||requested.includes(name));
+assert(selected.length,'Select at least one editor audit layout.');
 (async()=>{
-  const browser = await chromium.launch({executablePath:process.env.CHROME_PATH || '/usr/bin/chromium',args:['--no-sandbox']});
+  // Playwright hides scrollbars by default, masking native/mirror viewport drift.
+  const browser = await chromium.launch({executablePath:process.env.CHROME_PATH || '/usr/bin/chromium',args:['--no-sandbox'],ignoreDefaultArgs:['--hide-scrollbars']});
   let checks = 0;
+  const alignment = async (field, label) => {
+    const original = await field.inputValue();
+    const lines = Array.from({length:65},(_,i)=>`${i + 1} abcdefghijklmnopqrstuvwxyz `.repeat(8)), text = lines.join('\n');
+    await field.fill(text);
+    for (const scrollbars of ['auto','none','auto']) {
+      for (const edge of ['middle','bottom','right']) {
+        const geometry = await field.evaluate(async (input,{scrollbars,edge})=>{
+          input.style.scrollbarWidth = scrollbars;
+          input.focus(); input.setSelectionRange(input.value.indexOf('54 abc'),input.value.indexOf('62 abc'));
+          input.scrollTop = edge === 'middle' ? 550 : input.scrollHeight;
+          input.scrollLeft = edge === 'right' ? input.scrollWidth : 0;
+          input.dispatchEvent(new Event('scroll'));
+          const mirror = input.closest('.tc-files-editor-workspace').querySelector('[data-editor-mirror]');
+          // Native selection, scrolling and resize observers can queue separate paints.
+          for(let frame=0;frame<20;frame++){
+            await new Promise(resolve=>requestAnimationFrame(resolve));
+            if(mirror.clientHeight===input.clientHeight&&mirror.clientWidth===input.clientWidth&&mirror.scrollHeight===input.scrollHeight&&Math.abs(mirror.scrollTop-input.scrollTop)<1&&Math.abs(mirror.scrollLeft-input.scrollLeft)<1)break;
+          }
+          return {bar:input.offsetHeight-input.clientHeight,height:input.clientHeight,width:input.clientWidth,mirrorHeight:mirror.clientHeight,mirrorWidth:mirror.clientWidth,scrollHeight:input.scrollHeight,mirrorScrollHeight:mirror.scrollHeight,top:input.scrollTop,mirrorTop:mirror.scrollTop,left:input.scrollLeft,mirrorLeft:mirror.scrollLeft,start:input.selectionStart,end:input.selectionEnd};
+        },{scrollbars,edge});
+        assert.equal(geometry.bar > 0,scrollbars === 'auto',label+' exercises reserved and overlay-size scrollbar viewports');
+        assert.equal(geometry.mirrorHeight,geometry.height,label+' mirror excludes the horizontal scrollbar');
+        assert.equal(geometry.mirrorWidth,geometry.width,label+' mirror excludes the vertical scrollbar');
+        assert.equal(geometry.mirrorScrollHeight,geometry.scrollHeight,label+' virtual lines preserve the native scroll range');
+        assert(Math.abs(geometry.top-geometry.mirrorTop)<1,label+' selection stays vertically aligned at '+edge+' ('+geometry.top+' / '+geometry.mirrorTop+')');
+        assert(Math.abs(geometry.left-geometry.mirrorLeft)<1,label+' selection stays horizontally aligned at '+edge);
+        assert.equal(geometry.start,text.indexOf('54 abc'));assert.equal(geometry.end,text.indexOf('62 abc'));checks+=8;
+      }
+      // Hit-test painted text against the real native caret at the bottom.
+      const point = await field.evaluate(async input=>{
+        input.scrollLeft=0;input.dispatchEvent(new Event('scroll'));
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        const row=[...input.closest('.tc-files-editor-workspace').querySelectorAll('.tc-files-editor-line')].find(line=>line.querySelector('i').textContent==='59');
+        const walker=document.createTreeWalker(row.querySelector('code'),NodeFilter.SHOW_TEXT);
+        let node,offset=12;while((node=walker.nextNode())&&offset>=node.length)offset-=node.length;
+        const range=document.createRange();range.setStart(node,offset);range.setEnd(node,offset+1);
+        const glyph=range.getBoundingClientRect(),bounds=input.getBoundingClientRect();
+        return {x:glyph.left-bounds.left+0.1,y:glyph.top-bounds.top+glyph.height/2};
+      });
+      await field.click({position:point});
+      assert.equal(await field.evaluate(input=>input.selectionStart),lines.slice(0,58).join('\n').length+1+12,label+' clicking painted text places the native caret on that character');checks++;
+    }
+    assert.equal(await field.inputValue(),text,label+' scrolling and repainting preserve the draft');checks++;
+    await field.fill(original);
+    await field.evaluate(input=>{input.style.scrollbarWidth='';input.scrollTop=0;input.scrollLeft=0;input.dispatchEvent(new Event('scroll'));});
+  };
   try {
-    for (const theme of ['light','dark']) for (const [name,width,height,embedded] of variants) {
-      const context = await browser.newContext({viewport:{width,height},colorScheme:theme,reducedMotion:'reduce'}), page = await context.newPage(), errors = [];
+    for (const theme of ['light','dark']) for (const [name,width,height,embedded] of selected) {
+      const context = await browser.newContext({viewport:{width,height},colorScheme:theme,reducedMotion:process.env.T3_EDITOR_UI_MOTION || 'reduce'}), page = await context.newPage(), errors = [];
       const files = createFilesFixtures(), skills = createSkillsFixtures();
       page.on('pageerror', error => errors.push(error.message));
       await page.addInitScript(theme=>localStorage.setItem('t3-console-theme',theme),theme);
@@ -52,6 +102,11 @@ const variants = [['desktop',1440,900],['laptop',1280,800],['tablet',820,900],['
         }
       }
       await page.screenshot({path:path.join(output,`${name}-${theme}-selection.png`),fullPage:!embedded});
+      await target.evaluate(()=>location.hash='files/projects/acme-web/apps/web');
+      const config=target.locator('[data-path$="next.config.mjs"][data-files-row]');await config.waitFor();
+      if(width<1024){await config.click();await target.getByRole('button',{name:'Edit',exact:true}).click();}else await config.dblclick();
+      const file=target.locator('[data-files-editor-text]');await file.waitFor();
+      await alignment(file,name+' '+theme+' Files');await target.locator('[data-editor-close]').click();
       await target.evaluate(()=>location.hash='instructions');await target.locator('[data-cmd="context.edit"]').first().click();
       const field=target.locator('#cx-input');await field.waitFor({state:'visible'});await field.waitFor({state:'attached'});
       await target.waitForFunction(()=>!document.querySelector('#cx-input').disabled);
@@ -69,6 +124,7 @@ const variants = [['desktop',1440,900],['laptop',1280,800],['tablet',820,900],['
       await target.locator('#cx-input-find').press('Escape');assert.equal(await target.locator('.tc-source-find').isVisible(),false);checks+=2;
       await target.waitForFunction(()=>{const input=document.querySelector('#cx-input'),cur=document.querySelector('[data-source-editor="cx-input"] [data-cur] i');return Number(cur?.textContent)===input.value.slice(0,input.selectionStart).split('\n').length;});
       await page.screenshot({path:path.join(output,`${name}-${theme}-instructions.png`),fullPage:false});
+      await alignment(field,name+' '+theme+' Instructions');
       // Large documents and long lines remain scrollable without an enormous DOM.
       const huge=Array.from({length:4000},(_,i)=>i===3990?'const last = "'+ 'x'.repeat(12000)+'";':'# Line '+i).join('\n');
       // Native Chromium's automated insertText is pathological for thousands
@@ -88,6 +144,7 @@ const variants = [['desktop',1440,900],['laptop',1280,800],['tablet',820,900],['
       await target.locator('#skill-content[readonly]').waitFor();assert.equal(await target.locator('#skill-content').getAttribute('aria-label'),'SKILL.md contents');checks++;
       await target.locator('[data-inspect-edit]').click();await target.locator('#skill-content').fill(draft);
       await target.locator('[data-source-editor="skill-content"] .h').filter({hasText:'# Instructions'}).waitFor();
+      await alignment(target.locator('#skill-content'),name+' '+theme+' Skills');
       await page.screenshot({path:path.join(output,`${name}-${theme}-skill.png`),fullPage:false});
       assert.deepEqual(errors,[],name+' '+theme+' has no browser errors');checks++;
       await context.close();console.log(name+' '+theme+': editor and selection passed');

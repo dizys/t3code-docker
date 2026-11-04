@@ -10,6 +10,13 @@ const T3CodeEditor = (() => {
       return html`<span class="tc-files-editor-line"${number === line ? raw(' data-cur') : ''}><i>${number + 1}</i><code>${start ? html`<span style="display:inline-block;width:${start}ch"></span>` : ''}${T.tokens(text.slice(start, start + 4000) || ' ', modes[number]).map(token => token.tone ? html`<span class="${token.tone}">${token.text}</span>` : token.text)}${text.length > start + 4000 ? html`<span style="display:inline-block;width:${text.length - start - 4000}ch"></span>` : ''}</code></span>`;
     })}<div style="height:${Math.max(0, lines.length - last) * lineHeight}px"></div></pre>`;
   };
+  const syncMirror = (pre, field) => {
+    if (!pre || !field) return;
+    // Native scrollbars shrink the input's viewport. Without the same bounds,
+    // the mirror clamps its scroll early and drifts away from the native caret.
+    pre.style.width = field.clientWidth + 'px'; pre.style.height = field.clientHeight + 'px';
+    pre.scrollTop = field.scrollTop; pre.scrollLeft = field.scrollLeft;
+  };
   const create = ({ id, label, mode = 'markdown', describedBy, placeholder = '' }) => {
     let root, field, canvas, status, doc = T.documentOf('', mode), value = null, frame = null, resize, find = '', match = -1, options = {}, listeners = [];
     const markup = () => html`<div class="tc-source-editor" data-source-editor="${id}" data-key="editor:${id}" data-keep>
@@ -21,7 +28,7 @@ const T3CodeEditor = (() => {
       frame = null; if (!root?.isConnected) return;
       const pos = T.position(doc.starts, field.selectionStart), style = getComputedStyle(field), lineHeight = parseFloat(style.lineHeight);
       Kit.patch(canvas, mirror({ ...doc, scroll: field.scrollTop, left: field.scrollLeft, line: options.readOnly ? -1 : pos.line, height: field.clientHeight, lineHeight, charWidth: parseFloat(style.fontSize) * .6 }));
-      const pre = canvas.querySelector('pre'); if (pre) { pre.scrollTop = field.scrollTop; pre.scrollLeft = field.scrollLeft; }
+      syncMirror(canvas.querySelector('[data-editor-mirror]'), field);
       status.textContent = (options.readOnly ? 'Read-only · ' : '') + 'Line ' + (pos.line + 1) + ', column ' + pos.column;
     };
     const later = () => { if (!frame) frame = requestAnimationFrame(paint); };
@@ -51,5 +58,5 @@ const T3CodeEditor = (() => {
     };
     return { markup, sync, destroy, escape: () => { if (!root || root.querySelector('.tc-source-find').hidden) return false; findOpen(false); return true; } };
   };
-  return { mirror, create };
+  return { mirror, syncMirror, create };
 })();

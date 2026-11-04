@@ -577,6 +577,7 @@
 @keyframes tc-indet { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
 @keyframes tc-rise { from { opacity: 0; transform: translateY(8px); } }
 @media (prefers-reduced-motion: reduce) {
-  .tc-root *, .tc-root *::before, .tc-root *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  /* A nonzero duration would animate default transition-property: all. */
+  .tc-root *, .tc-root *::before, .tc-root *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0s !important; }
   .tc-dot--live::after { display: none; }
 }

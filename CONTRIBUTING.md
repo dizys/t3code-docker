@@ -265,6 +265,11 @@ frame widths in both themes. It checks highlighted Markdown, native undo, Find
 and Escape, loading a large Markdown file, bounded viewport DOM, read-only
 skills and selection/action overlap. Evidence is written to `/tmp/t3-editor-ui-audit`
 (`T3_EDITOR_UI_OUTPUT` overrides it). This fixture audit runs in browser CI.
+It keeps native scrollbars visible and checks caret hit-testing and multiline
+selection alignment while scrolling Files, Instructions and Skills editors,
+including switching between reserved-scrollbar and overlay-size viewports.
+Use `T3_EDITOR_UI_VARIANTS=desktop T3_EDITOR_UI_MOTION=no-preference` for a
+focused check with normal motion; the default covers all layouts with reduced motion.
 
 Source syntax and viewport limits live in `docker/setup/client/code-text.js`.
 `code-editor.js` owns source rendering and the native input surface; each caller

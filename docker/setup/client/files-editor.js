@@ -20,8 +20,9 @@ const T3FilesEditor=(()=>{
       if(!alive(view))return;
       view.layer.render();
       const field=view.layer.panel.querySelector('[data-files-editor-text]');
+      if(field!==view.field){view.resize?.disconnect();view.field=field;if(field){view.resize=new ResizeObserver(()=>later(view));view.resize.observe(field);}}
       if(field){field.readOnly=busy();if(field.value!==view.text){const start=view.selectionStart||0,end=view.selectionEnd||start;field.value=view.text;field.setSelectionRange(Math.min(start,view.text.length),Math.min(end,view.text.length));}}
-      const mirror=view.layer.panel.querySelector('[data-editor-mirror]');if(mirror){mirror.scrollTop=view.scroll;mirror.scrollLeft=view.left;}
+      T3CodeEditor.syncMirror(view.layer.panel.querySelector('[data-editor-mirror]'),field);
     };
     const later=view=>{if(view.frame)return;view.frame=requestAnimationFrame(()=>{view.frame=null;paint(view);});};
     const mirror=view=>T3CodeEditor.mirror({...view,height:view.layer?.panel.querySelector('[data-files-editor-text]')?.clientHeight||innerHeight,lineHeight:innerWidth<640?24:22,charWidth:innerWidth<640?9.6:7.8,transform:(text,line)=>view.secret&&!view.reveal&&!(line===view.line&&view.focused)?F.mask(text):text});
@@ -76,7 +77,7 @@ const T3FilesEditor=(()=>{
     const open=async(value,{create=false}={})=>{
       if(active&&!await requestClose())return;
       const view={path:value,exists:!create,read:create,phase:create?'ready':'loading',text:'',saved:'',etag:null,eol:'lf',secret:false,type:'Text',running:false,error:'',notice:'',line:0,column:1,scroll:0,left:0,lines:[''],starts:[0],reveal:false,findOpen:false,find:'',matches:[],match:0,capped:false,comparing:false,diff:null,side:'mine',folds:new Set(),frame:null,layer:null,controller:null,timer:null};active=view;
-      view.layer=Kit.open({kind:'sheet',backdrop:'ignore',panel:{tag:'section',class:'tc-sheet tc-sheet--editor tc-files-editor',role:'dialog','aria-modal':'true','aria-labelledby':'files-editor-name'},render:()=>body(view),onEscape:()=>{if(view.findOpen){view.findOpen=false;paint(view);}else if(view.comparing){view.comparing=false;paint(view);}else void requestClose();},onClose:()=>{clearTimeout(view.timer);cancelAnimationFrame(view.frame);view.controller?.abort();view.text='';view.saved='';view.lines=[];view.conflict=null;if(active===view)active=null;}});
+      view.layer=Kit.open({kind:'sheet',backdrop:'ignore',panel:{tag:'section',class:'tc-sheet tc-sheet--editor tc-files-editor',role:'dialog','aria-modal':'true','aria-labelledby':'files-editor-name'},render:()=>body(view),onEscape:()=>{if(view.findOpen){view.findOpen=false;paint(view);}else if(view.comparing){view.comparing=false;paint(view);}else void requestClose();},onClose:()=>{clearTimeout(view.timer);cancelAnimationFrame(view.frame);view.resize?.disconnect();view.field=null;view.controller?.abort();view.text='';view.saved='';view.lines=[];view.conflict=null;if(active===view)active=null;}});
       view.layer.panel.addEventListener('input',event=>{if(event.target.matches('[data-files-editor-text]')){view.text=event.target.value;view.notice='';view.error='';rebuild(view);caret(view);later(view);}if(event.target.id==='files-editor-find'){view.find=event.target.value;find(view);paint(view);}});
       view.layer.panel.addEventListener('scroll',event=>{if(event.target.matches('[data-files-editor-text]')){caret(view);later(view);}},true);
       view.layer.panel.addEventListener('focusin',event=>{view.focused=event.target.matches('[data-files-editor-text]');later(view);});view.layer.panel.addEventListener('focusout',()=>{view.focused=false;later(view);});

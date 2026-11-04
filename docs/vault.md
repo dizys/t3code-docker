@@ -106,6 +106,12 @@ safe default. A reinstall may explain a new key, but check through a trusted
 channel before choosing **Trust new key**. Changing a credential's host or port
 forgets its pin, and neither trust nor testing changes your `~/.ssh/known_hosts`.
 
+Saving stores the secret, trusting confirms the server's identity, and testing
+proves the sign-in works. A scanned key arrives over an unverified connection,
+so confirm its fingerprint out of band with the command shown (or your
+provider's console). Never bypass trust with `StrictHostKeyChecking=no`,
+edited `known_hosts` files, or relaxed sshd throttling to make scans pass.
+
 ## From a terminal or a skill
 
 ```sh

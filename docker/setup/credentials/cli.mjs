@@ -341,8 +341,14 @@ function setupForm(type, name) {
 async function scanTarget(service, fields) {
   const answer = await service.handle('/credentials/scan', { host: fields.host, port: Number(fields.port ?? 22) });
   if (answer.hostKey) return `Server's key: ${answer.hostKey.presented.type} ${answer.hostKey.presented.fingerprint}`;
-  fail(`Couldn't reach ${fields.host}: ${answer.result?.code || 'no answer'}.`, 502, 'unreachable');
+  throw scanFailure(fields.host, answer.result?.code);
 }
+
+const scanFailure = (host, code) => {
+  if (code === 'timeout') return new CredentialError(`The server took too long to respond (${host}: timeout).`, 502, 'timeout');
+  if (code === 'scan-failed') return new CredentialError(`Couldn't read the server's key (${host}: scan-failed).`, 502, 'scan-failed');
+  return new CredentialError(`Couldn't reach ${host}: ${code || 'no answer'}.`, 502, code === 'unreachable' ? 'unreachable' : code || 'unreachable');
+};
 
 function report({ credential, trust, signIn, sshAliases = true }, deleted) {
   const { id, fields = {} } = credential, lines = [`Saved ${id}${deleted ? ' and deleted the file' : ''}.`];
@@ -421,13 +427,13 @@ async function trust([name, fingerprint]) {
   if (credential.type !== 'ssh') fail(`${name} isn't an SSH credential.`);
   if (!fingerprint) {
     const scanned = await service.scan(name);
-    if (!scanned.ok) fail(`Couldn't reach ${credential.fields.host}: ${scanned.code}.`, 502, 'unreachable');
+    if (!scanned.ok) throw scanFailure(credential.fields.host, scanned.code);
     if (scanned.hostKey.state === 'trusted') { out(`${name} is already trusted: ${scanned.hostKey.presented.type} ${scanned.hostKey.presented.fingerprint}`); return; }
     out(`${scanned.hostKey.state === 'changed' ? `Warning: this is different from the key saved for ${name}. Only accept it if the server was reinstalled.\nSaved key:   ${scanned.hostKey.trusted.type} ${scanned.hostKey.trusted.fingerprint}\n` : ''}Server's key: ${scanned.hostKey.presented.type} ${scanned.hostKey.presented.fingerprint}\nThe user can check it on the server with: ${keyCheck(scanned.hostKey.presented.type)}\nShow them this fingerprint. Once they confirm it, run: t3-vault trust ${name} ${scanned.hostKey.presented.fingerprint}`);
     return;
   }
   const answer = await service.trust(name, fingerprint, credential.revision);
-  if (!answer.ok) fail(`Couldn't reach ${credential.fields.host}: ${answer.code}.`, 502, 'unreachable');
+  if (!answer.ok) throw scanFailure(credential.fields.host, answer.code);
   out(`Trusted ${name}: ${answer.hostKey.type} ${answer.hostKey.fingerprint}`);
 }
 

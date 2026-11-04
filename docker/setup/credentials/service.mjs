@@ -173,6 +173,10 @@ export function createCredentialsService({ store = createCredentialStore(), usag
       return { ok: true, result: { ...cleaned, at: new Date(clock()).toISOString() } };
     };
     if (credential.type !== 'ssh') return run(credential);
+    // A saved credential that already pins a host key is verified by the
+    // connection itself (StrictHostKeyChecking=yes), with no discovery scan.
+    // A changed key still fails there as host-key-changed.
+    if (!draft && credential.knownHostsFile) return run(credential);
     const scanned = await scan(draft && !credential.knownHostsFile ? target({ ...credential, id: undefined }) : target(credential), signal);
     if (!scanned.ok) { result = scanned; return run(credential); }
     const presented = scanned.hostKey.presented, trusted = scanned.hostKey.trusted, keyAuth = credential.fields.auth === 'key';

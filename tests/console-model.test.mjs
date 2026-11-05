@@ -271,6 +271,54 @@ test("Muse offers opt-in install, sign-in and updates without claiming saved cre
   assert.equal(newer.updateAvailable, false);
 });
 
+test("OpenCode never advertises a cached target from the other major as a regular update", () => {
+  for (const [installed, latest, newest, expected] of [
+    ['1.19.5', '2.2.5', null, null],
+    ['1.19.5', null, '2.2.5', null],
+    ['1.19.5', '1.19.6', '2.2.5', '1.19.6'],
+    ['1.19.5', '2.2.5', '1.19.6', '1.19.6'],
+    ['2.2.5', '1.99.0', null, null],
+    ['2.2.5', '2.2.6', null, '2.2.6'],
+  ]) {
+    const s = statusWith({ server: { ok: true, version: '0.1.7' }, harnesses: [harness('opencode', { installedVersion: installed, version: installed, latestVersion: latest, newestVersion: newest })] });
+    const oc = row(s, 'opencode');
+    assert.equal(oc.latest, expected);
+    assert.equal(oc.updateAvailable, Boolean(expected));
+    assert.equal(M.updatesView(s, ui(), NOW).due.length, expected ? 1 : 0, 'batch updates exclude major switches');
+    if (installed.startsWith('1.')) {
+      assert.equal(oc.action.cmd, 'harness.upgrade');
+      assert.equal(oc.action.label, 'Upgrade to v2…');
+      assert.ok(oc.menu.some(item => item.cmd === 'harness.upgrade'));
+      assert.ok(!oc.menu.some(item => item.cmd === 'harness.update' && item.label.includes('2.2.5')));
+    } else assert.equal(oc.upgradeAvailable, false);
+  }
+});
+
+test("OpenCode major upgrades are offered on supported Stable and Nightly, separately from update counts", () => {
+  for (const version of ['0.1.2', '0.1.7', '0.1.8-nightly.20261105.4218']) {
+    const s = statusWith({ server: { ok: true, version }, harnesses: [harness('opencode', { installedVersion: '1.19.5', latestVersion: '2.2.5' })] });
+    const view = M.updatesView(s, ui(), NOW);
+    assert.equal(view.count, 0);
+    assert.equal(view.upgrades.length, 1);
+    assert.equal(view.upgrades[0].action.cmd, 'harness.upgrade');
+    const commands = M.paletteItems(s, [], ui(), NOW).filter(item => item.cmd.cmd === 'harness.upgrade');
+    assert.equal(commands.length, 1);
+    assert.equal(commands[0].label, 'Upgrade OpenCode to v2…');
+  }
+  const unsupported = statusWith({ server: { ok: true, version: '0.1.1' }, harnesses: [harness('opencode', { installedVersion: '1.19.5' })] });
+  assert.equal(row(unsupported, 'opencode').upgradeAvailable, false);
+});
+
+test("Updates keeps a v1 patch update separate from its reviewed v2 migration", () => {
+  const s = statusWith({ server: { ok: true, version: '0.1.7' }, harnesses: [harness('opencode', { installedVersion: '1.19.5', latestVersion: '1.19.6' })] });
+  const view = M.updatesView(s, ui(), NOW);
+  assert.equal(view.available.length, 1);assert.equal(view.upgrades.length, 1);assert.equal(view.count, 1);
+  assert.equal(view.available[0].latest, '1.19.6');assert.equal(view.available[0].action.cmd, 'harness.update');
+  assert.equal(view.available[0].action.label, 'Update v1');
+  assert.equal(view.upgrades[0].latest, null);assert.equal(view.upgrades[0].action.cmd, 'harness.upgrade');
+  assert.equal(view.upgrades[0].updateAvailable, false);
+});
+
 test("OpenCode v2 releases can be found by major prefix, preserving release-age and minimum-version markers", () => {
   const releases = [
     { version: "2.0.28", waiting: true, supported: true, minimumT3Version: "0.1.2" },

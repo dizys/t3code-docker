@@ -355,6 +355,29 @@ test("overlapping saves cannot leave an older snapshot on disk", async () => {
   assert.equal(saved.versions["package:jq"].version, "2");
 });
 
+test("invalidating a changed agent track forgets persisted targets and rejects old in-flight answers", async () => {
+  let release, started;
+  const gate = new Promise(resolve => { started = resolve; });
+  let calls = 0, saved;
+  const cache = createLatestCache({
+    keys: () => ['harness:opencode'],
+    read: async () => JSON.stringify({ versions: { 'harness:opencode': { version: '2.2.5', at: 1 } } }),
+    write: async text => { saved = JSON.parse(text); },
+    lookup: async () => {
+      if (++calls === 1) { started(); await new Promise(resolve => { release = resolve; }); return '2.2.5'; }
+      return '1.19.5';
+    },
+  });
+  await cache.load();
+  const old = cache.refreshOne('harness:opencode'); await gate;
+  await cache.invalidate('harness:opencode');
+  assert.equal(cache.get('harness:opencode').latestVersion, null);
+  await cache.refreshOne('harness:opencode');
+  release(); await old;
+  assert.equal(cache.get('harness:opencode').latestVersion, '1.19.5');
+  assert.equal(saved.versions['harness:opencode'].version, '1.19.5');
+});
+
 test("failure-only retries do not recheck successful rows past their TTL", async () => {
   const answers = { "harness:claude": new Error("offline"), "toolchain:go": "1" };
   const world = latestWorld({ answers, ttlMs: 1000 });

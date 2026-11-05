@@ -110,6 +110,19 @@ const T3Model = (() => {
   /** Whether `latest` is a newer release than `installed`. Unknown is no. */
   const isNewer = (latest, installed) => Boolean(latest && installed && compareVersions(latest, installed) > 0);
 
+  // OpenCode's distributions have separate update tracks. A persisted answer
+  // from before a major switch must not become the next normal-update target.
+  const agentReleaseMatches = (h, candidate) => {
+    if (h.id !== 'opencode' || !candidate) return true;
+    const current = parseVersion(h.installedVersion || h.version);
+    const target = parseVersion(candidate);
+    return !current.numeric || target.numeric && current.core[0] === target.core[0];
+  };
+  const agentLatest = (h) => {
+    const candidates = [h.latestVersion, h.newestVersion].filter(v => v && agentReleaseMatches(h, v));
+    return candidates.sort((a, b) => compareVersions(b, a))[0] || null;
+  };
+
   const runtimeView = (s) => {
     const runtime = s?.t3?.runtime;
     if (!runtime) return null;
@@ -311,9 +324,11 @@ const T3Model = (() => {
     const version = h.installedVersion || h.version || null;
     // Older cache files can still carry an age-held release separately.
     // Explicit agent updates now take it, so promote it immediately.
-    const latest = isNewer(h.newestVersion, h.latestVersion) || (!h.latestVersion && h.newestVersion)
-      ? h.newestVersion : h.latestVersion || null;
+    const latest = agentLatest(h);
     const updateAvailable = Boolean(h.installed && isNewer(latest, version));
+    const nativeVersion = status?.server?.version || status?.t3?.runtime?.version;
+    const upgradeAvailable = Boolean(h.id === 'opencode' && h.supported !== false && h.installed && /^v?1\./.test(version)
+      && parseVersion(nativeVersion).numeric && compareVersions(nativeVersion, '0.1.2') >= 0);
     const runningKind = act.serverQueued ? null : (act.ownOp && act.ownOp.kind) || (act.pending && act.pending.kind)
       || (h.inProgress ? h.operation || 'install' : null) || (act.fromSetup ? 'install' : null) || act.busy;
     const isKey = meta.flow === 'key';
@@ -329,6 +344,7 @@ const T3Model = (() => {
       version,
       latest: updateAvailable ? latest : null,
       updateAvailable,
+      upgradeAvailable,
       state: 'ok',
       status: { dot: null, text: '' },
       badge: null,
@@ -453,8 +469,13 @@ const T3Model = (() => {
     row.notice = distinctNotice(notice, row.status);
     row.held = null;
 
+    if (upgradeAvailable && h.runnable && !lastFailed && row.state !== 'signin') {
+      row.action = { cmd: 'harness.upgrade', label: 'Upgrade to v2…', icon: 'circle-arrow-up' };
+    }
+
     // Everything else is one press away in the menu.
-    if (updateAvailable) row.menu.push({ cmd: 'harness.update', label: 'Update to ' + latest, icon: 'circle-arrow-up' });
+    if (updateAvailable) row.menu.push({ cmd: 'harness.update', label: (h.id === 'opencode' ? 'Update v' + parseVersion(version).core[0] + ' to ' : 'Update to ') + latest, icon: 'circle-arrow-up' });
+    if (upgradeAvailable) row.menu.push({ cmd: 'harness.upgrade', label: 'Upgrade to v2…', icon: 'circle-arrow-up' });
     row.menu.push({ cmd: 'harness.version', label: 'Install a specific version…', icon: 'history' });
     if (h.canSetKey) row.menu.push({ cmd: 'harness.apikey', label: meta.subscription ? 'Sign-ins and keys…' : isKey ? 'Add a provider key…' : 'Use an API key…', icon: 'key-round' });
     if (h.canSetKey && meta.subscription) row.menu.push({ cmd: 'harness.subscription', label: 'Sign in with a subscription…', icon: 'log-in' });
@@ -1686,12 +1707,14 @@ const T3Model = (() => {
     const updating = (r) => r.state === 'running' && r.kind === 'update';
     // An update that failed stays here, with Retry, until it goes through.
     const failedUpdate = (r) => r.state === 'failed' && r.action && /\.update$/.test(r.action.cmd);
-    const available = rows.filter((r) => (r.updateAvailable && r.state !== 'running') || updating(r) || failedUpdate(r));
+    const available = rows.filter((r) => (r.updateAvailable && r.state !== 'running') || updating(r) || failedUpdate(r))
+      .map(r => r.action?.cmd === 'harness.upgrade' ? { ...r, action: { cmd: 'harness.update', label: 'Update v1' } } : r);
     const held = rows.filter((r) => !r.updateAvailable && r.held && r.state !== 'running');
+    const upgrades = rows.filter((r) => r.action?.cmd === 'harness.upgrade').map(r => ({ ...r, latest: null, updateAvailable: false }));
     const runtime = runtimeView(s);
     const due = available.filter((r) => r.updateAvailable && !updating(r) && !failedUpdate(r) && r.state !== 'queued');
     return {
-      available, held, runtime, due,
+      available, held, upgrades, runtime, due,
       count: due.length + (runtime && runtime.available && !runtime.busy ? 1 : 0),
       running: available.filter(updating).length + (runtime && runtime.busy ? 1 : 0),
     };
@@ -1755,9 +1778,11 @@ const T3Model = (() => {
       if (a.state === 'signin') add('Agents', (a.action && a.action.label === 'Add key' ? 'Add a provider key for ' : 'Sign in to ') + a.name, a.action && a.action.icon || 'log-in', { cmd: a.action.cmd, id: a.id }, { meta: hint, attention: true });
       if (a.state === 'failed' && a.action) add('Agents', retryLabel(a), 'refresh-cw', { cmd: a.action.cmd, id: a.id }, { meta: hint, attention: true });
       if (a.updateAvailable) add('Agents', 'Update ' + a.name + ' to ' + a.latest, 'circle-arrow-up', { cmd: 'harness.update', id: a.id }, { meta: from(a.version) });
+      if (a.menu.some(m => m.cmd === 'harness.upgrade')) add('Agents', 'Upgrade OpenCode to v2…', 'circle-arrow-up', { cmd: 'harness.upgrade', id: a.id }, { meta: from(a.version) });
       for (const m of a.menu) {
         if (m.sep || m.cmd === 'harness.update') continue;
-        const label = m.cmd === 'harness.signin' ? 'Sign in ' + a.name + ' again'
+        const label = m.cmd === 'harness.upgrade' ? 'Upgrade OpenCode to v2…'
+          : m.cmd === 'harness.signin' ? 'Sign in ' + a.name + ' again'
           : m.cmd === 'harness.version' ? 'Install a specific version of ' + a.name + '…'
             : m.cmd === 'harness.apikey' ? (a.id === 'opencode' ? 'Add a provider key for OpenCode…' : a.id === 'pi' ? 'Pi sign-ins and keys…' : 'Use an API key for ' + a.name + '…')
               : m.cmd === 'harness.subscription' ? 'Sign in to ' + a.name + ' with a subscription…'
@@ -2120,7 +2145,7 @@ const T3Model = (() => {
 
   return {
     AGENTS, TOOLCHAINS, SOURCE_CONTROL, DONE, WORKING, FAILED,
-    compareVersions, isNewer,
+    compareVersions, isNewer, agentReleaseMatches, agentLatest,
     relTime, absTime, shortDate, duration, countdown, formatBytes, listOf, hostOf, plural, toMs, imageLabel,
     progressOf, progressText, rowError, updateCheckView,
     agentRow, agentRows, toolRow, toolchainRow, toolchainRows, sourceControlRows, managedSourceControlRows, packageRows, portRows, looksLikeDatabase,

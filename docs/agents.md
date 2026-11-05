@@ -75,6 +75,16 @@ row and search for `2` to install OpenCode 2 from the official `@opencode/cli`
 package through mise. It requires T3 Code **0.1.2** or newer, including **Stable**,
 and OpenCode **2.0.18** or newer. The two distributions share one row and one
 active `opencode` command; **Update** stays within the major version you selected.
+The version arrow and **Update all** show only those regular updates. A cached
+release from the other major is discarded and checked again.
+
+For an installed OpenCode 1 on a compatible T3 release, **Upgrade to v2…** is
+visible on the row and in its menu. It opens the version picker already filtered
+to v2; choose the exact release, then review the database migration before it
+installs. **Setup → Updates** lists these separately under **Major upgrades**.
+They are never included in **Update all** or automatic updates. Both current
+Stable and Nightly support v2; the separate action is for OpenCode's data
+migration, not for switching T3 channels.
 
 Before switching majors, stop running OpenCode sessions and keep a backup of
 its data. OpenCode 2 converts the shared OpenCode database on first use, and

@@ -135,6 +135,13 @@ export function createLatestCache({ keys, lookup, read, write, ttlMs = DEFAULT_T
     load,
     refresh,
     refreshOne,
+    invalidate: (key) => {
+      delete versions[key];
+      delete failures[key];
+      // A lookup started for the old selection must not republish its answer.
+      lookups.delete(key);
+      return save();
+    },
     refreshing: () => Boolean(running || queued),
     manualPending: () => Boolean(runningManual || queued),
     errors: () => Object.fromEntries(keys().filter((key) => failures[key]).map((key) => [key, failures[key].error])),

@@ -10,7 +10,7 @@ import { nativeRegistry } from "./fixtures/native-registry.mjs";
 import { PATCH_REVISION, channelTag, distributionTag, manifestUrl } from "../docker/runtime/distribution-spec.mjs";
 import { runtimePaths, writeJson, readJson, readSelection, selectedRuntime, releaseDirectory, exactVersion } from "../docker/runtime/state.mjs";
 import { createRuntimeManager, packageRelease, installRelease, executableVersion } from "../docker/runtime/manager.mjs";
-import { recoverUpdate, snapshotDatabase, syncAuthentication, pruneRuntimes, projectScopes } from "../docker/runtime/supervisor.mjs";
+import { recoverUpdate, restoreDatabase, snapshotDatabase, syncAuthentication, pruneRuntimes, projectScopes } from "../docker/runtime/supervisor.mjs";
 
 const NIGHTLY = "0.0.46-nightly.20261011.2980";
 const cleanups = new WeakMap();
@@ -446,6 +446,31 @@ for (const mode of ["crash", "hang"]) test(`a ${mode} trial restores SQLite and 
   assert.equal(await databaseContent(path.join(paths.home, "userdata/statev2.sqlite")), "original database");
   assert.equal(await fs.readFile(path.join(paths.home, "userdata/introduced.sqlite")).catch(() => null), null);
   assert.doesNotThrow(() => process.kill(sup.child.pid, 0));
+});
+
+test("a damaged backup refuses restore and keeps userdata", async (t) => {
+  const { paths } = await world(t);
+  const id = randomUUID();
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "original data");
+  await snapshotDatabase(paths, id);
+  await fs.rm(path.join(paths.backup, "files/statev2.sqlite"));
+  await assert.rejects(restoreDatabase(paths, id));
+  assert.equal(await databaseContent(database), "original data");
+});
+
+test("restore stages replacements before removing trial databases", async (t) => {
+  const { paths } = await world(t);
+  const id = randomUUID();
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "original data");
+  await snapshotDatabase(paths, id);
+  await fs.rm(database);
+  await seedDatabase(database, "trial data");
+  await seedDatabase(path.join(paths.home, "userdata/introduced.sqlite"), "trial-only");
+  await restoreDatabase(paths, id);
+  assert.equal(await databaseContent(database), "original data");
+  assert.equal(await fs.readFile(path.join(paths.home, "userdata/introduced.sqlite")).catch(() => null), null);
 });
 
 test("an interrupted trial restores its original snapshot before any runtime boots", async (t) => {

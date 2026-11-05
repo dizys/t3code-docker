@@ -41,12 +41,6 @@ async function syncFile(target) {
   try { await directory.sync(); } finally { await directory.close(); }
 }
 
-async function syncedCopy(source, target) {
-  await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-  await fs.copyFile(source, target);
-  await syncFile(target);
-}
-
 export async function snapshotDatabase(paths, id) {
   const existing = await readJson(path.join(paths.backup, "complete.json"));
   if (existing?.id === id) return;
@@ -79,9 +73,45 @@ export async function restoreDatabase(paths, id) {
     throw new Error("The upgrade's database snapshot is incomplete. Refusing to start against partially restored data.");
   }
   const userdata = path.join(paths.home, "userdata");
-  // Also remove databases introduced by the trial, and all of their sidecars.
-  for (const file of await databaseFiles(userdata)) await fs.rm(path.join(userdata, file), { force: true });
-  for (const file of backup.files) await syncedCopy(path.join(paths.backup, "files", file), path.join(userdata, file));
+  await fs.mkdir(userdata, { recursive: true, mode: 0o700 });
+  const wanted = new Set(backup.files);
+  const isMain = (file) => /\.(?:sqlite3?|db)$/.test(file);
+  const syncDir = async (dir) => {
+    const handle = await fs.open(dir, "r");
+    try { await handle.sync(); } finally { await handle.close(); }
+  };
+  // Drop stale sidecars first: a replaced main must never pair with the
+  // trial's WAL. Mains stay until their replacement is staged, so a crash
+  // keeps the old data instead of leaving neither copy.
+  for (const file of await databaseFiles(userdata)) {
+    if (!isMain(file)) await fs.rm(path.join(userdata, file), { force: true });
+  }
+  const staged = [];
+  try {
+    for (const file of backup.files) {
+      const target = path.join(userdata, file);
+      await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+      const tmp = `${target}.restore`;
+      await fs.rm(tmp, { force: true });
+      await fs.copyFile(path.join(paths.backup, "files", file), tmp);
+      await syncFile(tmp);
+      staged.push([tmp, target]);
+    }
+    for (const [tmp, target] of staged) await fs.rename(tmp, target);
+    const parents = new Set(staged.map(([, target]) => path.dirname(target)));
+    for (const dir of parents) await syncDir(dir);
+    await syncDir(userdata);
+  } catch (error) {
+    for (const [tmp] of staged) await fs.rm(tmp, { force: true }).catch(() => {});
+    throw error;
+  }
+  // Trial-introduced databases go only after every wanted file is in place.
+  // A crash before this point keeps the old data plus an extra file, never
+  // a missing one.
+  for (const file of await databaseFiles(userdata)) {
+    if (isMain(file) ? !wanted.has(file) : true) await fs.rm(path.join(userdata, file), { force: true });
+  }
+  await syncDir(userdata);
 }
 
 export function validateRequest(request) {

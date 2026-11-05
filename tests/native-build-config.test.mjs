@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { executableBuildPlan, publicBuildEnvironment } from "../scripts/build-t3-runtime.mjs";
+import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { executableBuildPlan, publicBuildEnvironment, assertPublicBuildEnvironment, installBuiltClient } from "../scripts/build-t3-runtime.mjs";
 
 test("native Linux ARM64 retains upstream's host SEA packaging and artifact name", () => {
   const plan = executableBuildPlan("arm64", { platform: "linux", hostArch: "arm64" });
@@ -41,4 +44,42 @@ test("invalid relay origins and private authentication values cannot enter the n
     assert.throws(() => publicBuildEnvironment(example({ ...defaults, T3CODE_RELAY_URL: value })), /public Connect defaults/);
   }
   assert.throws(() => publicBuildEnvironment(example({ ...defaults, T3CODE_CLERK_PUBLISHABLE_KEY: "sk_live_private" })), /public Connect defaults/);
+});
+
+test('native packaging refuses an unpatched client before replacing anything, then installs the tested client only', async t => {
+  const root = await fs.mkdtemp(path.join(tmpdir(), 'native-client-build-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const checkout = path.join(root, 'source'), runtime = path.join(root, 'runtime');
+  const build = path.join(checkout, 'apps/web/dist');
+  await fs.mkdir(path.join(build, 'assets'), { recursive: true });
+  await fs.mkdir(path.join(runtime, 'client'), { recursive: true });
+  await fs.writeFile(path.join(runtime, 'client/index.html'), 'original client');
+  await fs.writeFile(path.join(runtime, 't3'), 'unchanged executable');
+  await fs.writeFile(path.join(runtime, 'package.json'), '{"version":"exact"}');
+  await fs.writeFile(path.join(build, 'index.html'), '<body><script type="module" src="/assets/native.js"></script></body>');
+  await fs.writeFile(path.join(build, 'assets/native.js'), 'original code');
+  await assert.rejects(installBuiltClient(checkout, runtime), /missing the Setup command provider/);
+  assert.equal(await fs.readFile(path.join(runtime, 'client/index.html'), 'utf8'), 'original client');
+  await fs.writeFile(path.join(build, 'assets/native.js'), 'window.__T3_SETUP_PALETTE_NATIVE__=1;');
+  await installBuiltClient(checkout, runtime);
+  assert.equal(await fs.readFile(path.join(runtime, 'client/assets/native.js'), 'utf8'), 'window.__T3_SETUP_PALETTE_NATIVE__=1;');
+  assert.equal(await fs.readFile(path.join(runtime, 't3'), 'utf8'), 'unchanged executable');
+  assert.equal(await fs.readFile(path.join(runtime, 'package.json'), 'utf8'), '{"version":"exact"}');
+});
+
+test('client compilation cannot load operator Vite environment files from a source checkout', async t => {
+  const root = await fs.mkdtemp(path.join(tmpdir(), 'native-public-env-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'apps/web'), { recursive: true });
+  await fs.writeFile(path.join(root, '.env.example'), 'PUBLIC_DEFAULTS=checked-in');
+  await fs.writeFile(path.join(root, 'apps/web/.env.example'), 'PUBLIC_EXAMPLE=checked-in');
+  await assertPublicBuildEnvironment(root);
+  for (const file of ['.env', '.env.local', '.env.production', 'apps/web/.env.production.local', 'apps/server/.env', 'apps/desktop/.env.development']) {
+    const target = path.join(root, file);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, 'VITE_PRIVATE_VALUE=must-not-enter-the-client');
+    await assert.rejects(assertPublicBuildEnvironment(root), /without local environment files/);
+    await fs.rm(target);
+  }
+  await assertPublicBuildEnvironment(root);
 });

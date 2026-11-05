@@ -7,7 +7,10 @@ export const REGISTRY = "https://ghcr.io";
 export const ARTIFACT_TYPE = "application/vnd.t3code.runtime.v1";
 export const ARCHIVE_TYPE = "application/vnd.t3code.runtime.v1.tar+gzip";
 const hash = createHash("sha256").update(readFileSync(new URL("./patches/index.mjs", import.meta.url)));
-for (const patch of patches) hash.update(patch.name).update(readFileSync(patch.module));
+for (const patch of patches) {
+  hash.update(patch.name).update(readFileSync(patch.module));
+  for (const asset of patch.assets ?? []) hash.update(readFileSync(asset));
+}
 export const PATCH_REVISION = hash.digest("hex");
 export const distributionTag = (version) => `native-t3-v${version}-p${PATCH_REVISION.slice(0, 16)}`;
 export const channelTag = (channel) => `native-t3-${channel}-p${PATCH_REVISION.slice(0, 16)}`;

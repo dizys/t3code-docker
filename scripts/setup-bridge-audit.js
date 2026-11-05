@@ -300,18 +300,91 @@ const run = async base => {
     expect(!new URL(page.url()).pathname.startsWith('/settings'),'the console Close button closes native Settings');
     expect(await page.evaluate(()=>sessionStorage.getItem('t3-setup-tab'))===null,'closing Settings clears remembered Setup state');
     // Native palette navigation is verified from chat, including new registry pages.
+    let nativePalette=false;
+    const nativeResult=id=>page.locator('[data-slot="command-item"]').filter({has:page.locator('[data-t3-setup-command="'+id+'"]')});
+    const paletteResult=id=>nativePalette?nativeResult(id):page.locator('[data-t3-setup-item="'+id+'"]');
     const search=async query=>{
-      const button=page.getByRole('button',{name:/^Search/}).first();if(await button.count())await button.click();else await page.keyboard.press('Control+k');
+      const button=page.getByRole('button',{name:/^Search/}).first();if(await button.count()&&await button.isVisible())await button.click();else await page.keyboard.press('Control+k');
       await page.locator('[data-command-palette=true] input[role=combobox]').fill(query);
-      await page.locator('[data-t3-setup-item]').first().waitFor();
+      nativePalette=await page.evaluate(()=>window.__T3_SETUP_PALETTE_NATIVE__===1);
+      if(process.env.T3_BRIDGE_REQUIRE_NATIVE_PALETTE==='1')expect(nativePalette,'the image serves the compiled native command provider');
+      await page.locator(nativePalette?'[data-t3-setup-command]':'[data-t3-setup-item]').first().waitFor();
     };
+    await search('>setup');
+    if(nativePalette){
+      expect(await page.locator('[data-t3-setup-palette],[data-t3-setup-owns]').count()===0,'native Setup commands never mount a second group or own the highlight');
+      await page.evaluate(()=>{
+        window.__setupPaletteSyntheticEscapes=0;
+        window.addEventListener('keydown',event=>{if(event.key==='Escape'&&!event.isTrusted)window.__setupPaletteSyntheticEscapes++;},true);
+      });
+      const input=page.locator('[data-command-palette=true] input[role=combobox]');
+      await input.press('ArrowUp');
+      await page.waitForFunction(()=>{
+        const active=document.querySelector('[data-slot="command-item"][data-active]');
+        if(!active?.querySelector('[data-t3-setup-command]'))return false;
+        for(let el=active.parentElement;el&&el.closest('[data-command-palette]');el=el.parentElement){
+          if(/auto|scroll/.test(getComputedStyle(el).overflowY)&&el.scrollHeight>el.clientHeight+1)return el.scrollTop>0;
+        }
+        return false;
+      });
+      ok('native ArrowUp selects and scrolls to an offscreen Setup command');
+      expect(await page.locator('[data-command-palette=true] [data-slot="command-item"][data-active]').count()===1,'there is exactly one native painted selection');
+      const chosen=await page.locator('[data-slot="command-item"][data-active] [data-t3-setup-command]').getAttribute('data-t3-setup-command');
+      const destination=hello.palette.find(item=>item.id===chosen);expect(!!destination,'the native selection refers to the authenticated registry');
+      const descendant=await input.getAttribute('aria-activedescendant');
+      expect(descendant===await page.locator('[data-slot="command-item"][data-active]').getAttribute('id'),'native ARIA selection names the painted row');
+      await input.press('Enter');await page.locator('.t3-setup-pane[data-ready]').waitFor();frame=page.frames().find(f=>f.url().includes('/__setup/'));
+      await frame.waitForFunction(route=>location.hash==='#'+route,destination.hash||destination.route||'overview');
+      expect(await page.evaluate(()=>window.__setupPaletteSyntheticEscapes)===0,'native Enter dismisses the palette without injected Escape events');
+      await frame.locator('.tc-console-topbar [data-cmd="embed.close"]').click();await page.locator('.t3-setup-pane').waitFor({state:'detached'});
+
+      // A provider update while the palette is open must enter the same native
+      // model. A title match in Settings outranks an incidental Setup keyword.
+      await search('files');
+      await input.press('ArrowDown');
+      const selectionBefore=await page.locator('[data-slot="command-item"][data-active]').getAttribute('id');
+      await page.evaluate(()=>{
+        window.__setupPaletteOriginalSnapshot=window.__T3_SETUP_PALETTE_SNAPSHOT__;
+        const original=window.__setupPaletteOriginalSnapshot;
+        const items=original.items.map(item=>item.id==='files'?{...item,meta:item.meta+' · QA update'}:item);
+        window.__T3_SETUP_PALETTE_SNAPSHOT__={...original,items:[...items,{id:'qa-metadata',title:'QA metadata match',meta:'Setup · Time format',terms:[],icon:original.items[0].icon}]};
+        window.dispatchEvent(new Event('t3-setup-palette:changed'));
+      });
+      await nativeResult('files').getByText(/QA update/).waitFor();
+      expect(await page.locator('[data-slot="command-item"][data-active]').getAttribute('id')===selectionBefore,'a metadata update preserves the current native selection');
+      await input.fill('Time format');await nativeResult('qa-metadata').waitFor();
+      await page.waitForFunction(()=>document.querySelector('[data-command-palette=true] [data-slot="command-group-label"]')?.textContent==='Settings');
+      ok('native relevance puts a stronger Settings result above Setup, with no fixed section');
+      const locationBefore=page.url();
+      await nativeResult('qa-metadata').click();await page.locator('[data-command-palette=true]').waitFor({state:'detached'});
+      expect(page.url()===locationBefore&&await page.locator('.t3-setup-pane').count()===0,'an ID outside the authenticated registry cannot navigate');
+      await page.evaluate(()=>{
+        window.__T3_SETUP_PALETTE_SNAPSHOT__=window.__setupPaletteOriginalSnapshot;
+        window.dispatchEvent(new Event('t3-setup-palette:changed'));
+      });
+      await search('fiels');await nativeResult('files').waitFor();ok('Setup uses native typo-tolerant matching');
+      await page.keyboard.press('Escape');await page.locator('[data-command-palette=true]').waitFor({state:'detached'});
+      for(const width of [1440,390])for(const mode of ['light','dark']){
+        await page.setViewportSize({width,height:width===390?844:900});await page.emulateMedia({colorScheme:mode});
+        await page.waitForFunction(mode=>document.documentElement.classList.contains('dark')===(mode==='dark'),mode);
+        await search('files');await nativeResult('files').waitFor();
+        const geometry=await nativeResult('files').evaluate(row=>{
+          const r=row.getBoundingClientRect(),dialog=row.closest('[data-command-palette]').getBoundingClientRect();
+          return {row:r.toJSON(),dialog:dialog.toJSON(),legacy:!!document.querySelector('[data-t3-setup-palette],[data-t3-setup-owns]')};
+        });
+        expect(!geometry.legacy&&geometry.row.left>=geometry.dialog.left&&geometry.row.right<=geometry.dialog.right+1,'native Setup result stays inside the shared palette at '+width+' '+mode);
+        if(OUTPUT)await page.locator('[data-command-palette=true]').screenshot({path:path.join(OUTPUT,`palette-${width}-${mode}.png`),scale:width<768?'device':'css',animations:'disabled'});
+        await page.keyboard.press('Escape');await page.locator('[data-command-palette=true]').waitFor({state:'detached'});
+      }
+      await page.setViewportSize({width:1440,height:900});
+    }else await page.keyboard.press('Escape');
     for(const entry of hello.palette.filter(item=>item.route)){
       const query='setup '+entry.title,route=entry.route,id=entry.id;
       const documentToken=await page.evaluate(()=>{window.__setupPaletteDocument=String(Math.random());return window.__setupPaletteDocument;});
       await search(query);
-      const result=page.locator('[data-t3-setup-item="'+id+'"]');
+      const result=paletteResult(id);
       await result.waitFor();
-      if(id==='files-trash') {
+      if(id==='files-trash'&&!nativePalette) {
         // Native asynchronous results can replace the list after our first
         // row appears. Exercise that redraw instead of assuming the first
         // observation remains valid until the next browser call.
@@ -321,13 +394,14 @@ const run = async base => {
         });
         expect(removed,'native list redraw removes the injected palette results');
       }
-      await page.waitForFunction(({id,query})=>{
+      await page.waitForFunction(({id,query,nativePalette})=>{
         const input=document.querySelector('[data-command-palette=true] input[role=combobox]');
-        const rows=document.querySelectorAll('[data-t3-setup-item="'+id+'"]');
-        return input?.value===query&&rows.length===1&&rows[0].getBoundingClientRect().height>0;
-      },{id,query});
+        const rows=document.querySelectorAll((nativePalette?'[data-t3-setup-command="':'[data-t3-setup-item="')+id+'"]');
+        const row=rows[0]&&(nativePalette?rows[0].closest('[data-slot="command-item"]'):rows[0]);
+        return input?.value===query&&rows.length===1&&row?.getBoundingClientRect().height>0;
+      },{id,query,nativePalette});
       ok('registry palette search finds '+id+' after native results settle');
-      await page.waitForFunction(id=>{const icon=document.querySelector('[data-t3-setup-item="'+id+'"] > svg');return icon&&Math.abs(icon.getBoundingClientRect().width-16)<0.2;},id);
+      await page.waitForFunction(({id,nativePalette})=>{const marker=document.querySelector((nativePalette?'[data-t3-setup-command="':'[data-t3-setup-item="')+id+'"]');const icon=marker?.querySelector('svg');return icon&&Math.abs(icon.getBoundingClientRect().width-16)<0.2;},{id,nativePalette});
       expect(await result.locator('svg').evaluate(el=>Math.abs(el.getBoundingClientRect().width-16)<0.2&&Math.abs(el.getBoundingClientRect().height-16)<0.2),'palette icons stay bounded at 16px');
       await result.click();await page.locator('.t3-setup-pane[data-ready]').waitFor();frame=page.frames().find(f=>f.url().includes('/__setup/'));
       await frame.waitForFunction(route=>document.body.dataset.consoleRoute===route,route);

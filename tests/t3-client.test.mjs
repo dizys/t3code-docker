@@ -35,6 +35,24 @@ test("Settings is every page under /settings, and nothing else", () => {
   for (const path of ["/", "/pair", "/welcome", "/settingsx", "/chat/settings", ""]) assert.equal(B.isSettingsPath(path), false, path);
 });
 
+test('native palette activation resolves only IDs in the current registry', () => {
+  const items = [{ id: 'files', route: 'files' }];
+  assert.equal(B.nativePaletteItem({ protocol: 1, id: 'files', url: 'https://ignored.test' }, items), items[0]);
+  for (const detail of [null, {}, { protocol: 2, id: 'files' }, { protocol: 1, id: 'removed' }, { protocol: 1, id: '../files' }]) {
+    assert.equal(B.nativePaletteItem(detail, items), null);
+  }
+  assert.equal(B.nativePaletteItem({ protocol: 1, id: 'files' }, []), null, 'Revoked or removed metadata cannot activate');
+});
+
+test('native and retained palette descriptions preserve attention within the metadata limit', () => {
+  const item={id:'setup',meta:'Agents, skills and updates'};
+  assert.equal(B.paletteMeta(item,0),item.meta);
+  assert.equal(B.paletteMeta(item,1),'1 thing needs you · '+item.meta);
+  assert.equal(B.paletteMeta(item,3),'3 things need you · '+item.meta);
+  assert.equal(B.paletteMeta({...item,id:'files'},3),item.meta);
+  assert.equal(B.paletteMeta({...item,meta:'x'.repeat(500)},3).length,500);
+});
+
 test("the tab opens the console in its host layout and T3 theme", () => {
   assert.equal(B.embedUrl("/__setup/", "dark", null), "/__setup/?embed=t3&host=tab&layout=compact&theme=dark#overview");
   assert.equal(B.embedUrl("/__setup/", "light", "agents", "wide"), "/__setup/?embed=t3&host=tab&layout=wide&theme=light#agents");

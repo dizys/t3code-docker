@@ -12,10 +12,20 @@ existing immutable artifacts cannot be reused. Upstream source drift fails the
 build before a runtime can be published.
 
 The builder checks out the exact upstream release tag and verifies the matching
-official CLI archive. It compiles the patched server, keeping that archive's
-client, native modules and resource monitor. Its manifest records the patch
+official CLI archive. It compiles the patched server and web client, keeping that
+archive's native modules and resource monitor. Its manifest records the patch
 revision, upstream source commit and original archive checksum. Compiler
 dependencies remain outside the final image.
+
+The Setup palette patch adds an authenticated command provider to the native
+client's action list, before its normal ranking and virtualization. The image's
+bridge supplies validated command metadata and resolves selected IDs; T3 owns
+the rows, selection, scrolling, dismissal and Settings navigation. Root browsing
+shows one Open setup entry, while searches include individual destinations.
+The client source is included in the patch revision, and builds require the
+provider to be present in the compiled client. Retained clients from older
+patched runtimes keep their legacy bridge results until a new patched runtime
+is selected; this does not change their native version or preferences on its own.
 
 The OpenCode workspace patch waits for the native skill and command config
 plugins to become active before caching discovery results. Built-in commands can

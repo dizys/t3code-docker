@@ -1694,6 +1694,7 @@ setup_bridge_works() {
       -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
       -e CHROME_PATH=/usr/bin/chromium \
       -e T3_PAIR_CREDENTIAL="$credential" \
+      -e T3_BRIDGE_REQUIRE_NATIVE_PALETTE=1 \
       "$NAME" node /tmp/setup-bridge-audit.js 2>&1
   } >>"$UI_AUDIT_LOG"
 }

@@ -212,6 +212,10 @@ export function dueUpdates({ harnesses = [], toolchains = null, latestFor, isNew
   const due = (key, current) => {
     const latest = latestFor(key);
     if (!latest || !current || latest === current) return false;
+    if (key === 'harness:opencode') {
+      const major = version => /^v?(\d+)\./.exec(String(version))?.[1];
+      if (!major(current) || major(latest) !== major(current)) return false;
+    }
     try { return isNewer ? isNewer(latest, current) : true; } catch { return true; }
   };
   const jobs = [];

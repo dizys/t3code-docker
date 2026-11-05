@@ -1668,8 +1668,9 @@
       <section class="tc-section" aria-label="T3 Code" data-key="up-t3">${runtimeCard(s) || html`<div class="tc-group"><div class="tc-empty tc-empty--compact"><span class="tc-empty-desc">This T3 Code doesn’t report its release, so it updates with the image.</span></div></div>`}</section>
       ${section('up-available', 'Agents and tools', html`<div class="tc-group">
         ${view.available.length || view.held.length ? html`<div class="tc-list">${view.available.map((row) => resourceRow(row))}${view.held.map((row) => resourceRow(Object.assign({}, row, { action: null, status: { dot: null, text: row.held.text } })))}</div>`
-          : html`<div class="tc-empty tc-empty--compact" role="status">${emptyIcon('circle-check')}<span class="tc-empty-title">Everything is up to date</span><span class="tc-empty-desc">${checking ? 'Checking for newer releases…' : lastChecked ? 'Checked ' + lastChecked + '.' : 'Agents, toolchains, added tools and source control CLIs.'}</span></div>`}
+          : html`<div class="tc-empty tc-empty--compact" role="status">${emptyIcon('circle-check')}<span class="tc-empty-title">${view.upgrades.length ? 'No regular updates available' : 'Everything is up to date'}</span><span class="tc-empty-desc">${checking ? 'Checking for newer releases…' : lastChecked ? 'Checked ' + lastChecked + '.' : 'Agents, toolchains, added tools and source control CLIs.'}</span></div>`}
       </div>`, { actions: view.available.length && lastChecked && !checking ? muted('Checked ' + lastChecked) : null })}
+      ${view.upgrades.length ? section('up-major', 'Major upgrades', html`<div class="tc-group"><div class="tc-list">${view.upgrades.map(row => resourceRow(row))}</div><div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>Review data migrations separately. Update all and automatic updates keep the selected major version.</span></div></div>`) : ''}
       ${section('up-auto', 'Automatic updates', html`<div class="tc-group">
         <div class="tc-list">${AUTO_KINDS.map((k) => autoRow(auto, k))}</div>
         <div class="tc-card-foot">${icon(auto.busy ? 'loader-circle' : 'clock', 'tc-icon--sm')}<span>${auto.busy ? auto.busy + '. ' : ''}Installs wait until nothing has used this server for a while. ${auto.lastActivityText}.${auto.lastResult ? ' Last time: ' + auto.lastResult + '.' : ''}</span></div>
@@ -3287,7 +3288,7 @@
       return html`<span class="tc-hint">${current
         ? html`On <span class="tc-mono">${current}</span>. T3 Code switches to the release you pick once it is installed and runs; ${current} keeps working until then.`
         : html`T3 Code is pointed at the release you pick once it is installed and runs.`}${kept.length ? html` Also on the volume: <span class="tc-mono">${kept.join(', ')}</span>.` : ''}</span>
-        ${t.id === 'opencode' ? html`<span class="tc-hint">OpenCode 1 is the default. OpenCode 2 requires T3 Code 0.1.2 or newer, including Stable. Updates stay on the selected major version.</span>` : ''}`;
+        ${t.id === 'opencode' ? html`<span class="tc-hint">Stable and Nightly support OpenCode 2 (T3 Code 0.1.2+). Switching from v1 migrates OpenCode’s database. Regular updates stay on the selected major version.</span>` : ''}`;
     }
     const info = toolSheet.info;
     const bins = (info && info.bins && info.bins.length ? info.bins : t.bins) || [];
@@ -3931,6 +3932,11 @@
       else callLifecycle('package', 'install', a.id, a.version);
     },
     'harness.update': (a) => callLifecycle('harness', 'update', a.id),
+    'harness.upgrade': (a, el) => {
+      if (a.id !== 'opencode' || !M.agentRows(state.status, ui, now()).find(row => row.id === a.id)?.menu.some(item => item.cmd === 'harness.upgrade')) return;
+      versionDrafts.set(a.id, '2');
+      openToolSheet({ id: a.id, target: 'harness', trigger: el });
+    },
     'harness.uninstall': (a) => confirmUninstall('harness', a.id),
     'harness.version': (a, el) => openToolSheet({ id: a.id, target: 'harness', trigger: el }),
     'harness.signin': (a, el) => openSignin(a.id, el),

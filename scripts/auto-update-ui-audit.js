@@ -72,6 +72,8 @@ const geometry = () => {
       let rustReply = 'fail', rustRequests = 0, rustStarted, finishRust;
       let runtimeReply = 'fail', runtimeRequests = 0, runtimeStarted, finishRuntime;
       let opencodeInstalls = 0;
+      const opencodeUpdates = [];
+      let opencodeV2Unavailable = false;
       const runtime = { ...fixture.t3?.runtime, channel: 'stable', version: '0.1.0',
         expectedPatchRevision: null, patchRevision: null,
         releases: { stable: { version: '0.1.0' }, nightly: { version: '0.1.1-nightly.20261017.1' } }, checkedAt: 1, checking: false,
@@ -82,11 +84,20 @@ const geometry = () => {
         const url = new URL(route.request().url()), method = route.request().method();
         if (url.pathname.endsWith('/harnesses/versions') && url.searchParams.get('id') === 'opencode') {
           return route.fulfill({ json: { latest: '1.18.31', releases: [
+            ...(opencodeV2Unavailable ? [] : [
             { version: '2.0.27', supported: true, minimumT3Version: '0.1.2' },
             { version: '2.0.18', supported: true, minimumT3Version: '0.1.2' },
             { version: '2.0.17', supported: false, minimumT3Version: '0.1.2' },
+            ]),
             { version: '1.18.31', supported: true },
-          ] } });
+          ], ...(opencodeV2Unavailable ? { degraded: [{ tool: 'npm:@opencode/cli', error: 'offline' }] } : {}) } });
+        }
+        if (method === 'POST' && url.pathname.endsWith('/harnesses/update')) {
+          const body = route.request().postDataJSON();
+          assert.equal(body.id, 'opencode');
+          opencodeUpdates.push(body);
+          Object.assign(fixture.harnesses.find(row => row.id === 'opencode'), { installedVersion: body.version, version: body.version, latestVersion: body.version });
+          return route.fulfill({ json: { ok: true, changed: true, message: 'Updated OpenCode to ' + body.version } });
         }
         if (method === 'POST' && url.pathname.endsWith('/harnesses/install')) {
           opencodeInstalls++;
@@ -157,6 +168,7 @@ const geometry = () => {
       await page.evaluate(() => { window.T3C.copyText = async (text) => { window.auditCopiedText = text; return true; }; });
       const tag = `${width}-${theme}${embedded ? '-embedded' : ''}`;
       const check = async (name) => { assert.deepEqual(await page.evaluate(geometry), [], `${tag} ${name}`); };
+      const refreshStatus = () => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
 
       const startupWarning = page.locator('#page-agents > .tc-notice').filter({ hasText: 'First start couldn’t install OpenCode' });
       await startupWarning.waitFor();
@@ -203,7 +215,7 @@ const geometry = () => {
       assert.equal(await versions.getByRole('option').count(), 3, 'the major prefix includes both supported and unsupported v2 releases');
       assert.equal(await versions.locator('[data-version="2.0.17"]').getAttribute('aria-disabled'), 'true', 'the v2 minimum remains enforced');
       assert.ok((await versions.locator('[data-version="2.0.27"]').textContent()).includes('T3 Code 0.1.2+'), 'the picker reports the runtime minimum');
-      assert.ok(!(await versions.textContent()).includes('Nightly'), 'Stable users are not told to switch channels');
+      assert.ok(!/requires? (?:T3 Code )?Nightly/i.test(await versions.textContent()), 'Stable users are not told to switch channels');
       await check('OpenCode v2 picker');
       await host.screenshot({ path: path.join(output, `${tag}-opencode-v2-picker.png`) });
       await versions.locator('[data-version="2.0.27"]').click();
@@ -220,6 +232,53 @@ const geometry = () => {
       assert.equal(opencodeInstalls, 0, 'cancelling migration never installs or changes the selected major');
       await versions.getByRole('button', { name: 'Cancel', exact: true }).click();
       await versions.waitFor({ state: 'hidden' });
+
+      // The deployed failure: a persisted v2 cache target on a v1 install
+      // advertised a major upgrade, but both Update controls sent {id} only.
+      const previousHarnesses = structuredClone(fixture.harnesses), previousServer = structuredClone(fixture.server), previousRuntime = structuredClone(runtime);
+      for (const row of fixture.harnesses) { row.latestVersion = null; row.newestVersion = null; }
+      Object.assign(fixture.harnesses.find(row => row.id === 'opencode'), { installed: true, runnable: true, signedIn: true, installedVersion: '1.19.5', version: '1.19.5', latestVersion: '2.2.5', failed: false, failure: null, inProgress: false, operation: null });
+      Object.assign(fixture.server, { ok: true, version: '0.1.7' }); runtime.version = '0.1.7';
+      await refreshStatus(); await failedRow.getByRole('button', { name: 'Upgrade to v2…', exact: true }).waitFor();
+      assert.ok(!(await failedRow.textContent()).includes('2.2.5'), 'a different-major cached target never becomes the regular version arrow');
+      assert.equal(await page.locator('[data-cmd="harness.updateAll"]').count(), 0, 'major upgrades never enter Update all');
+      await check('OpenCode v2 row action');
+      await host.screenshot({ path: path.join(output, `${tag}-opencode-v2-row.png`) });
+      await page.evaluate(() => { location.hash = 'updates'; });
+      await page.getByRole('heading', { name: 'Major upgrades', exact: true }).waitFor();
+      await page.getByText('No regular updates available', { exact: true }).waitFor();
+      assert.equal(await page.locator('[data-cmd="updates.all"]').count(), 0, 'reviewed major upgrades are not batch update candidates');
+      await check('separate major upgrades');
+      await host.screenshot({ path: path.join(output, `${tag}-opencode-v2-updates.png`) });
+      await page.evaluate(() => { location.hash = 'agents'; });
+      await failedRow.getByRole('button', { name: 'Upgrade to v2…', exact: true }).click();
+      await versions.getByRole('option').first().waitFor();
+      assert.equal(await versions.getByLabel('Version', { exact: true }).inputValue(), '2', 'the upgrade action explicitly selects the v2 track');
+      await versions.getByRole('button', { name: 'Install OpenCode 2.0.27', exact: true }).click();
+      await migration.waitFor();
+      await migration.getByRole('button', { name: 'Cancel', exact: true }).click();
+      assert.equal(opencodeUpdates.length, 0, 'cancelling never submits a floating v1 update');
+      await versions.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await versions.waitFor({ state: 'hidden' });
+      await failedRow.getByRole('button', { name: 'More for OpenCode', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Upgrade to v2…', exact: true }).click();
+      await versions.getByRole('option').first().waitFor();
+      await versions.getByRole('button', { name: 'Install OpenCode 2.0.27', exact: true }).click(); await migration.waitFor();
+      await migration.getByRole('button', { name: 'Install OpenCode 2', exact: true }).click();
+      await versions.waitFor({ state: 'hidden' });
+      assert.deepEqual(opencodeUpdates, [{ id: 'opencode', version: '2.0.27' }], 'the menu upgrade submits the exact v2 version, never the ordinary update body');
+
+      // A partial registry response must not silently fall back to v1.
+      Object.assign(fixture.harnesses.find(row => row.id === 'opencode'), { installedVersion: '1.19.5', version: '1.19.5', latestVersion: '1.19.5' });
+      opencodeV2Unavailable = true;
+      await refreshStatus(); await failedRow.getByRole('button', { name: 'Upgrade to v2…', exact: true }).click();
+      await versions.getByText(/OpenCode 2 releases could not be loaded/).waitFor();
+      assert.equal(await versions.getByRole('button', { name: /^Install OpenCode/ }).isDisabled(), true, 'unavailable v2 releases never submit a floating v1 request');
+      assert.equal(opencodeUpdates.length, 1);
+      await versions.getByRole('button', { name: 'Cancel', exact: true }).click(); await versions.waitFor({ state: 'hidden' });
+      opencodeV2Unavailable = false;
+      fixture.harnesses = previousHarnesses; fixture.server = previousServer; Object.assign(runtime, previousRuntime);
+      await refreshStatus();
 
       // Automatic updates: a switch per category on the Updates page, each
       // saved as it is pressed and independent of the others.
@@ -295,7 +354,6 @@ const geometry = () => {
       // One check covers everything. It never moves the page or resizes itself.
       const control = () => page.locator('[data-cmd="updates.check"]').first();
       const firstTop = () => page.locator('#page-updates [data-key="runtime"]').evaluate((el) => el.getBoundingClientRect().top);
-      const refreshStatus = () => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       await page.evaluate(() => document.fonts.ready);
       await page.evaluate(() => window.scrollTo(0, 0));
       const idleTop = await firstTop();

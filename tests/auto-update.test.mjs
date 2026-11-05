@@ -247,6 +247,13 @@ describe("auto-update due selection", () => {
     ]);
   });
 
+  it("never queues an OpenCode update from a cached different major", () => {
+    for (const [current, latest, expected] of [['1.19.5', '2.2.5', 0], ['2.2.5', '1.99.0', 0], ['1.19.5', '1.19.6', 1], ['2.2.5', '2.2.6', 1]]) {
+      const jobs = dueUpdates({ ...base, harnessIds: new Set(['opencode']), harnesses: [{ id: 'opencode', installed: true, installedVersion: current }], toolchains: null, latestFor: () => latest });
+      assert.equal(jobs.length, expected);
+    }
+  });
+
   it("falls back to a plain difference when versions cannot be ordered", () => {
     const jobs = dueUpdates({
       ...base,

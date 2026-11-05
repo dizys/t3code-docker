@@ -495,7 +495,16 @@ const latestCache = createLatestCache({
 let releaseAgeMs = null;
 
 /** Each row with the newest release known for it (`latestVersion`, `latestCheckedAt`). */
-const withLatest = (target, rows) => rows.map((row) => ({ ...row, ...latestCache.get(`${target}:${row.id}`) }));
+const withLatest = (target, rows) => rows.map((row) => {
+  const key = `${target}:${row.id}`;
+  let release = latestCache.get(key);
+  if (target === 'harness' && row.installed && [release.latestVersion, release.newestVersion].some(version => !Model.agentReleaseMatches(row, version))) {
+    void latestCache.invalidate(key);
+    void latestCache.refreshOne(key);
+    release = latestCache.get(key);
+  }
+  return { ...row, ...release };
+});
 
 // --- added tools ---------------------------------------------------------------
 //
@@ -2042,6 +2051,12 @@ const finishJob = (job, { result, sync }) => {
     finishedAt: Date.now(),
   });
   const name = lifecycleName(job.target, job.id);
+  // Installs and explicit major switches change the agent's update track.
+  // Recheck even after an unchanged update, repairing older persisted targets.
+  if (job.target === "harness" && HARNESS_IDS.has(job.id) && result?.ok) {
+    void latestCache.invalidate(`harness:${job.id}`);
+    if (job.kind !== "uninstall") void latestCache.refreshOne(`harness:${job.id}`);
+  }
   // An added tool is not in the scheduled check until the next status read
   // lists it; look its newest release up now.
   if (job.target === "package" && result?.ok && job.kind !== "uninstall") {

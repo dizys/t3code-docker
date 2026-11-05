@@ -101,8 +101,16 @@ T3 Code links to it in these places:
   on a navigation row opens that standalone page too.
 - In T3 Code's command palette (**⌘K**), searching for **setup** offers **Open
   setup**. Searches such as **setup files**, **pair**, **agents** or **ports**
-  open Settings on that Setup page. A short search such as "set", which could
-  equally mean T3 Code's settings, keeps Enter with T3 Code's first result.
+  open Settings on that Setup page. Updated patched T3 runtimes include these
+  as native commands, sharing relevance ranking, scrolling and keyboard
+  selection with T3's other results. A stronger native match can appear first;
+  Setup has no separate pinned result section. Opening the palette without a
+  search shows one **Open setup** entry rather than every Setup destination.
+
+Retained runtimes built before the native command provider keep their existing
+Setup search integration until their patched runtime is updated. A patched
+update of the same T3 version can enable the provider; the image does not switch
+the selected native runtime on its own.
 
 Resizing keeps the same frame and any unsaved draft. Reloading while Setup is
 open restores its page for this browser tab; leaving Setup clears that

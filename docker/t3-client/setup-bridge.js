@@ -1,8 +1,8 @@
 // T3 Code's way to the setup console, injected into T3 Code's client shell at
 // image build time by docker/t3-client/patch.mjs.
 //
-// The console and T3 Code are separate services, and nothing in T3 Code knows
-// the console exists. This adds it where a person would look for it:
+// The console and T3 Code are separate services. This bridge connects the
+// console to the places a person would look for it:
 //
 //   - Before pairing, a Setup pill in the pairing screen's empty corner. It
 //     opens the console in a tab of its own, which asks for the setup key.
@@ -11,11 +11,12 @@
 //   - Native command-palette results use authenticated registry metadata and
 //     open Settings on the requested Setup page.
 //
-// Both appear only when the console answers on this origin (the documented
+// These appear only when the console answers on this origin (the documented
 // route puts it at /__setup), so a deployment that does not route it keeps
-// exactly the upstream UI. Neither reaches into T3's React tree: the entry is
-// a pin outside T3's scrolling settings list, built from its own row attributes so it matches whatever T3's styles are, and put back if T3 redraws the
-// sidebar without it. Whether this browser is paired is T3's answer
+// exactly the upstream UI. The Settings entry is a pin outside T3's scrolling
+// list, built from its row attributes and restored if T3 redraws the sidebar.
+// The native palette provider consumes command metadata from this bridge.
+// Whether this browser is paired is T3's answer
 // (/api/auth/session), not a guess from the path: T3 serves its app and its
 // pairing screen at the same "/".
 //
@@ -108,6 +109,13 @@
     const a = prev?.groups.flatMap(g=>g.pages.map(p=>p.route)) || [], b = next.groups.flatMap(g=>g.pages.map(p=>p.route));
     return {added:b.filter(r=>!a.includes(r)),removed:a.filter(r=>!b.includes(r)),order:b};
   };
+
+  // Native commands carry an ID, never a URL or executable callback. Resolve
+  // it against the current authenticated registry again at activation time.
+  const nativePaletteItem = (detail, items) => detail && detail.protocol === 1 && routeKey(detail.id)
+    ? items.find(item => item.id === detail.id) || null : null;
+  const paletteMeta = (item, attention) => item.id === 'setup' && safeCount(attention) && attention > 0
+    ? (attention + (attention === 1 ? ' thing needs' : ' things need') + ' you · ' + item.meta).slice(0,500) : item.meta;
 
   const readHello = body => {
     if (!body || body.service !== 't3-setup') return null;
@@ -276,6 +284,7 @@
       PROBE_PATHS, isSettingsPath, embedUrl, readHello, badgeText, entryLabel, fromConsole,
       PALETTE_ITEMS, paletteMatches, paletteStep, paletteOwnsFirst, paletteActiveIndex,
       APPEARANCE_COLORS, appearanceFromStyles, layoutFor, settingsPath, readNav, readIcons, readIconNodes, readPalette, navDiff,
+      nativePaletteItem, paletteMeta,
     };
     return;
   }
@@ -560,6 +569,7 @@ html.dark .t3-setup-scrim { background: color-mix(in srgb, var(--background, #0a
       state.nav = null; state.icons = Object.create(null); state.paletteItems = PALETTE_ITEMS; state.attention = 0;
       if (state.tab) closeTab(false);
     }
+    publishNativePalette();
     schedule();
     schedulePalette();
   };
@@ -571,7 +581,9 @@ html.dark .t3-setup-scrim { background: color-mix(in srgb, var(--background, #0a
     const answer = await hello();
     if (!answer) return;
     state.attention = answer.signedIn ? answer.attention : 0;
-    if(answer.nav&&!state.tab){state.nav=answer.nav;state.icons=answer.icons;state.paletteItems=answer.palette;}
+    if(answer.nav){if(!state.tab)state.nav=answer.nav;state.icons=answer.icons;state.paletteItems=answer.palette;}
+    if(!answer.signedIn){state.nav=null;state.icons=Object.create(null);state.paletteItems=PALETTE_ITEMS;}
+    publishNativePalette();
     syncBadges();
   };
 
@@ -872,6 +884,7 @@ html.dark .t3-setup-scrim { background: color-mix(in srgb, var(--background, #0a
     // Its current page is authoritative even before the first status read.
     if(state.nav && !model.status.version && !model.status.ok)model={...state.nav,current:model.current};
     state.nav=model;state.icons=icons;state.attention=model.attention;state.checkedAt=Date.now();
+    publishNativePalette();
     if(state.tab && model.current){state.tab.route=model.current;remember(model.current);}
     syncBadges();paintNav();
   };
@@ -888,7 +901,7 @@ html.dark .t3-setup-scrim { background: color-mix(in srgb, var(--background, #0a
       const model=readNav(message),icons=readIcons(message.icons);
       if(model&&icons&&model.groups.every(g=>g.pages.every(p=>Object.hasOwn(icons,p.icon))))acceptNavigation(model,icons);
     }else if(message.type==='attention'&&safeCount(message.count)){
-      state.attention=message.count;syncBadges();
+      state.attention=message.count;publishNativePalette();syncBadges();
     }else if(message.type==='layer'&&typeof message.open==='boolean'){
       if(tab.modal!==message.open){tab.modal=message.open;paintLayer();}
     }else if(message.type==='back')closeTab(true);
@@ -896,8 +909,55 @@ html.dark .t3-setup-scrim { background: color-mix(in srgb, var(--background, #0a
     else if(message.type==='close')nativeClose();
   });
 
-  // ------------------------------------------------------ command palette --
-  // Setup's commands in T3's command palette (⌘K), as a group of their own
+  // ------------------------------------------------ native command provider --
+  const nativePaletteEnabled = () => window.__T3_SETUP_PALETTE_NATIVE__ === 1;
+  let nativePaletteSignature = null, nativePaletteRequest = null;
+  const availableNativeItems = () => {
+    if(!state.base || state.paired!==true || !state.nav)return [];
+    const routes=new Set(state.nav.groups.flatMap(group=>group.pages.map(page=>page.route)));
+    return state.paletteItems.filter(item=>item.route===null || routes.has(item.route));
+  };
+  const publishNativePalette = () => {
+    const items=availableNativeItems().map(item=>({id:item.id,title:item.title,meta:paletteMeta(item,state.attention),icon:item.icon,terms:[...item.terms]}));
+    const snapshot={protocol:1,items,icons:items.length?state.icons:{}};
+    const signature=JSON.stringify(snapshot);
+    if(signature===nativePaletteSignature)return;
+    nativePaletteSignature=signature;
+    window.__T3_SETUP_PALETTE_SNAPSHOT__=snapshot;
+    window.dispatchEvent(new Event('t3-setup-palette:changed'));
+  };
+  const requestedNativeItem = event => event.target===window && nativePaletteEnabled()
+    ? nativePaletteItem(event.detail,availableNativeItems()) : null;
+  window.addEventListener('t3-setup-palette:request',event=>{
+    const item=requestedNativeItem(event);
+    if(!item || !event.cancelable)return;
+    nativePaletteRequest=item.id;
+    event.preventDefault();
+  });
+  window.addEventListener('t3-setup-palette:open',event=>{
+    const item=requestedNativeItem(event);
+    if(!item || nativePaletteRequest!==item.id)return;
+    nativePaletteRequest=null;
+    const dialog=document.querySelector('[data-command-palette="true"]'),started=Date.now();
+    const open=()=>{
+      // T3 closes its own palette and navigates through its router. Wait for
+      // that closing surface to release focus before mounting the Setup pane.
+      if(dialog?.isConnected){if(Date.now()-started<2000)requestAnimationFrame(open);return;}
+      const current=availableNativeItems().find(current=>current.id===item.id);
+      if(!isSettingsPath(location.pathname) || !current)return;
+      const route=current.hash||current.route||'overview';
+      if(settingsHost())openTab(document.activeElement,route);
+      else {state.pendingRoute=route;remember(route);schedule();}
+    };
+    requestAnimationFrame(open);
+  });
+  window.addEventListener('t3-setup-palette:ready',()=>{detachPalette();publishNativePalette();});
+
+  // ------------------------------------------------------ legacy palette --
+  // Retained native runtimes built before the provider hook keep their
+  // existing search entry until a matching patched runtime is selected.
+  // New native clients never mount these rows or intercept their keys.
+  // Setup's commands in older T3 palettes (⌘K), as a group of their own
   // among T3's when a search finds them: commands, so after T3's Actions and
   // before its Projects, Settings and Threads, the order T3 keeps its own
   // groups in whatever the search. The palette is base-ui's Autocomplete,
@@ -993,9 +1053,7 @@ html.dark .t3-setup-scrim { background: color-mix(in srgb, var(--background, #0a
       title.appendChild(name);
       const meta = document.createElement('span');
       meta.className = twoLine ? twoLine.meta : 't3-setup-cmd-meta';
-      meta.textContent = item.id === 'setup' && state.attention > 0
-        ? (state.attention === 1 ? '1 thing needs you' : state.attention + ' things need you') + ' · agents, toolchains, source control, ports and devices'
-        : item.meta;
+      meta.textContent = paletteMeta(item,state.attention);
       text.append(title, meta);
       row.append(icon, text);
       group.appendChild(row);
@@ -1088,6 +1146,7 @@ html.dark .t3-setup-scrim { background: color-mix(in srgb, var(--background, #0a
   };
 
   const syncPalette = () => {
+    if(nativePaletteEnabled())return detachPalette();
     if (!palette.dialog) return;
     if (!palette.dialog.isConnected) return detachPalette();
     if (!palette.input.isConnected) {
@@ -1142,6 +1201,7 @@ html.dark .t3-setup-scrim { background: color-mix(in srgb, var(--background, #0a
   };
 
   const attachPalette = (input) => {
+    if(nativePaletteEnabled())return;
     const dialog = input.closest(PALETTE);
     if (palette.dialog === dialog && palette.input === input) return;
     detachPalette();
@@ -1323,6 +1383,7 @@ html.dark .t3-setup-scrim { background: color-mix(in srgb, var(--background, #0a
     state.attention = answer.signedIn ? answer.attention : 0;
     state.checkedAt = Date.now();
     if(answer.nav){state.nav=answer.nav;state.icons=answer.icons;state.paletteItems=answer.palette;}
+    publishNativePalette();
     if(!isSettingsPath(location.pathname))forget();
     addStyles();
     sync();

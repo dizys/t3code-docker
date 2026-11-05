@@ -1,5 +1,5 @@
-// Build the local server patch against the exact upstream release. Its verified
-// CLI archive supplies the matching client, native modules and resource monitor.
+// Build the local server and client patches against the exact upstream release.
+// Its verified CLI archive supplies native modules and the resource monitor.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -9,9 +9,36 @@ import { releaseForVersion, unpackRelease, executableVersion } from "../docker/r
 import { releaseForVersion as patchedReleaseForVersion } from "../docker/runtime/distribution.mjs";
 import { exactVersion } from "../docker/runtime/state.mjs";
 import { PATCH_REVISION } from "../docker/runtime/distribution-spec.mjs";
-import { files, applySourcePatches } from "../docker/runtime/patches/index.mjs";
+import { files, createdFiles, applySourcePatches } from "../docker/runtime/patches/index.mjs";
 
 const execute = promisify(execFile);
+
+export async function assertPublicBuildEnvironment(checkout) {
+  for (const directory of ["", "apps/web", "apps/server", "apps/desktop"]) {
+    let names;
+    try { names = await fs.readdir(path.join(checkout, directory)); }
+    catch (error) { if (error.code === "ENOENT") continue; throw error; }
+    if (names.some(name => /^\.env(?:\.|$)/.test(name) && name !== ".env.example")) {
+      throw new Error("Native builds require a checkout without local environment files; use the release's checked-in public defaults.");
+    }
+  }
+}
+
+export async function installBuiltClient(checkout, runtime) {
+  const client = path.join(checkout, "apps/web/dist");
+  const shell = await fs.readFile(path.join(client, "index.html"), "utf8");
+  const assets = path.join(client, "assets");
+  const scripts = (await fs.readdir(assets)).filter(file => file.endsWith(".js"));
+  let provider = false;
+  for (const script of scripts) {
+    if ((await fs.readFile(path.join(assets, script), "utf8")).includes("__T3_SETUP_PALETTE_NATIVE__")) provider = true;
+  }
+  if (!shell.includes('</body>') || !provider) throw new Error("The native client build is missing the Setup command provider.");
+  // Validate the complete output before replacing the archive's client. The
+  // executable and external native packages stay paired with the exact tag.
+  await fs.rm(path.join(runtime, "client"), { recursive: true, force: true });
+  await fs.cp(client, path.join(runtime, "client"), { recursive: true });
+}
 export function executableBuildPlan(arch, { platform = process.platform, hostArch = process.arch } = {}) {
   if (!["x64", "arm64"].includes(arch)) throw new Error("Choose a supported Linux runtime architecture.");
   // Upstream's native ARM64 path injects SEA into the host binary so it works
@@ -65,18 +92,20 @@ export async function buildRuntime(version, arch, destination, { run = execute, 
     if (!source) {
       console.error("[t3-runtime] checking out the exact upstream source tag");
       await run("git", ["clone", "--filter=blob:none", "--depth", "1", "--sparse", "--branch", `v${version}`, "https://github.com/pingdotgg/t3code.git", checkout], options);
-      await run("git", ["sparse-checkout", "set", "apps/server", "apps/web", "apps/desktop", "apps/mobile/modules", "apps/mobile/deps", "packages", "scripts", "patches", "oxlint-plugin-t3code", "infra"], { ...options, cwd: checkout });
+      await run("git", ["sparse-checkout", "set", "apps/server", "apps/web", "apps/desktop", "apps/mobile/modules", "apps/mobile/deps", "packages", "scripts", "patches", "oxlint-plugin-t3code", "infra", "assets", "third-party-licenses", "native/libghostty-vt"], { ...options, cwd: checkout });
     }
     const command = (program, args, extra = {}) => run(program, args, { ...options, cwd: checkout, ...extra });
     const commit = (await command("git", ["rev-parse", "HEAD"])).stdout.trim();
     const tag = (await command("git", ["rev-parse", `v${version}^{commit}`])).stdout.trim();
     if (!/^[a-f0-9]{40}$/.test(commit) || commit !== tag || (await command("git", ["status", "--porcelain"])).stdout.trim()) throw new Error("Build from a clean checkout of the exact upstream release tag.");
-    for (const file of [".env", ".env.local"]) {
-      try { await fs.access(path.join(checkout, file)); throw new Error("Native builds require a checkout without local environment files; use the release's checked-in public defaults."); }
-      catch (error) { if (error.code !== "ENOENT") throw error; }
-    }
+    await assertPublicBuildEnvironment(checkout);
     const publicEnvironment = publicBuildEnvironment(await fs.readFile(path.join(checkout, ".env.example"), "utf8"));
     const buildEnvironment = { ...Object.fromEntries(Object.entries(options.env).filter(([name]) => !/^(?:T3CODE_|VITE_|EXPO_PUBLIC_)/.test(name))), ...publicEnvironment };
+    for (const file of createdFiles) {
+      try { await fs.lstat(path.join(checkout, file)); }
+      catch (error) { if (error.code === "ENOENT") continue; throw error; }
+      throw new Error(`The source patch would overwrite ${file}. Review the upstream source before publishing this runtime.`);
+    }
     const original = Object.fromEntries(await Promise.all(files.map(async (file) => [file, await fs.readFile(path.join(checkout, file), "utf8")])));
     const patched = applySourcePatches(original);
     for (const [file, text] of Object.entries(patched)) await fs.writeFile(path.join(checkout, file), text);
@@ -86,6 +115,11 @@ export async function buildRuntime(version, arch, destination, { run = execute, 
       const name = path.join(checkout, file), pkg = JSON.parse(await fs.readFile(name, "utf8"));
       await fs.writeFile(name, JSON.stringify({ ...pkg, version }, null, 2) + "\n");
     }
+    console.error("[t3-runtime] compiling the patched native client");
+    await command("corepack", ["pnpm", "--filter", "@t3tools/web", "build"], {
+      env: { ...buildEnvironment, T3CODE_WEB_SOURCEMAP: "false", VITE_RELEASE_CHANNEL: version.includes("-nightly.") ? "nightly" : "stable" },
+    });
+    await installBuiltClient(checkout, unpacked);
     console.error("[t3-runtime] compiling the patched server");
     const build = executableBuildPlan(arch);
     await command("corepack", build.args, { env: buildEnvironment });

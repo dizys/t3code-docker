@@ -22,6 +22,13 @@ const freshPolicy = () => ({
 const geometry = () => {
   const issues = [];
   if (document.documentElement.scrollWidth > innerWidth + 1) issues.push(`horizontal page overflow (${document.documentElement.scrollWidth}px > ${innerWidth}px)`);
+  // The longer major-upgrade action can fit the page while leaving too little
+  // space for the agent name. Measure its row text as well as the dialogs.
+  for (const el of document.querySelectorAll('.tc-row:has([data-cmd="harness.upgrade"]) :is(.tc-row-main, .tc-row-title)')) {
+    const rect = el.getBoundingClientRect(), style = getComputedStyle(el);
+    if (rect.width && rect.height && ['visible', 'clip'].includes(style.overflowX)
+      && el.scrollWidth > el.clientWidth + 1) issues.push(`${el.className} clipped (${el.scrollWidth}px > ${el.clientWidth}px)`);
+  }
   for (const panel of document.querySelectorAll('.tc-layer [role="dialog"], .tc-layer [role="alertdialog"]')) {
     const rect = panel.getBoundingClientRect();
     if (rect.left < -1 || rect.top < -1 || rect.right > innerWidth + 1 || rect.bottom > innerHeight + 1) {

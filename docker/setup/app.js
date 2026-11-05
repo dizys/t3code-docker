@@ -670,7 +670,7 @@
         ${noticeError ? html`<span class="tc-status" role="alert">${dot('danger')}<span class="tc-status-text">${noticeError.text}${detail('notice')}</span></span>` : noticeLine(row.notice)}
         ${row.state === 'running' ? opLine(row) : ''}
       </div>
-      <div class="${cx('tc-row-actions', opts.wrap && 'tc-row-actions--wrap')}">${actionButton(row, opts)}${opts.menu === false ? '' : menuButton(row)}</div>
+      <div class="${cx('tc-row-actions', (opts.wrap || row.action?.cmd === 'harness.upgrade') && 'tc-row-actions--wrap')}">${actionButton(row, opts)}${opts.menu === false ? '' : menuButton(row)}</div>
     </div>`;
   };
 

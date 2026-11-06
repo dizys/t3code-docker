@@ -141,6 +141,30 @@ test("forwarding headers come from this hop, never from the client", () => {
   assert.deepEqual(valuesOf(tls, "x-forwarded-proto"), ["https"]);
 });
 
+test("a trusted proxy's proto and host are kept, its chain extended with the peer", () => {
+  const out = forwardHeaders([
+    "Host", "internal:8080",
+    "X-Forwarded-For", "203.0.113.7",
+    "X-Forwarded-Proto", "https",
+    "X-Forwarded-Host", "t3.example.com",
+  ], { peer: "10.1.0.3", trustedProxy: true });
+  assert.deepEqual(valuesOf(out, "x-forwarded-for"), ["203.0.113.7, 10.1.0.3"]);
+  assert.deepEqual(valuesOf(out, "x-forwarded-proto"), ["https"], "the setup page sees https and keeps Secure cookies");
+  assert.deepEqual(valuesOf(out, "x-forwarded-host"), ["t3.example.com"]);
+
+  const claimed = forwardHeaders([
+    "Host", "h",
+    "X-Forwarded-Proto", "gopher",
+  ], { peer: "10.1.0.3", trustedProxy: true });
+  assert.deepEqual(valuesOf(claimed, "x-forwarded-proto"), ["http"], "a scheme that is not http(s) falls back to the actual connection");
+
+  const untrusted = forwardHeaders([
+    "Host", "h",
+    "X-Forwarded-Proto", "https",
+  ], { peer: "10.1.0.3" });
+  assert.deepEqual(valuesOf(untrusted, "x-forwarded-proto"), ["http"], "without the opt-in a claimed scheme is still dropped");
+});
+
 test("an upgrade keeps exactly one Connection: Upgrade and the protocol asked for", () => {
   const out = forwardHeaders([
     "Host", "h", "Connection", "keep-alive, Upgrade", "Upgrade", "websocket", "Sec-WebSocket-Key", "k",
@@ -166,12 +190,18 @@ test("configuration: off when unset, and every mistake says what to change", () 
     t3: { host: "127.0.0.1", port: 3773 },
     setup: { host: "127.0.0.1", port: 3774 },
     setupPrefix: "/__setup",
+    trustedProxy: false,
   });
   assert.deepEqual(readConfig({ T3_SINGLE_PORT: "8080", T3_SETUP_ENABLED: "0" }).setup, null);
   assert.deepEqual(readConfig({ T3_SINGLE_PORT: "8080", T3_SETUP_ENABLED: "true" }).setup, null,
     "on only when the entrypoint starts it, which is for 1 alone");
   assert.equal(readConfig({ T3_SINGLE_PORT: "8080", T3_SETUP_ENABLED: " 1 " }).setup.port, 3774);
   assert.equal(readConfig({ T3_SINGLE_PORT: "8080", T3_SETUP_BASE_PATH: "/setup/" }).setupPrefix, "/setup");
+  assert.equal(readConfig({ T3_SINGLE_PORT: "8080" }).trustedProxy, false, "claimed headers are dropped unless trusted");
+  assert.equal(readConfig({ T3_SINGLE_PORT: "8080", T3_TRUST_PROXY_HEADERS: "1" }).trustedProxy, true);
+  assert.equal(readConfig({ T3_SINGLE_PORT: "8080", T3_TRUST_PROXY_HEADERS: "true" }).trustedProxy, true);
+  assert.equal(readConfig({ T3_SINGLE_PORT: "8080", T3_TRUST_PROXY_HEADERS: "yes" }).trustedProxy, false,
+    "only 1 or true opts in");
   assert.equal(readConfig({ T3_SINGLE_PORT: "3774", T3_SETUP_ENABLED: "0" }).port, 3774, "the setup page's port is free when it is off");
 
   assert.throws(() => readConfig({ T3_SINGLE_PORT: "eighty" }), /not a port.*8080/);
@@ -233,12 +263,13 @@ const fakeService = async (name, handler) => {
 };
 
 /** The router in front of the two fakes, on its own loopback port. */
-const routerFor = async ({ t3, setup, setupPrefix = DEFAULT_SETUP_PREFIX }) => {
+const routerFor = async ({ t3, setup, setupPrefix = DEFAULT_SETUP_PREFIX, trustedProxy = false }) => {
   const lines = [];
   const server = createRouterServer({
     t3: { host: "127.0.0.1", port: t3.port },
     setup: setup ? { host: "127.0.0.1", port: setup.port } : null,
     setupPrefix,
+    trustedProxy,
     log: (line) => lines.push(line),
   });
   const port = await listen(server);
@@ -313,6 +344,17 @@ test("upstreams see the visitor's Host, the forwarded headers, and none of this 
   assert.equal(seen.headers["x-forwarded-host"], "t3.example.com", "the actual Host wins over a claimed host");
   assert.equal(seen.headers.cookie, "t3_session_3773_ab=v");
   assert.equal(seen.headers["x-gone"], undefined);
+});
+
+test("a trusted proxy's https reaches the upstream, so setup cookies stay Secure", async (t) => {
+  const t3 = await fakeService("t3");
+  const router = await routerFor({ t3, setup: null, trustedProxy: true });
+  t.after(() => closeAll(router.server, t3.server));
+  await request(router.port, { path: "/x", headers: { host: "internal:8080", "x-forwarded-proto": "https", "x-forwarded-host": "t3.example.com", "x-forwarded-for": "203.0.113.7" } });
+  const seen = t3.seen.at(-1);
+  assert.equal(seen.headers["x-forwarded-proto"], "https");
+  assert.equal(seen.headers["x-forwarded-host"], "t3.example.com");
+  assert.equal(seen.headers["x-forwarded-for"], "203.0.113.7, 127.0.0.1", "the proxy chain is extended with this hop's peer");
 });
 
 test("every Set-Cookie comes back, and statuses, redirects and HEAD pass through", async (t) => {

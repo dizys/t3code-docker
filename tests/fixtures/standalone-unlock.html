@@ -33,7 +33,7 @@
           <a class="tc-btn tc-btn--lg" href="https://fixture.example" rel="noopener">Open T3 Code</a>
         </div>
       </form>
-      <div class="tc-note">Left <code>T3_SETUP_KEY</code> empty? The first start generated a key and kept it. Every start prints it to the log, under the line that names <code>T3_SETUP_KEY</code>:<br><code>docker compose logs t3code | grep -A1 T3_SETUP_KEY</code></div>
+      <div class="tc-note">Left <code>T3_SETUP_KEY</code> empty? The first start generated a key, kept it on the volume and printed it to the log once:<br><code>docker compose logs t3code | grep -A1 T3_SETUP_KEY</code><br>Logs gone? In a paired T3 Code browser, open Settings → Setup → Server → This console to show the key. Or read <code>$T3CODE_HOME/setup-key</code> in the container (default: <code>/home/t3/.t3/setup-key</code>). To replace a lost key, set <code>T3_SETUP_KEY</code> in the container's settings and recreate it with the same volume.</div>
     </div>
   </div>
 </main>

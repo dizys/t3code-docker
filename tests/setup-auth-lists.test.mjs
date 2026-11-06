@@ -18,6 +18,7 @@ import fs from 'node:fs/promises';
 const root=${JSON.stringify(root)};
 const [auth,kind,action]=process.argv.slice(2);
 if(auth!=='auth') process.exit(1);
+await fs.appendFile(root+'/environments', JSON.stringify({key:process.env.T3_SETUP_KEY??null,source:process.env.T3_SETUP_KEY_SOURCE??null})+'\\n');
 if(action==='list') {
  await fs.appendFile(root+'/calls',kind+'\\n');
  while(true){try{await fs.access(root+'/release');break}catch{await new Promise(r=>setTimeout(r,20))}}
@@ -46,6 +47,9 @@ if(action==='list') {
   const initial = await Promise.all([request('/status'),request('/status')]);
   for(const s of initial){assert.equal(s.authLists.session.available,false);assert.equal(s.authLists.session.refreshing,true);assert.ok(!s.degraded.some(d=>/pairing|devices/.test(d.what)));}
   assert.deepEqual((await fs.readFile(path.join(root,'calls'),'utf8')).trim().split('\n').sort(), ['pairing','session']);
+  const environments = (await fs.readFile(path.join(root, 'environments'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(environments.length >= 2);
+  for (const env of environments) assert.deepEqual(env, { key: null, source: null }, 'Setup authenticates without handing its key to CLI children');
   await fs.writeFile(path.join(root,'release'),'yes');
   let warm;
   // The two CLI reads complete independently; wait for both snapshots.

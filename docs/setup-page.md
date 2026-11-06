@@ -7,12 +7,24 @@ publishes ports. None of this needs a shell in the container or a restart.
 
 It's guarded by a setup key. Leave `T3_SETUP_KEY` empty and the first start
 generates one and keeps it on the volume (`/home/t3/.t3/setup-key`), so it stays
-the same across restarts, redeploys and recreates. Every start prints it to the
-log, on the line after the one that names `T3_SETUP_KEY`:
+the same across restarts, redeploys and recreates. Only the first start prints
+it to the log, on the line after the one that names `T3_SETUP_KEY`:
 
 ```bash
 docker compose logs t3code | grep -A1 T3_SETUP_KEY
 ```
+
+Later starts do not print a kept key. If those first logs are gone, open
+**Settings → Setup → Server → This console** in an already paired T3 Code
+browser to show it, or read the file inside the container:
+
+```bash
+docker compose exec t3code sh -c 'cat "${T3CODE_HOME:-/home/t3/.t3}/setup-key"'
+```
+
+If neither is available, set `T3_SETUP_KEY` in the container's settings and
+recreate it with the same volume. This replaces the saved key and signs out
+browsers using the old key; paired T3 Code devices stay connected.
 
 Or choose your own when you create the container:
 
@@ -25,6 +37,11 @@ to a signed-in browser, and **Make a new key** in its **⋯** menu replaces a
 generated one. That signs
 out every browser that used the old key, and keeps the one you're using
 signed in. A key set with `T3_SETUP_KEY` can only be changed there.
+
+The key is passed to the setup service, but T3 Code, its terminals and the
+agents they run do not inherit it in their environment. This prevents passive
+environment dumps from exposing it. Processes running as the same `t3` user
+can still read the key file; this does not isolate Setup from those processes.
 
 **Overview** lists what's left before a phone can use the server: the server
 running, a [public URL](remote-access.md#the-public-url) set, a device paired, and the agents signed in, with a

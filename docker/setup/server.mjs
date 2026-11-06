@@ -85,6 +85,10 @@ const WORKSPACE = process.env.T3_WORKSPACE || "/workspace";
 const keySourceOf = (source) => (source === "env" || source === "boot" ? source : source ? "volume" : "env");
 let KEY_SOURCE = keySourceOf(process.env.T3_SETUP_KEY_SOURCE);
 let KEY = (KEY_SOURCE === "volume" && readKeyFile(STATE_DIR)) || process.env.T3_SETUP_KEY || "";
+// Keep the credential in this process's auth state, never in the environment
+// inherited by sign-in commands, installers or other helpers Setup launches.
+delete process.env.T3_SETUP_KEY;
+delete process.env.T3_SETUP_KEY_SOURCE;
 
 // Where pairing links point: T3_PUBLIC_URL, else the address saved from this
 // page, else the hosting platform's (public-url.mjs). Read on every use, so a

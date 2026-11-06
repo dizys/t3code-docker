@@ -9,7 +9,7 @@
 //
 //   status()   the store, joined with T3's live state, the Vault and conflicts
 //   test()     probe an address, saved or not
-//   create(), save(), setAgent(), reapply(), refreshModels(), remove()
+//   create(), save(), setAgent(), setLimits(), reapply(), refreshModels(), remove()
 //
 // Probing and applying are separate: a saved gateway can always be retried, and
 // a partial failure leaves a row that says which agent needs it.
@@ -20,6 +20,7 @@ import { parseAddress, suggestName } from './gateways/address.mjs';
 import { cleanModelIds, validModelId } from './gateways/models.mjs';
 import { desiredInstance, differences, fileText, filesFor, instanceIdFor, mergeInstance, modelsFor, modelsToHide, reachesProcess } from './gateways/adapters.mjs';
 import { probeGateway } from './gateways/probe.mjs';
+import { hubAt, hubIdFor, probeHub } from './gateways/hub.mjs';
 import { clearClaudeSettings, scanClaudeSettings } from './gateways/conflicts.mjs';
 import { createGatewayStore, gatewayFilesDir, writePrivate } from './gateways/store.mjs';
 
@@ -32,7 +33,7 @@ export const gatewayFailure = error => {
   return { status, body: { ok: false, code: error?.code ?? 'failed', error: String(error?.message ?? 'The gateway change did not finish.').slice(0, 300) } };
 };
 
-export const GATEWAY_ROUTES = Object.freeze(['/gateways', '/gateways/test', '/gateways/create', '/gateways/save', '/gateways/agent', '/gateways/apply', '/gateways/models', '/gateways/remove', '/gateways/conflict']);
+export const GATEWAY_ROUTES = Object.freeze(['/gateways', '/gateways/test', '/gateways/create', '/gateways/save', '/gateways/agent', '/gateways/limits', '/gateways/apply', '/gateways/models', '/gateways/remove', '/gateways/conflict']);
 
 const MAX_NAME = 40;
 const COSMETIC = new Set(['name', 'accent']);
@@ -42,6 +43,8 @@ const PROBE_REUSE_MS = 120_000;
 const SETTLE_ATTEMPTS = 20;
 const SETTLE_DELAY_MS = 1500;
 const READ_REUSE_MS = 1000;
+/** A look at T3's hub reports opens a stream, so a page polling every second or so shares one. */
+const HUB_REPORT_REUSE_MS = 4000;
 
 /** T3 lists an instance as not installed, with a fresh timestamp, until its first check is done. */
 const hasStarted = provider => provider?.installed === true;
@@ -60,6 +63,12 @@ const cleanKey = value => {
   if (key.length > 4096 || /[^\x21-\x7e]/.test(key)) throw new GatewayError('An API key is one line of plain characters, without spaces.', 400, 'invalid', { field: 'key' });
   return key;
 };
+const cleanManagementKey = value => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const key = String(value).trim();
+  if (!key || key.length > 4096 || /[^\x21-\x7e]/.test(key)) throw new GatewayError('A management key is one line of plain characters, without spaces.', 400, 'invalid', { field: 'managementKey' });
+  return key;
+};
 const cleanAddress = value => {
   const parsed = parseAddress(value);
   if (!parsed.ok) throw new GatewayError(parsed.error, 400, 'invalid', { field: 'url' });
@@ -75,7 +84,7 @@ const cleanManual = values => {
 /** How many models each agent would show, so the page never repeats the rules for that. */
 const offersOf = probe => Object.fromEntries(AGENTS.map(agent => [agent.id, modelsFor(agent, { models: { ids: probe.models.ids } }).length]));
 
-const checkOf = probe => ({ at: probe.at, ok: probe.ok, code: probe.code, ms: probe.ms ?? null, message: probe.message ?? null, hint: probe.hint ?? null, count: probe.models.ids.length, listed: probe.models.listed, protocols: probe.protocols });
+const checkOf = probe => ({ at: probe.at, ok: probe.ok, code: probe.code, ms: probe.ms ?? null, message: probe.message ?? null, hint: probe.hint ?? null, count: probe.models.ids.length, listed: probe.models.listed, protocols: probe.protocols, product: probe.product ?? null });
 
 /** A health check records what it saw. Models it finds wait in `latest` until someone chooses to apply them: applying restarts instances. */
 const observed = (gateway, probe) => {
@@ -88,7 +97,7 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
   const store = createGatewayStore({ io, baseDir }), filesDir = gatewayFilesDir(baseDir);
   const probes = new Map();       // digest of address and key -> { at, probe }, so Connect reuses the test just shown
   const settling = new Map();     // gateway id -> { started, again }, while its instances start
-  let read = null, readAt = 0, queue = Promise.resolve();
+  let read = null, readAt = 0, hubReports = null, queue = Promise.resolve();
 
   // One change at a time: each reads T3 and the Vault, then writes both.
   const serial = work => { const run = queue.catch(() => {}).then(work); queue = run; return run; };
@@ -97,6 +106,15 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
   const remember = (url, key, probe) => { probes.set(fingerprint(url, key), { at: now(), probe }); for (const [id, entry] of probes) if (now() - entry.at > PROBE_REUSE_MS) probes.delete(id); return probe; };
   const probe = async (url, key) => remember(url, key, await probeGateway({ url, key, fetchImpl, now }));
   const recentProbe = (url, key) => { const entry = probes.get(fingerprint(url, key)); return entry && now() - entry.at <= PROBE_REUSE_MS && entry.probe.ok ? entry.probe : null; };
+  // Only a pass is remembered, so a key shown as good isn't spent on a second request.
+  const hubChecks = new Map();
+  const checkHub = async (url, key, { reuse = false } = {}) => {
+    const id = fingerprint(`hub\0${url}`, key), held = hubChecks.get(id);
+    if (reuse && held && now() - held.at <= PROBE_REUSE_MS) return held.result;
+    const result = await probeHub({ url, key, fetchImpl });
+    if (result.ok) hubChecks.set(id, { at: now(), result }); else hubChecks.delete(id);
+    return result;
+  };
 
   const readT3 = async ({ fresh = false } = {}) => {
     if (!fresh && read && now() - readAt < READ_REUSE_MS) return read;
@@ -104,7 +122,14 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     read = pending; readAt = now();
     return pending;
   };
-  const invalidate = () => { read = null; readAt = 0; };
+  const invalidate = () => { read = null; readAt = 0; hubReports = null; };
+  const readHubReports = async state => {
+    if (!state.ok || !Object.keys(state.hubSources ?? {}).length) return [];
+    if (hubReports && now() - hubReports.at < HUB_REPORT_REUSE_MS) return hubReports.value;
+    const value = t3.hubReports().catch(() => []);
+    hubReports = { at: now(), value };
+    return value;
+  };
   const requireT3 = async () => {
     const state = await readT3({ fresh: true });
     if (!state.ok) throw new GatewayError(state.error, 503, 'unavailable');
@@ -118,7 +143,7 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
   /** The store, refusing a change that started from an older list. */
   const current = async revision => {
     const read = await store.read();
-    if (revision !== read.revision) throw new GatewayError('Gateways changed in another window. Refresh and try again.', 409, 'conflict');
+    if (revision !== read.revision) throw new GatewayError('Gateways changed in another window, so nothing was saved.', 409, 'conflict');
     return read;
   };
   const find = (gateways, id) => {
@@ -240,6 +265,44 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     } finally { settling.delete(id); invalidate(); }
   };
 
+  // --- usage limits ---------------------------------------------------------
+
+  /** Give T3 a verified key. Refused without touching anything, so T3 never polls with a bad one. */
+  const verifyHub = async (url, key, state, gateway) => {
+    // Someone's own hub stays theirs. Checked first, so it doesn't cost an attempt.
+    if (!gateway?.limits && hubAt(url, state.hubSources)) throw new GatewayError('T3 Code already has a hub at this address.', 409, 'limits-exists', { field: 'managementKey', hint: 'Its key is changed in T3 Code’s settings.' });
+    const result = await checkHub(url, key, { reuse: true });
+    if (!result.ok) throw new GatewayError(result.message, 409, 'limits', { field: 'managementKey', hint: result.hint, limits: result });
+    return result;
+  };
+  const writeHub = async (gateway, key, state) => {
+    const sourceId = gateway.limits?.sourceId ?? hubIdFor(gateway.url, state.hubSources);
+    await t3.setHub(sourceId, { kind: 'cliproxy', label: gateway.name, url: gateway.url, managementKey: key, enabled: true });
+    await store.update(undefined, rows => rows.map(entry => entry.id === gateway.id ? { ...entry, limits: { sourceId } } : entry));
+    invalidate();
+    // T3 reads a new hub on its next round, which can be minutes away.
+    void t3.refresh().catch(() => {});
+  };
+  /** A new name is safe to follow. A new address isn't: see `save`. */
+  const renameHub = async (gateway, state) => {
+    const source = gateway.limits && state.hubSources?.[gateway.limits.sourceId];
+    if (!source || source.label === gateway.name) return;
+    await t3.setHub(gateway.limits.sourceId, { ...source, label: gateway.name });
+    invalidate();
+  };
+  const dropHub = async (gateway, state) => {
+    const sourceId = gateway.limits?.sourceId;
+    if (sourceId && state.hubSources?.[sourceId]) await t3.setHub(sourceId, null);
+    invalidate();
+  };
+  const clearLimits = id => store.update(undefined, rows => rows.map(entry => entry.id === id ? { ...entry, limits: null } : entry));
+  /** A hub removed in T3 Code's settings is gone. Keeping the claim would make the next one added at that address ours to delete. */
+  const forgetLostHubs = () => serial(async () => {
+    const state = await readT3({ fresh: true }), { gateways } = await store.read();
+    if (!state.ok || !state.hubs) return;
+    for (const gateway of gateways) if (gateway.limits?.sourceId && !state.hubSources[gateway.limits.sourceId]) await clearLimits(gateway.id);
+  });
+
   const applyAndSave = async (gateway, options) => {
     const { results, agents } = await reconcile(gateway, options);
     await store.update(undefined, gateways => gateways.map(entry => entry.id === gateway.id ? { ...entry, agents } : entry));
@@ -254,7 +317,7 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     const wanted = gateway.agents[agent.id], instanceId = instanceIdFor(gateway.id, agent), actual = state.instances[instanceId];
     const provider = state.providers.find(entry => entry.instanceId === instanceId);
     const row = { id: agent.id, connected: Boolean(wanted?.on), instanceId, displayName: actual?.displayName ?? `${agent.short} · ${gateway.name}`, scope: wanted?.scope ?? 'compatible',
-      models: modelsFor(agent, gateway).length, offered: gateway.check?.protocols?.[agent.protocol] !== 'missing' };
+      models: modelsFor(agent, gateway).length, modelIds: modelsFor(agent, gateway), offered: gateway.check?.protocols?.[agent.protocol] !== 'missing' };
     if (!wanted?.on) return { ...row, state: 'off' };
     if (!state.ok) return { ...row, state: 'unknown' };
     if (!actual) return { ...row, state: 'missing' };
@@ -268,14 +331,30 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     return { ...row, state: 'ready' };
   };
 
-  const viewOf = (gateway, state, keys) => {
+  /** What Limits shows for this gateway. A hub added in T3 Code's Settings counts too, and stays T3's. */
+  const limitsOf = (gateway, state, reports) => {
+    const owned = gateway.limits?.sourceId ?? null, offered = presetOf(gateway.preset)?.hub === true;
+    if (!state.ok) return { supported: offered, state: 'unknown', owned: Boolean(owned), sourceId: owned, accounts: [] };
+    const supported = Boolean(state.hubs) && offered, sourceId = owned ?? hubAt(gateway.url, state.hubSources), source = sourceId ? state.hubSources?.[sourceId] : null;
+    if (!supported || !source) return { supported, state: 'off', owned: false, sourceId: null, accounts: [] };
+    const report = reports.find(entry => entry.id === sourceId);
+    const accounts = (report?.accounts ?? []).map(({ id, driver, email, plan, usageLimits }) => ({ id, driver, email: email ?? null, plan: plan ?? null,
+      windows: (usageLimits?.windows ?? []).map(({ id: window, label, usedPercent }) => ({ id: window, label, left: Math.round(100 - usedPercent) })) }));
+    const base = { supported, owned: Boolean(owned), sourceId, enabled: source.enabled !== false, accounts, checkedAt: report?.checkedAt ?? null };
+    if (source.enabled === false) return { ...base, state: 'paused' };
+    if (!report) return { ...base, state: 'reading' };
+    if (report.error) return { ...base, state: 'error', detail: String(report.error).slice(0, 240) };
+    return { ...base, state: 'on' };
+  };
+
+  const viewOf = (gateway, state, keys, reports) => {
     const vaultKey = gateway.credentialId ? keys.find(entry => entry.id === gateway.credentialId) ?? null : null;
     const address = parseAddress(gateway.url);
     return {
       id: gateway.id, name: gateway.name, preset: gateway.preset, url: gateway.url, host: address.ok ? address.host : gateway.url, insecure: Boolean(address.ok && address.insecure),
       key: !gateway.credentialId ? { state: 'none' } : !vaultKey ? { state: 'missing', credentialId: gateway.credentialId } : { state: 'saved', credentialId: gateway.credentialId, changedAt: vaultKey.changedAt },
       check: gateway.check ?? null, models: { ids: gateway.models?.ids ?? [], manual: gateway.models?.manual ?? [], at: gateway.models?.at ?? null },
-      latest: gateway.latest ?? null, settling: settling.has(gateway.id),
+      latest: gateway.latest ?? null, settling: settling.has(gateway.id), limits: limitsOf(gateway, state, reports),
       agents: AGENTS.map(agent => agentRow(gateway, agent, state, vaultKey)), createdAt: gateway.createdAt,
     };
   };
@@ -290,17 +369,23 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
 
   const status = async () => {
     const [{ gateways, revision }, state, keys] = await Promise.all([store.read(), readT3(), vault.list().catch(() => [])]);
+    const reports = await readHubReports(state);
+    if (state.ok && state.hubs && gateways.some(gateway => gateway.limits?.sourceId && !state.hubSources[gateway.limits.sourceId])) void forgetLostHubs().catch(() => {});
     return {
-      ok: true, revision, gateways: gateways.map(gateway => viewOf(gateway, state, keys)), conflicts: await conflictsFor(gateways),
-      t3: { available: state.ok, error: state.ok ? null : state.error, code: state.ok ? null : state.code },
+      ok: true, revision, gateways: gateways.map(gateway => viewOf(gateway, state, keys, reports)), conflicts: await conflictsFor(gateways),
+      t3: { available: state.ok, error: state.ok ? null : state.error, code: state.ok ? null : state.code, hubs: Boolean(state.hubs), hubUrls: Object.values(state.hubSources ?? {}).map(source => source?.url).filter(Boolean) },
       catalog: { presets: PRESETS, agents: AGENTS, unsupported: UNSUPPORTED_AGENTS, protocols: PROTOCOLS }, keys,
     };
   };
 
   /** What `/status` shows in the sidebar: no network and no T3 call. */
   const summary = async () => {
-    const { gateways } = await store.read();
-    return { count: gateways.length, attention: gateways.filter(gateway => gateway.check && !gateway.check.ok).map(gateway => ({ id: gateway.id, name: gateway.name, code: gateway.check.code, message: gateway.check.message })) };
+    const { gateways } = await store.read(), keys = await vault.list().catch(() => []);
+    const staleKey = gateway => { const key = keys.find(entry => entry.id === gateway.credentialId); return Boolean(key) && Object.values(gateway.agents ?? {}).some(agent => agent.on && agent.keyAt !== key.changedAt); };
+    return { count: gateways.length, attention: gateways.flatMap(gateway => [
+      ...(gateway.check && !gateway.check.ok ? [{ id: gateway.id, name: gateway.name, code: gateway.check.code, message: gateway.check.message }] : []),
+      ...(staleKey(gateway) ? [{ id: gateway.id, name: gateway.name, code: 'key-stale', message: 'Its key changed in the Vault. Agents still use the old copy.' }] : []),
+    ]) };
   };
 
   // --- changing -------------------------------------------------------------
@@ -319,13 +404,16 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     const { gateways } = await store.read();
     if (typeof input.id === 'string' && input.url === undefined) {
       const gateway = find(gateways, input.id), result = await probe(gateway.url, await keyFor(gateway));
-      await store.update(undefined, rows => rows.map(entry => entry.id === gateway.id ? { ...entry, ...observed(entry, result) } : entry));
+      // Only if it's still the gateway that was tested: this can finish after a save.
+      await store.update(undefined, rows => rows.map(entry => entry.id === gateway.id && entry.url === gateway.url && entry.credentialId === gateway.credentialId ? { ...entry, ...observed(entry, result) } : entry));
       return { ok: true, result: { ...result, offers: offersOf(result) } };
     }
     const gateway = typeof input.id === 'string' ? gateways.find(entry => entry.id === input.id) : undefined;
-    const { url, notes } = cleanAddress(input.url);
+    const { url, notes } = cleanAddress(input.url), managementKey = cleanManagementKey(input.managementKey);
     const result = await probe(url, await resolveKey({ key: input.key, credentialId: input.credentialId, gateway }));
-    return { ok: true, result: { ...result, notes, offers: offersOf(result) } };
+    // Only with a key, only on request: see hub.mjs. A gateway that didn't answer can't vouch for one.
+    const limits = managementKey && result.ok ? await checkHub(url, managementKey) : undefined;
+    return { ok: true, result: { ...result, notes, offers: offersOf(result), ...(limits ? { limits } : {}) } };
   };
 
   const cleanSelection = selection => {
@@ -340,7 +428,8 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     const selection = cleanSelection(input.gateway.agents ?? []), manual = cleanManual(input.gateway.manual), typed = cleanKey(input.key);
     const state = await requireT3(), { gateways, revision } = await store.read();
     if (input.revision !== undefined && input.revision !== revision) throw new GatewayError('Gateways changed in another window. Refresh before adding this one.', 409, 'conflict');
-    const key = await resolveKey({ key: typed, credentialId: input.credentialId ?? undefined });
+    const key = await resolveKey({ key: typed, credentialId: input.credentialId ?? undefined }), managementKey = cleanManagementKey(input.managementKey);
+    if (managementKey) await verifyHub(url, managementKey, state);
     const result = recentProbe(url, key) ?? await probe(url, key);
     const taken = new Set([...gateways.map(entry => entry.id), ...RESERVED_IDS]), base = slug(name);
     let id = base;
@@ -352,15 +441,18 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     try { await store.update(revision, rows => [...rows, gateway]); }
     catch (error) { if (typed) await vault.remove(credentialId).catch(() => {}); throw error; }
     const results = await applyAndSave(gateway, { state, key, renamed: true });
+    // The gateway stands either way: a failure here only leaves Limits to set up.
+    const limitsError = managementKey ? await writeHub(gateway, managementKey, state).then(() => null, error => String(error?.message ?? error).slice(0, 240)) : null;
     onEvent(`Added the ${name} gateway`);
-    return { ok: true, id, results, ...await status() };
+    return { ok: true, id, results, limitsError, ...await status() };
   });
 
   const save = input => serial(async () => {
     if (!object(input?.gateway) || typeof input.id !== 'string') throw new GatewayError('Enter gateway details.');
     const state = await requireT3(), { gateways } = await current(input.revision), previous = find(gateways, input.id);
     const { url } = cleanAddress(input.gateway.url ?? previous.url), name = cleanName(input.gateway.name ?? previous.name), typed = cleanKey(input.key);
-    const manual = input.gateway.manual === undefined ? previous.models?.manual ?? [] : cleanManual(input.gateway.manual);
+    const manual = input.gateway.manual === undefined ? previous.models?.manual ?? [] : cleanManual(input.gateway.manual), managementKey = cleanManagementKey(input.managementKey);
+    if (managementKey) await verifyHub(url, managementKey, state, previous);
     let credentialId = input.credentialId === undefined ? previous.credentialId : input.credentialId, key;
     if (typed) {
       const held = credentialId && (await vault.list()).some(entry => entry.id === credentialId);
@@ -370,14 +462,18 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     const moved = url !== previous.url || key !== undefined;
     const known = key ?? (moved ? await keyFor({ credentialId }) : '');
     const result = moved ? recentProbe(url, known) ?? await probe(url, known) : null;
-    const next = { ...previous, name, url, credentialId, ...(result ? observed(previous, result) : {}),
+    const next = { ...previous, name, url, credentialId, preset: presetOf(input.gateway.preset)?.id ?? previous.preset, ...(result ? observed(previous, result) : {}),
       models: { ...previous.models, manual, ...(result?.ok && result.models.listed ? { ids: cleanModelIds(result.models.ids), at: now() } : {}) } };
     if (result?.ok) next.latest = null;
     await store.update(undefined, rows => rows.map(entry => entry.id === next.id ? next : entry));
     const renamed = name !== previous.name, sameModels = JSON.stringify(manual) === JSON.stringify(previous.models?.manual ?? []);
     const results = await applyAndSave(next, { state, key, renamed, quiet: renamed && !moved && sameModels });
+    // A management key was only checked at the old address, and T3 would send it to
+    // the new one at once. If that's another service, it now has a key to the gateway.
+    const stranded = Boolean(previous.limits) && url !== previous.url && !managementKey;
+    const limitsError = await (managementKey ? writeHub(next, managementKey, state) : stranded ? dropHub(next, state).then(() => clearLimits(next.id)) : renameHub(next, state)).then(() => null, error => String(error?.message ?? error).slice(0, 240));
     onEvent(`Changed the ${name} gateway`);
-    return { ok: true, results, ...await status() };
+    return { ok: true, results, limitsError, limitsStopped: stranded && !limitsError, ...await status() };
   });
 
   const setAgent = input => serial(async () => {
@@ -392,6 +488,21 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     // If T3 refused, the agent is still as it was, and the page should say so.
     if (results.some(result => result.agent === agent.id && !result.ok)) await store.update(undefined, rows => rows.map(entry => entry.id !== next.id ? entry : { ...entry, agents: { ...entry.agents, [agent.id]: row ?? { ...next.agents[agent.id], on: false } } }));
     return { ok: true, results, ...await status() };
+  });
+
+  /** Set up Limits with a new key, or take them away. Nothing here restarts an agent. */
+  const setLimits = input => serial(async () => {
+    const state = await requireT3(), { gateways } = await current(input?.revision), gateway = find(gateways, input.id);
+    if (input.remove === true) {
+      await dropHub(gateway, state);
+      await clearLimits(gateway.id);
+      return { ok: true, ...await status() };
+    }
+    const key = cleanManagementKey(input.managementKey);
+    if (!key) throw new GatewayError('Enter the management key.', 400, 'invalid', { field: 'managementKey' });
+    await verifyHub(gateway.url, key, state, gateway);
+    await writeHub(gateway, key, state);
+    return { ok: true, ...await status() };
   });
 
   /** Restore what was changed in T3 Code, and bring a stale key up to date. */
@@ -431,10 +542,12 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
       // Even with no instance: one deleted in T3 Code leaves its files, key included.
       await removeAgentFiles(agent, gateway);
     }
+    // Said out loud if it fails: the dialog promised T3 would forget this key.
+    const limitsError = await dropHub(gateway, state).then(() => null, error => String(error?.message ?? error).slice(0, 240));
     invalidate();
     await store.update(undefined, rows => rows.filter(entry => entry.id !== gateway.id));
     onEvent(`Removed the ${gateway.name} gateway`);
-    return { ok: true, ...await status() };
+    return { ok: true, limitsError, ...await status() };
   });
 
   const clearConflict = input => serial(async () => {
@@ -443,8 +556,8 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     return { ok: true, ...await status() };
   });
 
-  const actions = { '/gateways/test': test, '/gateways/create': create, '/gateways/save': save, '/gateways/agent': setAgent, '/gateways/apply': reapply, '/gateways/models': refreshModels, '/gateways/remove': remove, '/gateways/conflict': clearConflict };
-  return { status, summary, test, create, save, setAgent, reapply, refreshModels, remove, clearConflict,
+  const actions = { '/gateways/test': test, '/gateways/create': create, '/gateways/save': save, '/gateways/agent': setAgent, '/gateways/limits': setLimits, '/gateways/apply': reapply, '/gateways/models': refreshModels, '/gateways/remove': remove, '/gateways/conflict': clearConflict };
+  return { status, summary, test, create, save, setAgent, setLimits, reapply, refreshModels, remove, clearConflict,
     /** One entry point for the server. `route` is one of GATEWAY_ROUTES. */
     handle: (route, input) => route === '/gateways' ? status() : actions[route]?.(input) ?? Promise.reject(new GatewayError('Gateway action not found.', 404, 'not-found')) };
 }

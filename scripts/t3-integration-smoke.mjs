@@ -61,6 +61,22 @@ try {
   assert.deepEqual(gatewayRead.preferences[gatewayInstance].hiddenModels, ["smoke-hidden"]);
   await fs.access(path.join(env.T3CODE_HOME, "userdata/secrets", `provider-env-${Buffer.from(gatewayInstance).toString("base64url")}-${Buffer.from("T3_GATEWAY_KEY").toString("base64url")}.bin`));
   assert.ok(!(await fs.readFile(path.join(env.T3CODE_HOME, "userdata/settings.json"), "utf8")).includes(gatewaySecret), "the secret isn't in settings.json");
+
+  // Limits rest on T3 taking a hub through settings, its key as a secret that a redacted value keeps.
+  const hubId = "cliproxy-smoke", hubKey = "hub-integration-smoke";
+  await gatewayT3.setHub(hubId, { kind: "cliproxy", label: "Smoke", url: "http://127.0.0.1:9", managementKey: hubKey, enabled: false });
+  const hubRead = await until(async () => { const state = await gatewayT3.read(); return state.hubSources[hubId] && state; });
+  assert.equal(hubRead.hubs, true, "T3 reports hubs in its settings");
+  assert.notEqual(hubRead.hubSources[hubId].managementKey, hubKey, "T3 redacts a management key on the way out");
+  assert.ok(!(await fs.readFile(path.join(env.T3CODE_HOME, "userdata/settings.json"), "utf8")).includes(hubKey), "the management key isn't in settings.json");
+  const hubSecret = path.join(env.T3CODE_HOME, "userdata/secrets", `usage-limit-source-${Buffer.from(hubId).toString("base64url")}.bin`);
+  await fs.access(hubSecret);
+  assert.ok(Array.isArray(await gatewayT3.hubReports({ timeoutMs: 15_000 })), "T3 sends hub reports on its config stream");
+  await gatewayT3.setHub(hubId, { ...hubRead.hubSources[hubId], label: "Renamed" });
+  await until(async () => (await gatewayT3.read()).hubSources[hubId]?.label === "Renamed");
+  await fs.access(hubSecret);
+  await gatewayT3.setHub(hubId, null);
+  await until(async () => !(await gatewayT3.read()).hubSources[hubId]);
   await gatewayT3.remove(gatewayInstance);
   assert.equal((await gatewayT3.read()).instances[gatewayInstance], undefined);
   const connectFacts = async (executable) => {

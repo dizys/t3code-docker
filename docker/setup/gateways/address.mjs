@@ -9,6 +9,9 @@ const SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 // each agent adds back the path it needs.
 const ENDPOINT = /\/v1(?:beta)?(?:\/(?:models|messages|responses|chat\/completions|completions))?$/i;
 const BARE_ENDPOINT = /\/(?:chat\/completions|messages|responses)$/i;
+// A gateway's admin pages. Left on, every test would be a keyless request to a place
+// that counts those toward locking this server out.
+const MANAGEMENT = /\/(?:v\d+\/management(?:\/.*)?|management\.html)$/i;
 
 const stripBrackets = host => host.replace(/^\[|\]$/g, '');
 
@@ -53,7 +56,7 @@ export function parseAddress(input) {
   if (parsed.search || parsed.hash) return { ok: false, error: 'Remove the part after ? or #. The key goes in the API key field.' };
   const notes = [];
   let pathname = parsed.pathname.replace(/\/+$/, '');
-  const trimmed = pathname.replace(ENDPOINT, '').replace(BARE_ENDPOINT, '').replace(/\/+$/, '');
+  const trimmed = pathname.replace(MANAGEMENT, '').replace(ENDPOINT, '').replace(BARE_ENDPOINT, '').replace(/\/+$/, '');
   if (trimmed !== pathname) {
     notes.push(`Removed ${pathname.slice(trimmed.length)}. Each agent adds the path it needs.`);
     pathname = trimmed;

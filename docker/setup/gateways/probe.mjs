@@ -53,7 +53,7 @@ function connectionProblem(code, address) {
   return problems[code];
 }
 
-async function readJson(response) {
+export async function readJson(response) {
   const reader = response.body?.getReader?.();
   if (!reader) return null;
   const chunks = [];
@@ -70,7 +70,21 @@ async function readJson(response) {
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return null; }
 }
 
-const discard = response => response.body?.cancel?.().catch(() => {});
+export const discard = response => response.body?.cancel?.().catch(() => {});
+
+/**
+ * Which product this is, so the page can offer what it supports. CLIProxyAPI says so
+ * at its root, which needs no key. Its management routes would tell more, but each
+ * request there without a key counts toward locking this server out.
+ */
+const identify = async ({ url, hostname }, signal, fetchImpl) => {
+  if (hostname === 'openrouter.ai') return 'openrouter';
+  try {
+    const response = await fetchImpl(`${url}/`, { redirect: 'manual', headers: { accept: 'application/json', 'user-agent': 't3code-docker-setup' }, signal: signal() });
+    const body = response.ok ? await readJson(response) : (await discard(response), null);
+    return /cli\s*proxy\s*api/i.test(String(body?.message ?? '')) ? 'cliproxyapi' : null;
+  } catch { return null; }
+};
 
 /** How a route answered an empty body. Anything but "no such route" means it's there. */
 const routeState = status => {
@@ -83,16 +97,15 @@ const routeState = status => {
 /**
  * Probe an address. Never throws: a failure is a result.
  *
- *   { at, ok, code, message, hint, fix, ms, url, notes, insecure,
+ *   { at, ok, code, message, hint, fix, ms, url, notes, insecure, product,
  *     models: { listed, ids }, protocols: { messages, responses, chat } }
  */
 export async function probeGateway({ url: input, key = '', fetchImpl = globalThis.fetch, timeoutMs = 6000, now = Date.now, signal } = {}) {
   const at = now(), address = parseAddress(input);
   if (!address.ok) return { at, ok: false, code: 'invalid', message: address.error, models: { listed: false, ids: [] }, protocols: {} };
-  const { url, notes, insecure } = address, headers = headersFor(key);
+  const { url, notes, insecure } = address, headers = headersFor(key), limit = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
   const finish = (result) => ({ at, url, notes, insecure, ms: Math.max(0, now() - at), models: { listed: false, ids: [] }, protocols: {}, ...result });
-  const request = (path, init = {}) => fetchImpl(url + path, { redirect: 'manual', ...init, headers: { ...headers, ...init.headers },
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
+  const request = (path, init = {}) => fetchImpl(url + path, { redirect: 'manual', ...init, headers: { ...headers, ...init.headers }, signal: limit() });
 
   let list;
   try { list = await request('/v1/models'); }
@@ -114,6 +127,7 @@ export async function probeGateway({ url: input, key = '', fetchImpl = globalThi
   // Anthropic's own API refuses a list without its header.
   if (ids === null && list.status !== 401 && list.status !== 403) ids = await request('/v1/models', { headers: ANTHROPIC }).then(readIds, () => null);
   const models = { listed: ids !== null, ids: ids ?? [] };
+  const product = identify(address, limit, fetchImpl);
   const routes = await Promise.all(Object.values(PROTOCOLS).map(async protocol => {
     try {
       const response = await request(protocol.path, { method: 'POST', headers: { 'content-type': 'application/json', ...(protocol.id === 'messages' ? ANTHROPIC : {}) }, body: '{}' });
@@ -121,7 +135,7 @@ export async function probeGateway({ url: input, key = '', fetchImpl = globalThi
       return [protocol.id, routeState(response.status)];
     } catch { return [protocol.id, 'unknown']; }
   }));
-  const states = Object.fromEntries(routes), values = Object.values(states);
+  const states = Object.fromEntries(routes), values = Object.values(states), known = await product;
   const refused = list.status === 401 || list.status === 403 || values.includes('unauthorized');
   const protocols = Object.fromEntries(routes.map(([id, state]) => [id, state === 'unauthorized' ? 'unknown' : state]));
   if (refused) {
@@ -135,5 +149,5 @@ export async function probeGateway({ url: input, key = '', fetchImpl = globalThi
       message: notJson ? `${address.host} answered, but not like an AI gateway.` : `${address.host} has no AI API at this address.`,
       hint: 'Check the address, including any path such as /api.' });
   }
-  return finish({ ok: true, code: 'ok', status: list.status, protocols, models });
+  return finish({ ok: true, code: 'ok', status: list.status, protocols, models, product: known });
 }

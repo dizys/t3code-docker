@@ -10,19 +10,28 @@ import test from 'node:test';
 import { createGatewayService, gatewayFailure } from '../docker/setup/gateways.mjs';
 import { createGatewayT3 } from '../docker/setup/gateways/t3.mjs';
 
+const REDACTED = { redacted: true };
 const redacted = instance => ({ ...instance, environment: instance.environment?.map(row => row.sensitive ? { ...row, value: '', valueRedacted: true } : row) });
 
 function fakeT3({ instances = {}, models = {} } = {}) {
   const state = { instances: { claudeAgent: { driver: 'claudeAgent', config: { binaryPath: '/launchers/claude' } }, codex: { driver: 'codex', config: { binaryPath: '/launchers/codex' } }, opencode: { driver: 'opencode', config: { binaryPath: '/launchers/opencode', serverPassword: 'must-not-copy' } }, ...instances }, preferences: {} };
   // As on a real server, an instance is only checked again when it's written.
   const checked = new Map();
-  const t3 = { state, writes: [], refreshed: [], secrets: new Map(), hidden: [], down: false, failFor: null, status: 'ready',
+  const t3 = { state, writes: [], refreshed: [], secrets: new Map(), hidden: [], down: false, failFor: null, status: 'ready', hubs: {}, hubWrites: [], reports: [], reportReads: 0, hubFails: false, hubStreamFails: false,
     read: async () => {
       if (t3.down) throw new Error('T3 Code is not answering');
-      return { instances: Object.fromEntries(Object.entries(state.instances).map(([id, instance]) => [id, redacted(instance)])), preferences: state.preferences,
+      return { hubs: true, hubSources: Object.fromEntries(Object.entries(t3.hubs).map(([id, source]) => [id, { ...source, managementKey: REDACTED }])), instances: Object.fromEntries(Object.entries(state.instances).map(([id, instance]) => [id, redacted(instance)])), preferences: state.preferences,
         providers: Object.entries(state.instances).filter(([id]) => id.includes('_gw_')).map(([instanceId, instance]) => ({ instanceId, status: t3.status, installed: true, checkedAt: checked.get(instanceId), models: (models[instance.driver] ?? []).map(slug => ({ slug })) })) };
     },
     refresh: async id => { t3.refreshed.push(id); },
+    // As on a real server, reports are only on the config stream, and a read never carries them.
+    hubReports: async () => { t3.reportReads++; if (t3.hubStreamFails) throw new Error('no stream'); return t3.reports; },
+    setHub: async (id, source) => {
+      if (t3.hubFails) throw new Error('T3 refused the hub');
+      t3.hubWrites.push(id);
+      if (source === null) { delete t3.hubs[id]; return; }
+      t3.hubs[id] = { ...source, managementKey: source.managementKey === REDACTED ? t3.hubs[id].managementKey : source.managementKey };
+    },
     upsert: async (id, instance) => {
       if (t3.failFor === instance.driver) throw new Error('T3 refused this instance');
       t3.writes.push(id);
@@ -680,4 +689,246 @@ test('ids stay valid for T3 and the Vault, and never collide with the Add sheet'
   await h.service.create({ gateway: { name: long, url: h.gateway.url, agents: [] } });
   const second = await h.service.create({ gateway: { name: long, url: h.gateway.url, agents: [] }, key: 'sk-x' });
   assert.match(second.id, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+});
+
+// ---- usage limits -----------------------------------------------------------
+
+/** A gateway with a management API, counting each attempt: five wrong ones lock a server out. */
+async function hubServer(t, { accounts = [{ provider: 'claude' }, { provider: 'codex' }, { provider: 'codex', disabled: true }, { provider: 'gemini' }], key = 'the-management-key' } = {}) {
+  const state = { attempts: 0, headers: [] };
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      const json = (status, value) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(value)); };
+      if (req.url === '/v1/models') return json(200, { data: [{ id: 'claude-opus-4-8' }, { id: 'gpt-6-astra' }] });
+      if (req.url === '/') return json(200, { message: 'CLI Proxy API Server', endpoints: [] });
+      if (req.url.startsWith('/v0/management/')) {
+        state.attempts++; state.headers.push(req.headers.authorization);
+        if (req.headers.authorization !== `Bearer ${key}`) return json(401, { error: 'invalid management key' });
+        return json(200, { files: accounts.map(account => ({ ...account, access_token: 'never-read' })) });
+      }
+      return json(400, {});
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  return { state, url: `http://127.0.0.1:${server.address().port}` };
+}
+const createInput = (hub, extra = {}) => ({ gateway: { name: 'Hub', preset: 'cliproxyapi', url: hub.url, agents: ['claude'] }, key: 'sk-api', ...extra });
+
+test('adding a management key gives T3 a verified hub, and the key stays out of the store', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  const result = await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  assert.equal(result.ok, true); assert.equal(result.limitsError, null);
+  const [[id, source]] = Object.entries(h.t3.hubs);
+  assert.match(id, /^cliproxy-127\.0\.0\.1/, 'The id T3’s own dialog would choose, so the two agree');
+  assert.deepEqual({ kind: source.kind, url: source.url, label: source.label, enabled: source.enabled, key: source.managementKey }, { kind: 'cliproxy', url: hub.url, label: 'Hub', enabled: true, key: 'the-management-key' });
+  const stored = await fs.readFile(path.join(h.root, 'state/setup/gateways/gateways.json'), 'utf8');
+  assert.ok(!stored.includes('the-management-key'), 'Only T3’s secret store holds it');
+  assert.equal(h.vault.rows.has('hub-management'), false, 'Not the Vault either, where agents could ask for it by name');
+  assert.ok(![...h.vault.rows.values()].some(row => row.key === 'the-management-key'));
+  assert.equal(result.gateways[0].limits.state, 'reading');
+  assert.equal(result.gateways[0].limits.owned, true);
+});
+
+test('a wrong management key adds nothing, costs one attempt, and never reaches T3', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  await assert.rejects(h.service.create(createInput(hub, { managementKey: 'wrong' })), error => error.code === 'limits' && error.extra.field === 'managementKey' && /not the hash/.test(error.extra.hint) && /30 minutes/.test(error.extra.hint));
+  assert.equal(hub.state.attempts, 1, 'Five of these lock the server out');
+  assert.deepEqual(h.t3.hubWrites, [], 'T3 polls with whatever it holds, so a bad key would spend the rest');
+  assert.deepEqual(h.t3.writes, [], 'And the gateway isn’t half added');
+  assert.equal((await h.service.status()).gateways.length, 0);
+});
+
+test('a management key is sent only when asked, so a plain test or health check costs nothing', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  await h.service.test({ url: hub.url, key: 'sk-api' });
+  const { id } = await h.service.create(createInput(hub));
+  await h.service.test({ id });
+  await h.service.status();
+  await h.service.reapply({ id, revision: (await h.service.status()).revision });
+  assert.equal(hub.state.attempts, 0, 'Not one request reaches a management route without a key');
+  assert.ok(hub.state.headers.every(Boolean));
+});
+
+test('a key shown as good isn’t spent again when the gateway is added', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  const { result } = await h.service.test({ url: hub.url, key: 'sk-api', managementKey: 'the-management-key' });
+  assert.deepEqual(result.limits, { ok: true, code: 'ok', accounts: { claude: 1, codex: 1 } }, 'Disabled accounts don’t count, and only what Limits can show does');
+  assert.ok(!JSON.stringify(result).includes('never-read'), 'The list can hold credentials, and none of it leaves');
+  await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  assert.equal(hub.state.attempts, 1);
+});
+
+test('a gateway can’t vouch for a management key when it didn’t answer', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  const { result } = await h.service.test({ url: 'http://127.0.0.1:1', key: 'sk-api', managementKey: 'the-management-key' });
+  assert.equal(result.ok, false); assert.equal(result.limits, undefined);
+  assert.equal(hub.state.attempts, 0);
+});
+
+test('a gateway keeps working when T3 refuses its hub', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  h.t3.hubFails = true;
+  const result = await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  assert.match(result.limitsError, /refused/);
+  assert.equal(result.gateways.length, 1);
+  assert.equal(result.gateways[0].limits.state, 'off');
+});
+
+test('a hub follows its gateway’s name, and keeps its key', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  const { id } = await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  const [sourceId] = Object.keys(h.t3.hubs);
+  await h.service.save({ id, revision: (await h.service.status()).revision, gateway: { name: 'Renamed' } });
+  assert.deepEqual(Object.keys(h.t3.hubs), [sourceId], 'The same hub, not a second one');
+  assert.equal(h.t3.hubs[sourceId].label, 'Renamed');
+  assert.equal(h.t3.hubs[sourceId].managementKey, 'the-management-key', 'T3 reads the redacted value as “keep it”');
+});
+
+test('a management key never follows a gateway to a new address', async t => {
+  const h = await harness(t), hub = await hubServer(t), other = await hubServer(t);
+  const { id } = await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  const saved = await h.service.save({ id, revision: (await h.service.status()).revision, gateway: { url: other.url } });
+  assert.deepEqual(Object.keys(h.t3.hubs), [], 'T3 would send it there at once, and that may be someone else’s server');
+  assert.equal(saved.limitsStopped, true, 'And the page says so');
+  assert.equal(saved.gateways[0].limits.state, 'off');
+  assert.equal(other.state.attempts, 0);
+});
+
+test('entering the key again moves the hub with the gateway', async t => {
+  const h = await harness(t), hub = await hubServer(t), other = await hubServer(t, { key: 'the-new-key' });
+  const { id } = await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  const [sourceId] = Object.keys(h.t3.hubs);
+  await assert.rejects(h.service.save({ id, revision: (await h.service.status()).revision, gateway: { url: other.url }, managementKey: 'the-management-key' }), error => error.extra?.field === 'managementKey');
+  assert.equal(h.t3.hubs[sourceId].url, hub.url, 'Refused at the new address, nothing moved');
+  const saved = await h.service.save({ id, revision: (await h.service.status()).revision, gateway: { url: other.url }, managementKey: 'the-new-key' });
+  assert.equal(saved.limitsStopped, false);
+  assert.deepEqual(Object.keys(h.t3.hubs), [sourceId]);
+  assert.equal(h.t3.hubs[sourceId].url, other.url); assert.equal(h.t3.hubs[sourceId].managementKey, 'the-new-key');
+});
+
+test('a hub someone set up in T3 Code can’t be taken over by adding a key here', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  h.t3.hubs['cliproxy-theirs'] = { kind: 'cliproxy', url: hub.url, managementKey: 'theirs', label: 'Mine', enabled: true };
+  await assert.rejects(h.service.create(createInput(hub, { managementKey: 'the-management-key' })), error => error.code === 'limits-exists' && error.extra.field === 'managementKey');
+  assert.equal(hub.state.attempts, 0, 'Refused before spending an attempt');
+  const { id } = await h.service.create(createInput(hub));
+  await assert.rejects(h.service.setLimits({ id, revision: (await h.service.status()).revision, managementKey: 'the-management-key' }), error => error.code === 'limits-exists');
+  await assert.rejects(h.service.save({ id, revision: (await h.service.status()).revision, gateway: {}, managementKey: 'the-management-key' }), error => error.code === 'limits-exists');
+  assert.deepEqual(h.t3.hubs['cliproxy-theirs'], { kind: 'cliproxy', url: hub.url, managementKey: 'theirs', label: 'Mine', enabled: true });
+  assert.deepEqual(h.t3.hubWrites, []);
+});
+
+test('a hub removed in T3 Code stops being ours, so the next one at that address is theirs', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  const { id } = await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  const [sourceId] = Object.keys(h.t3.hubs);
+  delete h.t3.hubs[sourceId];
+  await new Promise(resolve => setTimeout(resolve, 1050));
+  assert.equal((await h.service.status()).gateways[0].limits.state, 'off');
+  await settled();
+  h.t3.hubs[sourceId] = { kind: 'cliproxy', url: hub.url, managementKey: 'theirs', enabled: true };
+  await new Promise(resolve => setTimeout(resolve, 1050));
+  assert.equal((await h.service.status()).gateways[0].limits.owned, false);
+  await h.service.remove({ id, revision: (await h.service.status()).revision });
+  assert.ok(h.t3.hubs[sourceId], 'Same id, because T3’s ids come from the address, but not ours to delete');
+});
+
+test('removing a gateway says so when T3 keeps its hub', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  const { id } = await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  h.t3.hubFails = true;
+  const removed = await h.service.remove({ id, revision: (await h.service.status()).revision });
+  assert.match(removed.limitsError, /refused/);
+  assert.equal(removed.gateways.length, 0, 'The gateway still goes');
+});
+
+test('T3 being away isn’t the same as a hub being gone', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  await new Promise(resolve => setTimeout(resolve, 1050));
+  h.t3.down = true;
+  const view = (await h.service.status()).gateways[0].limits;
+  assert.equal(view.state, 'unknown'); assert.equal(view.owned, true);
+  await settled();
+  h.t3.down = false;
+  await new Promise(resolve => setTimeout(resolve, 1050));
+  assert.equal((await h.service.status()).gateways[0].limits.owned, true, 'Nothing was forgotten meanwhile');
+});
+
+test('a health check that finishes after a save can’t describe the new address with the old one', async t => {
+  const h = await harness(t), hub = await hubServer(t), other = await hubServer(t);
+  const { id } = await h.service.create(createInput(hub));
+  let release; const hold = new Promise(resolve => { release = resolve; }), real = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { if (String(url).startsWith(hub.url)) await hold; return real(url, init); };
+  t.after(() => { globalThis.fetch = real; });
+  const checking = h.service.test({ id });
+  await settled();
+  globalThis.fetch = real;
+  await h.service.save({ id, revision: (await h.service.status()).revision, gateway: { url: other.url } });
+  const before = (await h.service.status()).gateways[0].check;
+  release();
+  await checking;
+  assert.deepEqual((await h.service.status()).gateways[0].check, before);
+});
+
+test('a key changed in the Vault reaches the sidebar without asking T3', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  const { gateways: [row] } = await h.service.create(createInput(hub));
+  assert.deepEqual((await h.service.summary()).attention, []);
+  await h.vault.replace(row.key.credentialId, 'sk-rotated');
+  assert.deepEqual((await h.service.summary()).attention.map(item => item.code), ['key-stale']);
+});
+
+test('a hub added in T3 Code’s settings is shown, and is never ours to remove', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  h.t3.hubs['cliproxy-theirs'] = { kind: 'cliproxy', url: hub.url, managementKey: 'theirs', enabled: true };
+  h.t3.reports = [{ id: 'cliproxy-theirs', kind: 'cliproxy', label: 'Theirs', checkedAt: '2026-11-06T00:00:00Z', accounts: [{ id: 'a', driver: 'codex', email: 'a@b.c', plan: 'Pro', usageLimits: {} }] }];
+  const { id, gateways } = await h.service.create(createInput(hub));
+  assert.deepEqual({ state: gateways[0].limits.state, owned: gateways[0].limits.owned, count: gateways[0].limits.accounts.length }, { state: 'on', owned: false, count: 1 });
+  await h.service.remove({ id, revision: (await h.service.status()).revision });
+  assert.ok(h.t3.hubs['cliproxy-theirs'], 'Removing the gateway leaves it');
+});
+
+test('stopping limits removes the hub, and removing a gateway takes its hub along', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  const { id } = await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  const stopped = await h.service.setLimits({ id, revision: (await h.service.status()).revision, remove: true });
+  assert.deepEqual(Object.keys(h.t3.hubs), []);
+  assert.equal(stopped.gateways[0].limits.state, 'off');
+  assert.equal(h.t3.writes.filter(write => write.includes('claudeAgent')).length, 1, 'Limits restart nothing');
+  await h.service.setLimits({ id, revision: (await h.service.status()).revision, managementKey: 'the-management-key' });
+  assert.equal(Object.keys(h.t3.hubs).length, 1, 'And they can be set up again');
+  await h.service.remove({ id, revision: (await h.service.status()).revision });
+  assert.deepEqual(Object.keys(h.t3.hubs), []);
+});
+
+test('T3’s hub reports are looked at only when there’s a hub, and a lost stream isn’t a verdict', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  await h.service.status();
+  assert.equal(h.t3.reportReads, 0, 'Opening a stream for nothing costs T3 a subscriber');
+  const { gateways: [created] } = await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  await h.service.status(); await h.service.status();
+  assert.ok(h.t3.reportReads <= 2, 'A polling page shares one look');
+  h.t3.hubStreamFails = true;
+  await new Promise(resolve => setTimeout(resolve, 1050));
+  assert.equal(created.limits.state, 'reading');
+  const later = (await h.service.status()).gateways[0].limits;
+  assert.notEqual(later.state, 'error', 'Not hearing back says nothing about the hub');
+});
+
+test('limits report what T3 sees, and only for a gateway that can have them', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  const { id, gateways: [created] } = await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  const sourceId = created.limits.sourceId;
+  h.t3.reports = [{ id: sourceId, kind: 'cliproxy', label: 'Hub', checkedAt: '2026-11-06T00:00:00Z', accounts: [{ id: 'a', driver: 'claudeAgent', email: 'a@b.c', usageLimits: { credentialFingerprint: 'not-for-the-page', windows: [{ id: 'five-hour', kind: 'session', label: 'Session', usedPercent: 25.4 }] } }] }];
+  await h.service.setLimits({ id, revision: (await h.service.status()).revision, managementKey: 'the-management-key' });
+  const on = (await h.service.status()).gateways[0].limits;
+  assert.equal(on.state, 'on'); assert.deepEqual(on.accounts, [{ id: 'a', driver: 'claudeAgent', email: 'a@b.c', plan: null, windows: [{ id: 'five-hour', label: 'Session', left: 75 }] }], 'What’s left, and only what the page shows');
+  h.t3.reports = [{ id: sourceId, kind: 'cliproxy', label: 'Hub', checkedAt: '2026-11-06T00:00:00Z', accounts: [], error: 'The hub rejected the key.' }];
+  await h.service.setLimits({ id, revision: (await h.service.status()).revision, managementKey: 'the-management-key' });
+  assert.equal((await h.service.status()).gateways[0].limits.state, 'error');
+  const litellm = await h.service.create({ gateway: { name: 'Other', preset: 'litellm', url: hub.url, agents: [] }, key: 'sk-api' });
+  assert.equal(litellm.gateways.find(row => row.id !== id).limits.supported, false);
 });

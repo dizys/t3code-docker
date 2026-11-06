@@ -17,12 +17,14 @@ skills, MCP servers and instructions all work the same on both.
 
 1. Choose **Add gateway…** and pick a type. **Other** fits any compatible API.
 2. Enter the address and key. You can leave `/v1` off, or paste it and it's removed.
-3. **Test and continue** checks it from inside this container, because that's
+   Once both are in, the page tests them from inside this container, because that's
    where agents reach it from. A test sends empty requests, so it can't use tokens.
-4. Choose the agents, then **Connect**. They start, and the sheet shows when each
-   is ready.
+   CLIProxyAPI says what it is, so choosing **Other** still finds its Limits option.
+3. Under **Use in**, each agent shows how many models it would get. Clear any you
+   don't want, then choose **Add to 3 agents**.
 
-Then pick the new entry in the model picker of any thread.
+The new row follows each agent as it starts. Then pick the new entry in the model
+picker of any thread.
 
 ## Reaching a gateway from the container
 
@@ -49,7 +51,8 @@ listen on `0.0.0.0`, not only on `127.0.0.1`.
 | OpenCode | OpenAI Chat Completions (`/v1/chat/completions`) | A config file layered over your own |
 
 A test shows which of these your gateway offers, and an agent it can't serve
-can't be turned on.
+can't be turned on. Each agent has a column on the page: select a cell to turn that
+agent on or off, or to choose its models.
 
 The others can't be connected from here, because a gateway couldn't be limited to
 one instance. Pi and Grok Build read endpoints from a file every instance shares,
@@ -70,11 +73,40 @@ Some gateways, CLIProxyAPI among them, also offer Claude Code other vendors' mod
 under `claude-` names. T3 Code's picker uses the real names, which work just the same.
 
 A health check notices new models but doesn't apply them, because that can restart
-agents. The card says when there are some; **Refresh** in the details applies them.
-If a gateway doesn't list models, add their IDs there by hand.
+agents. The page says when there are some, and **Apply** brings them in. If a gateway
+doesn't list models, add their IDs in its details by hand.
 
 Custom models can have fewer effort and thinking options in T3 Code than built-in
-ones. Usage limits come from a direct sign-in, so a gateway's entries don't show them.
+ones.
+
+## Usage
+
+**Tokens and cost** need no setup. T3 Code's **Usage** page reads each agent's own
+history, so turns through a gateway count like any others. The cost is what those
+tokens would cost at public API prices, not what your gateway charges, and turns
+through a gateway are added to the same agent and model as direct ones.
+
+**Limits** come from CLIProxyAPI's management API. Add its management key, and the
+quota of each Claude and Codex account it pools appears under **Usage → Limits** in
+T3 Code. Use the key you chose as `secret-key`, not the API key. CLIProxyAPI hashes
+that value on startup, so what its config file shows now won't work. It also needs
+`allow-remote` on unless the gateway runs in this container.
+
+You can add it when you add the gateway, or later with **Set up…** in its details.
+The page checks the key once, and only when you ask, because CLIProxyAPI locks an
+address out for 30 minutes after five failures, and T3 Code never gets a key that
+failed. It's kept in T3 Code's secret store rather than the Vault, because it can
+administer the whole gateway and agents have no reason to ask for it by name.
+
+A hub already added under T3 Code's **Settings → Providers → Usage providers** shows
+on the gateway at that address too. It stays T3 Code's: the page won't change it, and
+it stays if you remove the gateway.
+
+Changing a gateway's address stops its Limits unless you enter the key again. The key
+was only checked at the old address, and T3 Code would send it to the new one at once.
+
+**Usage → Limits** can also say a gateway's Codex entry couldn't read its usage. That's
+harmless: T3 Code looks for a subscription, and that entry doesn't have one.
 
 ## Keys
 
@@ -84,7 +116,7 @@ secret store for Claude Code and Codex, and in an owner-only file in
 `<T3 state>/setup/gateways/agents` for OpenCode.
 
 To change a key, use **Edit** on the gateway. If you replace it on the Vault page
-instead, the card says so, and **Update** copies it to each agent.
+instead, the page says so, and **Update** copies it to each agent.
 
 An agent's own process holds the key, because that's how it signs in. Commands Codex
 runs don't get it, so it never lands in Codex's shell snapshots on disk.
@@ -108,7 +140,7 @@ restarts nothing.
 
 ## When something goes wrong
 
-The card says what's wrong, and a failed test says what to do. The ones worth
+The page says what's wrong, and a failed test says what to do. The ones worth
 knowing:
 
 **Claude Code's settings file overrides gateways.** Gateway guides often suggest
@@ -125,6 +157,10 @@ environment variable. Renaming an entry there is fine, and sticks.
 **Key missing.** The Vault credential was deleted. Agents keep working on their
 copies until you replace it.
 
+**The gateway has locked this server out.** Five wrong management keys, from any
+tool on this address, block its management API for 30 minutes. Agents aren't
+affected. Wait it out, then enter the right key.
+
 **T3 Code isn't answering.** You can still read your gateways, but changing them
 waits until it's back, so nothing is left half done.
 
@@ -132,7 +168,8 @@ waits until it's back, so nothing is left half done.
 
 **Remove…** takes its entries out of T3 Code and leaves your direct sign-ins alone.
 Threads that used it stay readable and can continue on another agent. Its key stays
-in the Vault for you to delete.
+in the Vault for you to delete. If you set up Limits here, they go too, and T3 Code
+forgets the management key.
 
 ## Reference
 
@@ -141,4 +178,5 @@ in the Vault for you to delete.
 | Saved gateways | `<T3 state>/setup/gateways/gateways.json` (no keys) |
 | Keys | The Vault |
 | OpenCode's config and key | `<T3 state>/setup/gateways/agents/` |
+| Management key | T3 Code's secret store |
 | Provider instances | `claudeAgent_gw_<id>`, `codex_gw_<id>`, `opencode_gw_<id>` |

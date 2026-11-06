@@ -12,7 +12,7 @@ const relTime = () => '2 min ago';
 const gateway = over => ({ agents: [], key: { state: 'saved' }, settling: false, check: { at: 1, ok: true, code: 'ok', listed: true, count: 14 }, models: { ids: ['a', 'b'] }, latest: null, ...over });
 
 test('a healthy gateway says how many models it has and when that was read', () => {
-  assert.deepEqual(plain(S.gatewayState(gateway(), 0, relTime)), { tone: 'ok', label: 'Connected', desc: '14 models · checked 2 min ago' });
+  assert.deepEqual(plain(S.gatewayState(gateway(), 0, relTime)), { tone: 'ok', label: 'Connected', desc: '14 models · checked 2 min ago', brief: '14 models · 2 min ago' });
   assert.equal(S.gatewayState(gateway({ check: { at: 1, ok: true, listed: false, count: 0 } }), 0, relTime).desc, 'Checked 2 min ago');
 });
 
@@ -21,7 +21,7 @@ test('a gateway’s headline is whichever single thing matters most', () => {
   assert.equal(S.gatewayState(gateway({ settling: true, check: failing }), 0, relTime).label, 'Connecting…');
   assert.equal(S.gatewayState(gateway({ check: failing }), 0, relTime).label, 'Key rejected');
   assert.equal(S.gatewayState(gateway({ key: { state: 'missing', credentialId: 'x' } }), 0, relTime).label, 'Key missing');
-  assert.equal(S.gatewayState(gateway({ agents: [{ state: 'drift' }] }), 0, relTime).label, 'An agent needs a look');
+  assert.equal(S.gatewayState(gateway({ agents: [{ id: 'claude', state: 'drift' }] }), 0, relTime).label, 'Claude: changed');
   assert.equal(S.gatewayState(gateway({ agents: [{ state: 'drift' }, { state: 'error' }] }), 0, relTime).label, '2 agents need a look');
   assert.equal(S.gatewayState(gateway({ check: null }), 0, relTime).label, 'Not checked');
 });
@@ -76,4 +76,53 @@ test('a conflict says what it does, and where', () => {
 
 test('instance names match what T3 Code will show', () => {
   assert.deepEqual(plain(S.instanceNames(['claude', 'opencode'], 'Proxy')), ['Claude · Proxy', 'OpenCode · Proxy']);
+});
+
+test('a table cell says the state in a word or two', () => {
+  assert.equal(S.cellState({ state: 'ready', models: 19 }).label, '19 models');
+  assert.equal(S.cellState({ state: 'key-stale' }).label, 'Old key');
+  assert.equal(S.cellState({ state: 'error' }).tone, 'danger');
+  assert.equal(S.cellState({ state: 'starting' }).busy, true);
+  assert.equal(S.cellState({ state: 'anything else' }).label, 'Unknown');
+});
+
+test('models land under the company that makes them, in a steady order', () => {
+  const groups = plain(S.modelGroups(['muse-spark-1.3', 'gpt-6-sol', 'mystery-1', 'gemini-3-flash', 'claude-opus-5-5', 'codex-auto-review']));
+  assert.deepEqual(groups.map(group => group.name), ['Anthropic', 'OpenAI', 'Google', 'Meta', 'Other']);
+  assert.deepEqual(groups[1].models, ['gpt-6-sol', 'codex-auto-review']);
+});
+
+test('limits read as a count, or as what to do', () => {
+  const account = driver => ({ driver });
+  assert.equal(S.limitsState({ state: 'on', accounts: [account('claudeAgent'), account('codex'), account('codex')] }).label, '3 accounts');
+  assert.equal(S.limitsState({ state: 'on', accounts: [account('claudeAgent'), account('codex'), account('codex')] }).desc, '1 Claude · 2 Codex');
+  assert.match(S.limitsState({ state: 'on', accounts: [] }).desc, /no Claude or Codex accounts/);
+  assert.equal(S.limitsState({ state: 'reading', accounts: [] }).busy, true);
+  assert.equal(S.limitsState({ state: 'error', accounts: [], detail: 'Refused' }).desc, 'Refused');
+  assert.equal(S.limitsState({ state: 'unknown', accounts: [] }).label, 'Limits unknown');
+});
+
+test('search finds a gateway by what someone remembers about it', () => {
+  const row = { name: 'Team', host: 'llm.example.net', url: 'https://llm.example.net', preset: 'nope', models: { ids: ['gemini-3-flash'] } };
+  for (const query of ['', 'team', 'LLM.EX', 'gemini']) assert.equal(S.matches(row, query), true, query);
+  assert.equal(S.matches(row, 'absent'), false);
+});
+
+test('a gateway’s trouble is named, in the cells’ words', () => {
+  const agents = states => states.map((state, index) => ({ id: ['claude', 'codex', 'opencode'][index], state }));
+  assert.equal(S.gatewayState(gateway({ agents: agents(['key-stale']) }), 0, relTime).label, 'Claude: old key');
+  assert.equal(S.gatewayState(gateway({ agents: agents(['key-stale', 'key-stale']) }), 0, relTime).label, 'Old key · 2 agents');
+  assert.equal(S.gatewayState(gateway({ agents: agents(['key-stale', 'drift']) }), 0, relTime).label, '2 agents need a look');
+});
+
+test('a rejected key offers a new key, not another test', () => {
+  const rejected = plain(S.attention([gateway({ check: { at: 1, ok: false, code: 'unauthorized', message: 'No.' } })]));
+  assert.equal(rejected[0].action.name, 'replace-key');
+  const down = plain(S.attention([gateway({ check: { at: 1, ok: false, code: 'refused', message: 'No.' } })]));
+  assert.equal(down[0].action.name, 'test');
+});
+
+test('what’s left on an account reads like Usage → Limits', () => {
+  assert.equal(S.windowsLine({ windows: [{ label: 'Session', left: 75 }, { label: 'Weekly', left: 60 }] }), 'Session 75% left · Weekly 60% left');
+  assert.equal(S.windowsLine({}), '');
 });

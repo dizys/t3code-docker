@@ -32,7 +32,7 @@ passes.
 
 ## An agent on a gateway
 
-Open the gateway's card under **Setup → Gateways**. It says what's wrong and
+Open the gateway under **Setup → Gateways**. It says what's wrong and
 offers the fix. If a thread fails with an authentication error after a key was
 replaced, send the message again: the new key applies to the next turn. See
 [Gateways](gateways.md#when-something-goes-wrong).

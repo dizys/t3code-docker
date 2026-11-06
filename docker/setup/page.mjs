@@ -198,7 +198,7 @@ export function renderConsole({ assets, nonce, mount, embed = false, host, layou
   const tabs = ROUTES.TABS.map((tab) =>
     `<a class="tc-tab" href="#${tab.route}" data-nav="${tab.route}"><span class="tc-tab-ico"><i data-icon="${tab.icon}"></i><span class="tc-tab-badge" id="tab-${tab.route}" hidden></span></span>${escapeHtml(tab.title)}</a>`).join("");
   const pages = [...ROUTES.PAGES, ...(tab ? [] : [ROUTES.page("more")])].map((page) =>
-    `<section class="tc-page${["instructions", "mcp"].includes(page.route) ? " tc-page--wide" : ""}" id="page-${page.route}" data-route="${page.route}" aria-label="${escapeHtml(page.title)}" hidden>${skeleton(page.route === "more" ? 2 : 3)}</section>`).join("\n");
+    `<section class="tc-page${["instructions", "mcp", "gateways"].includes(page.route) ? " tc-page--wide" : ""}" id="page-${page.route}" data-route="${page.route}" aria-label="${escapeHtml(page.title)}" hidden>${skeleton(page.route === "more" ? 2 : 3)}</section>`).join("\n");
   const foot = embed
     ? `<a class="tc-nav-item" id="open-tab" href="${escapeHtml(mount)}/" target="_blank" rel="noopener" data-open-tab><i data-icon="external-link"></i>Open in a new tab</a>`
     : `<a class="tc-nav-item" id="open-t3" href="/" target="_blank" rel="noopener" data-open-t3><i data-icon="external-link"></i>Open T3 Code</a>

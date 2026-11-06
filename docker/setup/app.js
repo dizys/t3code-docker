@@ -1927,7 +1927,7 @@
     overview: overviewPage, access: accessPage, agents: agentsPage, instructions: instructionsPage,
     mcp: () => html`${mcpUI.phoneHead()}${pageHead('mcp', { sub: 'Servers your agents can start or connect to. Define one once, then add it to the agents you choose.' })}${mcpUI.content()}`,
     vault: () => html`${pageHead('vault')}${credentialsUI.content()}`,
-    gateways: () => html`${pageHead('gateways', { actions: gatewaysUI.headActions() })}${gatewaysUI.content()}`,
+    gateways: () => html`${gatewaysUI.phoneHead()}${pageHead('gateways')}${gatewaysUI.content()}`,
     toolchains: toolchainsPage, sourcecontrol: sourceControlPage, ports: portsPage,
     updates: updatesPage, storage: storagePage, server: serverPage, more: morePage,
   };
@@ -4261,7 +4261,7 @@
 
   // ------------------------------------------------------------ shortcuts --
   Kit.bind('mod+k', openPalette);
-  Kit.bind('/', () => state.route === 'files' ? filesUI.focusSearch() : state.route === 'mcp' ? mcpUI.focusSearch() : state.route === 'vault' ? credentialsUI.focusSearch() : state.route === 'instructions' && state.contextTab === 'skills' ? skillsUI.focusSearch() : openPalette());
+  Kit.bind('/', () => state.route === 'files' ? filesUI.focusSearch() : state.route === 'mcp' ? mcpUI.focusSearch() : state.route === 'gateways' ? gatewaysUI.focusSearch() : state.route === 'vault' ? credentialsUI.focusSearch() : state.route === 'instructions' && state.contextTab === 'skills' ? skillsUI.focusSearch() : openPalette());
   for (const page of T3Routes.PAGES) {
     if (page.key) Kit.bind('g ' + page.key, () => { keyboardNav = true; go(page.route); });
   }

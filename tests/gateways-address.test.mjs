@@ -75,3 +75,10 @@ test('a gateway nobody named gets a readable name', () => {
   assert.equal(suggestName('https://ai.example.com/v1'), 'Example');
   assert.equal(suggestName('http://cliproxy:8317'), 'Cliproxy');
 });
+
+test('a pasted admin address loses its admin path, so a test can’t count as a failed sign-in', () => {
+  for (const [input, url] of [['https://gw.example.com/v0/management', 'https://gw.example.com'], ['https://gw.example.com/v0/management/config', 'https://gw.example.com'], ['https://gw.example.com/v8/management/usage', 'https://gw.example.com'], ['https://gw.example.com/management.html', 'https://gw.example.com']]) {
+    const parsed = parseAddress(input);
+    assert.equal(parsed.url, url, input); assert.match(parsed.notes[0], /^Removed /);
+  }
+});

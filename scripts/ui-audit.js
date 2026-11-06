@@ -358,7 +358,8 @@ const audit = () => {
     }],
     ...ROUTES.filter(route => route !== 'mcp' && (!TAB || route !== 'more')).map((route) => [route, async (page) => {
       await page.evaluate((r) => { location.hash = r; }, route);
-      await page.waitForSelector(`#page-${route}:not([hidden]) .tc-section, #page-${route}:not([hidden]) .tc-group`, { timeout: 60000 });
+      // Visible: a page can hold a desktop table and a phone list, and only one of them shows.
+      await page.locator(`#page-${route}:not([hidden]) :is(.tc-section, .tc-group)`).locator('visible=true').first().waitFor({ timeout: 60000 });
     }]),
     ["rename device", async (page) => {
       if (!DEVICE_ID) return;

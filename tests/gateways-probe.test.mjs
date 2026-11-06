@@ -31,6 +31,20 @@ test('a working gateway reports its models and every protocol it has', async t =
   assert.match(result.notes[0], /Removed \/v1/);
 });
 
+test('a gateway that says what it is is recognized, with no key sent to ask', async t => {
+  const server = await serve(gateway({ '/': (req, res) => json(res, 200, { message: 'CLI Proxy API Server', endpoints: [] }) })); within(t, server);
+  const result = await probeGateway({ url: server.url, key: 'sk-test' });
+  assert.equal(result.product, 'cliproxyapi');
+  const root = server.requests.find(request => request.url === '/');
+  assert.equal(root.headers.authorization, undefined); assert.equal(root.headers['x-api-key'], undefined);
+  assert.ok(!server.requests.some(request => request.url.startsWith('/v0/')), 'Management routes count a keyless request as a failed sign-in');
+});
+
+test('a gateway that says nothing stays unknown', async t => {
+  const server = await serve(gateway()); within(t, server);
+  assert.equal((await probeGateway({ url: server.url, key: 'sk-test' })).product, null);
+});
+
 test('real names come first, from a gateway that answers by client', async t => {
   // CLIProxyAPI: the same models, with `claude-` names for anything Anthropic.
   const server = await serve(gateway({ '/v1/models': (req, res) => json(res, 200, { data: req.headers['anthropic-version']

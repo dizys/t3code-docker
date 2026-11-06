@@ -16,16 +16,16 @@ export const GATEWAY_INSTANCE_ENV = 'T3_GATEWAY_INSTANCE';
 export const NO_KEY = 'no-key-needed';
 
 export const PROTOCOLS = Object.freeze({
-  messages: Object.freeze({ id: 'messages', name: 'Anthropic Messages', path: '/v1/messages' }),
-  responses: Object.freeze({ id: 'responses', name: 'OpenAI Responses', path: '/v1/responses' }),
-  chat: Object.freeze({ id: 'chat', name: 'OpenAI Chat Completions', path: '/v1/chat/completions' }),
+  messages: Object.freeze({ id: 'messages', name: 'Anthropic Messages', short: 'Messages API', path: '/v1/messages' }),
+  responses: Object.freeze({ id: 'responses', name: 'OpenAI Responses', short: 'Responses API', path: '/v1/responses' }),
+  chat: Object.freeze({ id: 'chat', name: 'OpenAI Chat Completions', short: 'Chat API', path: '/v1/chat/completions' }),
 });
 
 export const PRESETS = Object.freeze([
-  Object.freeze({ id: 'cliproxyapi', name: 'CLIProxyAPI', blurb: 'Self-hosted proxy', url: 'http://host.docker.internal:8317', keyHint: 'A value from access.api-keys in its config.', docs: 'https://help.router-for.me/' }),
-  Object.freeze({ id: 'litellm', name: 'LiteLLM', blurb: 'Self-hosted proxy', url: 'http://host.docker.internal:4000', keyHint: 'A virtual key, or the master key.', docs: 'https://docs.litellm.ai/docs/simple_proxy' }),
-  Object.freeze({ id: 'openrouter', name: 'OpenRouter', blurb: 'Hosted service', url: 'https://openrouter.ai/api', keyHint: 'Starts with sk-or-.', docs: 'https://openrouter.ai/settings/keys' }),
-  Object.freeze({ id: 'custom', name: 'Other', blurb: 'Any compatible API', url: '', keyHint: 'Leave this empty if your gateway doesn’t ask for one.', docs: null }),
+  Object.freeze({ id: 'cliproxyapi', name: 'CLIProxyAPI', blurb: 'Self-hosted', url: 'http://host.docker.internal:8317', keyHint: 'A value from access.api-keys in its config.', docs: 'https://help.router-for.me/', mark: 'cliproxyapi', hub: true }),
+  Object.freeze({ id: 'litellm', name: 'LiteLLM', blurb: 'Self-hosted', url: 'http://host.docker.internal:4000', keyHint: 'A virtual key, or the master key.', docs: 'https://docs.litellm.ai/docs/simple_proxy', mark: 'litellm' }),
+  Object.freeze({ id: 'openrouter', name: 'OpenRouter', blurb: 'Hosted', url: 'https://openrouter.ai/api', keyHint: 'Starts with sk-or-.', docs: 'https://openrouter.ai/settings/keys', mark: 'openrouter' }),
+  Object.freeze({ id: 'custom', name: 'Other', blurb: 'Any API', url: '', keyHint: 'Leave this empty if your gateway doesn’t ask for one.', docs: null }),
 ]);
 export const presetOf = id => PRESETS.find(preset => preset.id === id) ?? null;
 

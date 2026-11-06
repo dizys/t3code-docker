@@ -24,8 +24,9 @@ with coding agents and language toolchains installed on first start.</strong></p
 T3 Code is a control surface for coding agents. The server runs the agents, git
 and your terminals; the desktop, web and phone apps connect to it. This image
 packages that server with the agent CLIs, language toolchains, a headless
-browser, and a **setup page** for pairing devices, signing agents in and
-keeping everything up to date, all without a shell in the container.
+browser, and a **setup page** for pairing devices, signing agents in,
+connecting them to your own AI gateway and keeping everything up to date,
+all without a shell in the container.
 
 > [!NOTE]
 > T3 Code is alpha software and changes quickly, and so does this image.
@@ -44,8 +45,10 @@ docker run -d --name t3code --restart unless-stopped \
 
 1. **Get the setup key:** `docker logs t3code 2>&1 | grep -A1 T3_SETUP_KEY`
 2. **Open <http://localhost:3774>** and enter it. **Overview** walks you through
-   the rest: set a public URL, pair a device with a QR code, and sign agents in.
-3. **In T3 Code**, turn the agents on under **Settings → Providers**.
+   the rest: set a public URL, pair a device with a QR code, and sign agents in
+   or [connect an AI gateway](#using-an-ai-gateway).
+3. **In T3 Code**, turn agents with direct sign-ins on under **Settings → Providers**.
+   Gateway entries are added for you; choose one in a thread's model picker.
 
 On first start, the agents and toolchains install onto the `t3-home` volume in
 the background. That takes a few minutes, and the setup page shows the
@@ -112,7 +115,10 @@ and to GHCR as `ghcr.io/dizys/t3code-docker`, each for `linux/amd64` and
 - **No shell needed.** [Manage files](docs/files.md), pair devices, sign agents in, and install or update
   everything from the setup page, which also opens from T3 Code's Settings.
 - **Every T3 Code agent.** Claude Code, Codex and OpenCode install on first
-  start; Grok, Cursor, Muse Code and Antigravity take one click.
+  start; Grok, Cursor, Muse Code, Pi and Antigravity take one click.
+- **Your own AI gateway.** Connect CLIProxyAPI, LiteLLM, OpenRouter or a
+  compatible endpoint to Claude Code, Codex and OpenCode from
+  [Setup → Gateways](docs/gateways.md), then choose it per thread.
 - **Toolchains that survive upgrades.** Go, Rust, Bun, Deno and uv, plus about
   a thousand more tools through mise, live on the volume at exact versions.
 - **A browser for the agents.** Headless Chromium with Playwright and Chrome
@@ -142,6 +148,27 @@ and to GHCR as `ghcr.io/dizys/t3code-docker`, each for `linux/amd64` and
 "one click" installs from the setup page when you ask. `T3_PREINSTALL` changes
 what the first start installs. Neither image contains credentials or model
 access: you bring your own subscriptions or API keys.
+
+## Using an AI gateway
+
+In **Setup → Gateways**, choose **Add gateway…**, pick its type, and enter its
+address and API key. Setup tests the connection from inside the container,
+discovers its models, and shows which agents its APIs support. Choose which
+of **Claude Code, Codex and OpenCode** to connect, then add the gateway.
+
+Each connected agent gets a labelled entry in T3 Code's model picker, such as
+**Claude · CLIProxy**. Choose it per thread. Your direct sign-ins stay available,
+and both use the same skills, MCP servers and instructions.
+
+For a gateway on the Docker host, use `host.docker.internal` as its hostname.
+The repository's Compose file maps it for you; with `docker run`, add
+`--add-host host.docker.internal:host-gateway`. The gateway must also listen on
+an address the container can reach.
+
+CLIProxyAPI can also show pooled Claude and Codex account quotas under
+**Usage → Limits** when you add its separate management key. The
+[Gateways guide](docs/gateways.md) covers model selection, keys, networking
+and which changes stop an active turn.
 
 ## Reaching it from your phone
 
@@ -175,7 +202,7 @@ instead. Details: [Reaching the server from a phone](docs/remote-access.md).
 | [Giving agents a browser](docs/agent-browser.md) | T3's server browser and the browser MCP servers |
 | [Context management](docs/context-management.md) | Global `AGENTS.md` and the shared skill library |
 | [MCP servers](docs/mcp-servers.md) | Define once, compare and configure native agent copies |
-| [Gateways](docs/gateways.md) | Route Claude Code, Codex and OpenCode through your own AI gateway |
+| [Gateways](docs/gateways.md) | Connect Claude Code, Codex and OpenCode to a gateway, choose models and show CLIProxyAPI account limits |
 | [Files](docs/files.md) | Browse, edit, upload, ZIP, Trash and project cleanup |
 | [Storage management](docs/storage.md) | Disk usage, cache cleanup, version retention |
 | [Configuration](docs/configuration.md) | Every environment variable, volumes, building |

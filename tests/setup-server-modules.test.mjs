@@ -378,6 +378,23 @@ test("invalidating a changed agent track forgets persisted targets and rejects o
   assert.equal(saved.versions['harness:opencode'].version, '1.19.5');
 });
 
+test("failures are capped and entries older than the TTL are dropped on save", async () => {
+  const answers = {};
+  for (let i = 0; i < 510; i++) answers[`package:tool${i}`] = new Error("offline");
+  const world = latestWorld({ answers });
+  await world.cache.refresh();
+  const errors = world.cache.errors();
+  assert.equal(Object.keys(errors).length, 500);
+  assert.equal(errors["package:tool0"], undefined, "the oldest failures go first");
+  assert.equal(errors["package:tool509"], "offline");
+  assert.equal(Object.keys(JSON.parse(world.written).failures).length, 500);
+  world.clock += 2000;
+  answers["package:fresh"] = "1";
+  await world.cache.refreshOne("package:fresh");
+  assert.deepEqual(world.cache.errors(), {});
+  assert.deepEqual(JSON.parse(world.written).failures, {});
+});
+
 test("failure-only retries do not recheck successful rows past their TTL", async () => {
   const answers = { "harness:claude": new Error("offline"), "toolchain:go": "1" };
   const world = latestWorld({ answers, ttlMs: 1000 });

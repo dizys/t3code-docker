@@ -43,6 +43,7 @@ import { createGatewayService, gatewayFailure, GATEWAY_ROUTES } from "./gateways
 import { createGatewayProcesses } from "./gateways/processes.mjs";
 import { createGatewayT3 } from "./gateways/t3.mjs";
 import { createGatewayVault } from "./gateways/vault.mjs";
+import { createSessionStore, TERMINAL_STATES } from "./signin-sessions.mjs";
 import { clientAddress } from "./client-address.mjs";
 import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
 import { createCredentialStore, credentialFailure, CredentialError, credentialDirectory } from "./credentials.mjs";
@@ -1248,7 +1249,7 @@ const startScmDeviceSignin = async (id) => {
   };
   child.stdout.on("data", absorb);
   child.stderr.on("data", absorb);
-  child.on("error", (error) => { session.state = "failed"; session.error = String(error.message); });
+  child.on("error", (error) => { sessionStore.settle(session, "failed", String(error.message)); });
   child.on("close", async (code) => {
     if (TERMINAL_STATES.has(session.state)) {
       forgetSignInState(id);
@@ -1258,8 +1259,7 @@ const startScmDeviceSignin = async (id) => {
     if (code !== 0) {
       forgetSignInState(id);
       void refreshSourceControl().catch(() => {});
-      session.state = "failed";
-      session.error = session.output.trim().split("\n").slice(-3).join(" ").slice(0, 300) || `exited with code ${code}`;
+      sessionStore.settle(session, "failed", session.output.trim().split("\n").slice(-3).join(" ").slice(0, 300) || `exited with code ${code}`);
       return;
     }
     // Approved. What comes after (gh as git's credential helper) runs before
@@ -1270,13 +1270,13 @@ const startScmDeviceSignin = async (id) => {
     session.state = "done";
     session.warning = finished.warning ?? null;
     recordEvent("signin.ok", `Signed in ${plan.name}`, finished.sourceControl?.auth?.host ?? plan.host ?? null);
+    sessionStore.settle(session);
   });
   sessions.set(sessionId, session);
   setTimeout(() => {
     if (!TERMINAL_STATES.has(session.state)) {
       try { child.kill(); } catch {}
-      session.state = "failed";
-      session.error = "The code expired before it was approved.";
+      sessionStore.settle(session, "failed", "The code expired before it was approved.");
     }
   }, SESSION_TTL_MS).unref?.();
   return session;
@@ -1332,7 +1332,7 @@ const startConnectLink = (mode = "managed") => {
   };
   child.stdout.on("data", absorb);
   child.stderr.on("data", absorb);
-  child.on("error", (error) => { session.state = "failed"; session.error = String(error.message); });
+  child.on("error", (error) => { sessionStore.settle(session, "failed", String(error.message)); });
   child.on("close", (code) => {
     forgetConnect();
     if (TERMINAL_STATES.has(session.state)) return;
@@ -1340,17 +1340,16 @@ const startConnectLink = (mode = "managed") => {
       session.state = "done";
       connectLinkedAt = Date.now();
       recordEvent("connect.linked", "Signed in to T3 Connect", session.identity);
+      sessionStore.settle(session);
       return;
     }
-    session.state = "failed";
-    session.error = session.output.trim().split("\n").slice(-3).join(" ").slice(0, 300) || `exited with code ${code}`;
+    sessionStore.settle(session, "failed", session.output.trim().split("\n").slice(-3).join(" ").slice(0, 300) || `exited with code ${code}`);
   });
   sessions.set(id, session);
   setTimeout(() => {
     if (!TERMINAL_STATES.has(session.state)) {
       try { child.kill(); } catch {}
-      session.state = "failed";
-      session.error = "Timed out waiting for the approval.";
+      sessionStore.settle(session, "failed", "Timed out waiting for the approval.");
     }
   }, SESSION_TTL_MS).unref?.();
   return session;
@@ -1467,10 +1466,10 @@ const findUrl = (raw, stripped) => {
 };
 const findCode = (text) => (text.match(/\b[A-Z0-9]{4,6}-[A-Z0-9]{4,6}\b/) ?? [null])[0];
 
-const sessions = new Map();
+const sessionStore = createSessionStore();
+const { sessions } = sessionStore;
 const SESSION_TTL_MS = 15 * 60 * 1000;
 const SUBMIT_TTL_MS = 90 * 1000;
-const TERMINAL_STATES = new Set(["done", "failed", "cancelled"]);
 
 const shellQuote = (value) =>
   /^[A-Za-z0-9_@%+=:,./-]+$/.test(String(value ?? ""))
@@ -1528,15 +1527,14 @@ const startSignin = async (agentId) => {
     // ever. Take the verdict from the output instead. The message itself is a
     // half-redrawn TUI frame, so say something useful rather than quoting it.
     if (session.state === "submitted" && /OAuth error|Press Enter to retry/i.test(session.output)) {
-      session.state = "failed";
-      session.error = "That code was not accepted. Copy the whole value from the "
-        + "address bar, including everything after the #, and try again.";
+      sessionStore.settle(session, "failed", "That code was not accepted. Copy the whole value from the "
+        + "address bar, including everything after the #, and try again.");
       try { child.kill(); } catch {}
     }
   };
   child.stdout.on("data", absorb);
   child.stderr.on("data", absorb);
-  child.on("error", (err) => { session.state = "failed"; session.error = String(err.message); });
+  child.on("error", (err) => { sessionStore.settle(session, "failed", String(err.message)); });
   child.on("close", (code) => {
     // Either way the CLI may have written credentials, so re-probe next time.
     forgetSignInState(agentId);
@@ -1551,14 +1549,14 @@ const startSignin = async (agentId) => {
       session.error = session.output.trim().split("\n").slice(-3).join(" ").slice(0, 300)
         || `exited with code ${code}`;
     }
+    sessionStore.settle(session);
   });
 
   sessions.set(id, session);
   setTimeout(() => {
     if (sessions.get(id)?.state?.startsWith("awaiting")) {
       try { session.child.kill(); } catch {}
-      session.state = "failed";
-      session.error = "Timed out waiting for the browser step.";
+      sessionStore.settle(session, "failed", "Timed out waiting for the browser step.");
     }
   }, SESSION_TTL_MS).unref?.();
   // Waiting for the process to exit is the wrong finish line. These CLIs are
@@ -1585,18 +1583,18 @@ const startSignin = async (agentId) => {
     if (!live || TERMINAL_STATES.has(live.state)) return;
     if (wasSignedIn !== true && (await probeManagedAuth()) === true) {
       try { live.child.kill(); } catch {}
-      live.state = "done";
       recordEvent("signin.ok", `Signed in ${agent.name}`);
       forgetSignInState(agentId);
+      sessionStore.settle(live, "done");
       return;
     }
     if (live.state !== "submitted") return;
     if (Date.now() - (live.submittedAt ?? Date.now()) < SUBMIT_TTL_MS) return;
     try { live.child.kill(); } catch {}
-    live.state = "failed";
-    live.error = "The CLI never reported being signed in after the code was sent.";
+    sessionStore.settle(live, "failed", "The CLI never reported being signed in after the code was sent.");
   }, 4000);
   watchSession.unref?.();
+  session.watch = watchSession;
   child.on("close", () => clearInterval(watchSession));
   return session;
 };
@@ -1620,6 +1618,7 @@ const startAntigravitySignin = async () => {
     session.state = state;
     session.error = error;
     session.flow?.close();
+    sessionStore.settle(session);
   };
   try {
     session.flow = await antigravity.signIn((state) => {
@@ -3200,6 +3199,7 @@ const server = createServer(async (req, res) => {
         session.state = "cancelled";
         try { session.child.kill(); } catch {}
       }
+      sessionStore.settle(session);
       return sendJson(res, 200, { ok: true });
     }
 

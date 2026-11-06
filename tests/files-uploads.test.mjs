@@ -15,6 +15,8 @@ test('uploads resume from persisted offsets and publish only complete files',asy
   await assert.rejects(recovered.finish({id}),{code:'changed'});await recovered.chunk({id,offset:3},Buffer.from('lo'));
   const finish=await recovered.finish({id}),repeated=await recovered.finish({id});assert.deepEqual(repeated,finish);assert.equal(await fs.readFile(finish.path,'utf8'),'hello');assert.equal((await fs.readdir(path.dirname(finish.path))).some(name=>name.startsWith('.t3-upload-')),false);
   const state=await fs.stat(path.join(f.policy.stateDir,'files/uploads/'+id+'.json'));assert.equal(state.mode&0o777,0o600);
+  // The finished upload is complete on disk; drop this instance's stale handle too.
+  await f.uploads.cancel({ids:[id]});
 });
 
 test('upload replacements retain previous data and stale conflicts never overwrite newer contents',async t=>{
@@ -38,6 +40,7 @@ test('space, path, chunk and parent identity checks fail before publishing',asyn
   for(const name of ['../outside','/root/file','a//b','a/../b'])await assert.rejects(f.uploads.start({dest:f.workspace,items:[item(name)]}),{code:'invalid'});
   const result=await f.uploads.start({dest:f.workspace,items:[item('file.txt',CHUNK_BYTES+1)]}),id=result.uploads[0].id;await assert.rejects(f.uploads.chunk({id,offset:0},Buffer.alloc(CHUNK_BYTES+1)),{code:'too-large'});
   await assert.rejects(f.uploads.chunk({id,offset:null},Buffer.alloc(1)),{code:'invalid'});
+  await f.uploads.cancel({ids:[id]});
   const linked=path.join(f.workspace,'link');await fs.symlink(f.home,linked);await assert.rejects(f.uploads.start({dest:f.workspace,items:[item('link/file')]}),{code:'locked'});
 });
 
@@ -47,4 +50,20 @@ test('empty directories, restored transfer facts and fresh replacement revisions
   await fs.writeFile(path.join(f.workspace,'later'),'outside');await assert.rejects(f.uploads.finish({id,onConflict:'replace'}),{code:'stale'});assert.equal(await fs.readFile(path.join(f.workspace,'later'),'utf8'),'outside');
   await f.uploads.finish({id,onConflict:'keep-both'});jobs=await f.uploads.jobs();assert.equal(jobs[0].state,'done');assert.match(jobs[0].result.path,/later \(2\)$/);
   const recovered=createUploads({policy:f.policy,guard:f.guard,trash:f.trash});assert.equal((await recovered.jobs())[0].result.path,jobs[0].result.path);
+});
+
+test('concurrent uploads across instances share one reserve',async t=>{
+  const f=await filesFixture(t),free=1024**3+10*1024*1024,statfs=async()=>({bavail:free,bsize:1});
+  const a=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs}),b=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs});
+  await b.jobs();
+  const first=await a.start({dest:f.workspace,items:[item('a.bin',8*1024*1024)]}),id=first.uploads[0].id;
+  // b warmed its view of the staging dir before a's upload landed, so its own
+  // rows see nothing. The shared reserve still accounts for the 8 MiB already
+  // promised, so this start must lose.
+  await assert.rejects(b.start({dest:f.workspace,items:[item('b.bin',8*1024*1024)]}),{code:'no-space'});
+  await a.chunk({id,offset:0},Buffer.alloc(8*1024*1024));
+  const done=await a.finish({id});assert.ok(done.path);
+  // Finishing releases the reservation, so the same upload fits afterwards.
+  const c=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs});
+  const second=await c.start({dest:f.workspace,items:[item('b.bin',8*1024*1024)]});await c.cancel({ids:second.uploads.map(row=>row.id)});
 });

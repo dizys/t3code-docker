@@ -80,38 +80,52 @@ export async function restoreDatabase(paths, id) {
     const handle = await fs.open(dir, "r");
     try { await handle.sync(); } finally { await handle.close(); }
   };
-  // Drop stale sidecars first: a replaced main must never pair with the
-  // trial's WAL. Mains stay until their replacement is staged, so a crash
-  // keeps the old data instead of leaving neither copy.
-  for (const file of await databaseFiles(userdata)) {
-    if (!isMain(file)) await fs.rm(path.join(userdata, file), { force: true });
-  }
+  const parents = new Set([userdata]);
+  const changed = (file) => {
+    for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+      parents.add(dir);
+      if (dir === userdata) break;
+    }
+  };
   const staged = [];
   try {
+    // Finish every copy before touching live databases or their WALs. A
+    // missing backup or a full disk must leave committed userdata intact.
     for (const file of backup.files) {
       const target = path.join(userdata, file);
       await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
       const tmp = `${target}.restore`;
+      staged.push([tmp, target]);
       await fs.rm(tmp, { force: true });
       await fs.copyFile(path.join(paths.backup, "files", file), tmp);
       await syncFile(tmp);
-      staged.push([tmp, target]);
+      changed(target);
+    }
+    // A replaced main must not pair with the trial's WAL. Leave sidecars of
+    // trial-only databases alone until every wanted replacement is durable.
+    for (const file of await databaseFiles(userdata)) {
+      if (!isMain(file) && wanted.has(file.replace(/-(?:wal|shm|journal)$/, ""))) {
+        const target = path.join(userdata, file);
+        await fs.rm(target, { force: true });
+        changed(target);
+      }
     }
     for (const [tmp, target] of staged) await fs.rename(tmp, target);
-    const parents = new Set(staged.map(([, target]) => path.dirname(target)));
     for (const dir of parents) await syncDir(dir);
-    await syncDir(userdata);
   } catch (error) {
     for (const [tmp] of staged) await fs.rm(tmp, { force: true }).catch(() => {});
     throw error;
   }
-  // Trial-introduced databases go only after every wanted file is in place.
-  // A crash before this point keeps the old data plus an extra file, never
-  // a missing one.
+  // Remove trial-only files after the replacements are durable. Older
+  // snapshots can explicitly contain WALs, so retain every wanted file.
   for (const file of await databaseFiles(userdata)) {
-    if (isMain(file) ? !wanted.has(file) : true) await fs.rm(path.join(userdata, file), { force: true });
+    if (!wanted.has(file)) {
+      const target = path.join(userdata, file);
+      await fs.rm(target, { force: true });
+      changed(target);
+    }
   }
-  await syncDir(userdata);
+  for (const dir of parents) await syncDir(dir);
 }
 
 export function validateRequest(request) {

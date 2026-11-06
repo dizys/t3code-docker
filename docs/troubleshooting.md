@@ -29,3 +29,10 @@ log says so. Either remove that setting and choose the user with
 **Chromium crashes.** Give it more shared memory with `shm_size: 1gb` (the
 compose file already does) and keep `--no-sandbox`, which `t3-browser-mcp`
 passes.
+
+## An agent on a gateway
+
+Open the gateway's card under **Setup → Gateways**. It says what's wrong and
+offers the fix. If a thread fails with an authentication error after a key was
+replaced, send the message again: the new key applies to the next turn. See
+[Gateways](gateways.md#when-something-goes-wrong).

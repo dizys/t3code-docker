@@ -1,0 +1,139 @@
+// Asks a gateway what it can do, from inside this container, where the agents
+// will reach it from.
+//
+// Nothing here can spend money: the protocol checks post an empty body, which a
+// real route rejects as invalid and a missing one answers with 404. Every
+// failure ends in a sentence naming what to do next, and an upstream's own
+// words are never shown, because an error body can echo the key.
+import { PROTOCOLS } from './catalog.mjs';
+import { parseAddress, withHost } from './address.mjs';
+import { parseModelList } from './models.mjs';
+
+const DOCKER_HOST = 'host.docker.internal';
+const MAX_LIST_BYTES = 8 * 1024 * 1024;
+
+// Gateways answer by client. CLIProxyAPI gives anything naming this header its
+// Anthropic list, where other vendors' models wear `claude-` names so Claude Code
+// keeps them. Only the plain list has real names, and every route takes those.
+const ANTHROPIC = { 'anthropic-version': '2023-06-01' };
+
+const headersFor = key => ({
+  accept: 'application/json',
+  'user-agent': 't3code-docker-setup',
+  ...(key ? { authorization: `Bearer ${key}`, 'x-api-key': key } : {}),
+});
+
+const CERTIFICATE = /CERT|SSL|TLS|SELF_SIGNED|UNABLE_TO_VERIFY/;
+const connectionCode = error => {
+  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return 'timeout';
+  const code = String(error?.cause?.code ?? error?.code ?? '');
+  if (['ENOTFOUND', 'EAI_AGAIN', 'EAI_NODATA'].includes(code)) return 'dns';
+  if (code === 'ECONNREFUSED') return 'refused';
+  if (['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT'].includes(code)) return 'timeout';
+  if (CERTIFICATE.test(code)) return 'tls';
+  return 'unreachable';
+};
+
+/** The sentence, and any one-press fix, for a failed connection. */
+function connectionProblem(code, address) {
+  const { url, host, hostname, loopback } = address, onDockerHost = hostname === DOCKER_HOST;
+  const problems = {
+    dns: onDockerHost
+      ? { message: 'This container can’t find host.docker.internal.', hint: 'Add it to your compose file under extra_hosts, as "host.docker.internal:host-gateway", then recreate the container.' }
+      : { message: `${hostname} can’t be found from this container.`, hint: 'Check the name. A gateway in another Compose project needs a shared network.' },
+    refused: loopback
+      ? { message: `Nothing is answering at ${host} inside this container.`, hint: 'This address means the container itself. If the gateway runs on the Docker host, use host.docker.internal.', fix: { url: withHost(url, DOCKER_HOST), label: `Use ${DOCKER_HOST}` } }
+      : onDockerHost
+        ? { message: `The Docker host isn’t answering at ${host}.`, hint: 'Check that the gateway is running and listening on 0.0.0.0, not only on 127.0.0.1.' }
+        : { message: `Nothing is answering at ${host}.`, hint: 'Check that the gateway is running and that the port is right.' },
+    timeout: { message: `${host} didn’t answer in time.`, hint: 'A firewall may be dropping the connection, or the gateway is busy.' },
+    tls: { message: `The certificate at ${host} isn’t trusted here.`, hint: 'Use a certificate from a public authority, or plain http on a private network.' },
+    unreachable: { message: `${host} couldn’t be reached from this container.`, hint: 'Check the address and your network.' },
+  };
+  return problems[code];
+}
+
+async function readJson(response) {
+  const reader = response.body?.getReader?.();
+  if (!reader) return null;
+  const chunks = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.length;
+      if (bytes > MAX_LIST_BYTES) { await reader.cancel().catch(() => {}); return null; }
+      chunks.push(value);
+    }
+  } catch { return null; }
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return null; }
+}
+
+const discard = response => response.body?.cancel?.().catch(() => {});
+
+/** How a route answered an empty body. Anything but "no such route" means it's there. */
+const routeState = status => {
+  if (status === 401 || status === 403) return 'unauthorized';
+  if ([404, 405, 501].includes(status)) return 'missing';
+  if (status >= 500) return 'unknown';
+  return 'available';
+};
+
+/**
+ * Probe an address. Never throws: a failure is a result.
+ *
+ *   { at, ok, code, message, hint, fix, ms, url, notes, insecure,
+ *     models: { listed, ids }, protocols: { messages, responses, chat } }
+ */
+export async function probeGateway({ url: input, key = '', fetchImpl = globalThis.fetch, timeoutMs = 6000, now = Date.now, signal } = {}) {
+  const at = now(), address = parseAddress(input);
+  if (!address.ok) return { at, ok: false, code: 'invalid', message: address.error, models: { listed: false, ids: [] }, protocols: {} };
+  const { url, notes, insecure } = address, headers = headersFor(key);
+  const finish = (result) => ({ at, url, notes, insecure, ms: Math.max(0, now() - at), models: { listed: false, ids: [] }, protocols: {}, ...result });
+  const request = (path, init = {}) => fetchImpl(url + path, { redirect: 'manual', ...init, headers: { ...headers, ...init.headers },
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
+
+  let list;
+  try { list = await request('/v1/models'); }
+  catch (error) { const code = connectionCode(error); return finish({ ok: false, code, ...connectionProblem(code, address) }); }
+
+  if (list.status >= 300 && list.status < 400) {
+    const location = list.headers?.get?.('location') ?? '';
+    await discard(list);
+    const target = /^https?:\/\//i.test(location) ? parseAddress(location) : null;
+    return finish({ ok: false, code: 'redirect', message: `${address.host} redirects somewhere else.`,
+      ...(target?.ok ? { hint: `It points to ${target.url}.`, fix: { url: target.url, label: 'Use that address' } } : { hint: 'Use the address it redirects to.' }) });
+  }
+
+  const readIds = async response => {
+    const body = response.ok ? await readJson(response) : (await discard(response), null);
+    return body === null ? null : parseModelList(body);
+  };
+  let ids = await readIds(list);
+  // Anthropic's own API refuses a list without its header.
+  if (ids === null && list.status !== 401 && list.status !== 403) ids = await request('/v1/models', { headers: ANTHROPIC }).then(readIds, () => null);
+  const models = { listed: ids !== null, ids: ids ?? [] };
+  const routes = await Promise.all(Object.values(PROTOCOLS).map(async protocol => {
+    try {
+      const response = await request(protocol.path, { method: 'POST', headers: { 'content-type': 'application/json', ...(protocol.id === 'messages' ? ANTHROPIC : {}) }, body: '{}' });
+      await discard(response);
+      return [protocol.id, routeState(response.status)];
+    } catch { return [protocol.id, 'unknown']; }
+  }));
+  const states = Object.fromEntries(routes), values = Object.values(states);
+  const refused = list.status === 401 || list.status === 403 || values.includes('unauthorized');
+  const protocols = Object.fromEntries(routes.map(([id, state]) => [id, state === 'unauthorized' ? 'unknown' : state]));
+  if (refused) {
+    return finish({ ok: false, code: 'unauthorized', status: list.status, protocols, models,
+      message: key ? 'The gateway turned this key down.' : 'This gateway needs a key.',
+      hint: key ? 'Check that it’s a key for this gateway and that it’s still active.' : 'Enter one above.' });
+  }
+  if (!values.includes('available') && !models.listed) {
+    const notJson = list.ok;
+    return finish({ ok: false, code: 'not-gateway', status: list.status, protocols, models,
+      message: notJson ? `${address.host} answered, but not like an AI gateway.` : `${address.host} has no AI API at this address.`,
+      hint: 'Check the address, including any path such as /api.' });
+  }
+  return finish({ ok: true, code: 'ok', status: list.status, protocols, models });
+}

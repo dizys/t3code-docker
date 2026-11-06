@@ -35,7 +35,7 @@ or state folder that a recreate would lose, a disk over 80% full, settings an
 older image left behind), each with the one thing to do; **Updates** shows what
 can update, with **Update all**; and **Recent** what happened lately. On a desktop the
 pages are in a sidebar: Overview and Access, then **Agents** (Agents,
-Instructions & skills), **Tools** ([Files](files.md), Toolchains, Source control, Ports) and
+Instructions & skills, MCP servers, [Gateways](gateways.md), Vault), **Tools** ([Files](files.md), Toolchains, Source control, Ports) and
 **System** (Updates, Storage, Server). On a phone the most used are in a tab
 bar and the rest under **More**, and everything fits a 390 px screen. Each page
 opens with one line on what it's for and a **Learn more** link to its guide.

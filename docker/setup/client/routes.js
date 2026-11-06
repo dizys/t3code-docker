@@ -30,6 +30,9 @@ const T3Routes = (() => {
     { route: 'mcp', title: 'MCP servers', icon: 'plug', key: 'm', group: 'agents',
       summary: 'Servers your agents can start or connect to.', doc: 'mcp-servers.md',
       palette: { meta: 'Setup · shared definitions and provider configuration', terms: ['mcp tools servers'] } },
+    { route: 'gateways', title: 'Gateways', icon: 'waypoints', key: 'w', group: 'agents',
+      summary: 'Route agents through your own AI gateway. Your direct sign-ins stay as they are.', doc: 'gateways.md',
+      palette: { meta: 'Setup · custom endpoints for Claude Code, Codex and OpenCode', terms: ['ai gateway', 'proxy', 'router', 'custom endpoint', 'base url', 'cliproxyapi', 'litellm', 'openrouter'] } },
     { route: 'vault', title: 'Vault', icon: 'key-round', key: 'c', group: 'agents',
       summary: 'Credentials your agents use by name. Agents can add them from chat too. Secrets stay out of chats and skills.', doc: 'vault.md', palette: { meta: 'Setup · credentials agents use by name', terms: ['credentials', 'ssh', 'ssh key', 'api key', 'token', 'password', 'secret', 'database', 'aws', 'kubeconfig'] } },
     { route: 'files', title: 'Files', icon: 'folder', key: 'f', group: 'tools',
@@ -97,7 +100,7 @@ const T3Routes = (() => {
   /** The page an address names, through its aliases; null when it names none. */
   const resolve = (name) => (BY_ROUTE.has(name) ? name : ALIASES[name] || null);
   /** The tab that holds a page on a phone. */
-  const destination = name => resolve(name) || DESTINATIONS.find(item => item.hash === name)?.hash || (typeof name === 'string' && /^vault\/(?:new(?:\/[a-z]+(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?)?|[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(name) && name.split('/').at(-1).length <= 64 ? name : null);
+  const destination = name => resolve(name) || DESTINATIONS.find(item => item.hash === name)?.hash || (typeof name === 'string' && /^gateways\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) && name.length <= 64 ? name : null) || (typeof name === 'string' && /^vault\/(?:new(?:\/[a-z]+(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?)?|[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(name) && name.split('/').at(-1).length <= 64 ? name : null);
   const tabOf = (route) => (TABS.some((tab) => tab.route === route) ? route : 'more');
   /** Pages in their sidebar groups, each group with its label. */
   const grouped = () => GROUPS.map((group) => ({ ...group, pages: PAGES.filter((p) => p.group === group.id) }));

@@ -39,6 +39,10 @@ import { createPiAuth, PI_KEY_PROVIDERS, piProviderName } from "./pi-auth.mjs";
 import { createSkillsService } from "./skills.mjs";
 import { autoInstallable, autoUpdateCandidate } from "./skills/update-review.mjs";
 import { createMcpService } from "./mcp.mjs";
+import { createGatewayService, gatewayFailure, GATEWAY_ROUTES } from "./gateways.mjs";
+import { createGatewayProcesses } from "./gateways/processes.mjs";
+import { createGatewayT3 } from "./gateways/t3.mjs";
+import { createGatewayVault } from "./gateways/vault.mjs";
 import { clientAddress } from "./client-address.mjs";
 import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
 import { createCredentialStore, credentialFailure, CredentialError, credentialDirectory } from "./credentials.mjs";
@@ -578,6 +582,10 @@ const credentials = createCredentialsService({ store: credentialStore, usage: cr
   home: CONTEXT_HOME, baseDir: STATE_DIR, env: process.env, io: await contextFs(),
   installed: async () => credentialInstalled || [...((await harnessCache.snapshotCheap()).harnesses || []).filter(row => row.installed).map(row => row.id), 'native-provider-not-yet-reported'],
 }), environmentId: async () => (await readFile(path.join(STATE_DIR, 'userdata/environment-id'), 'utf8')).trim() });
+const gateways = createGatewayService({ baseDir: STATE_DIR, home: CONTEXT_HOME, env: process.env, io: await contextFs(),
+  t3: createGatewayT3(t3Api), vault: createGatewayVault(credentialStore), processes: createGatewayProcesses(),
+  onEvent: (text) => recordEvent("gateway.saved", text),
+});
 let filesPromise, filesInstance, filesPayloads = 0;
 const loadFiles = () => filesPromise ??= loadStorage().then(storage => createFilesService({
   home: CONTEXT_HOME, workspace: WORKSPACE, stateDir: STATE_DIR, env: process.env, storage, processSnapshot: harnessModule.processSnapshot, t3: t3Api, recordEvent, withStopped: action => filesHold.withStopped(action),
@@ -987,6 +995,8 @@ const status = async () => {
     packages: withLatest("package", packageRows),
     // Local credential attention only. This never scans skills or connects.
     credentials: await attemptTimed('credentials', () => credentials.summary(), 1200, { count: null, attention: [], error: 'Saved credentials could not be read.' }),
+    // What the last health checks found. Asks neither the gateways nor T3.
+    gateways: await attemptTimed('gateways', () => gateways.summary(), 1200, { count: null, attention: [] }),
     // Global instruction metadata; the editor fetches contents on demand.
     // Shared MCP metadata rides alongside; server entries stay server-side.
     context: await attempt("context", async () => {
@@ -2283,7 +2293,7 @@ const cancelLifecycle = (target, rawId) => {
   return { http: 404, body: { ok: false, code: "not-running", error: "Nothing is running or waiting for that row." } };
 };
 
-const ROUTES = [...FILES_ROUTES, ...CREDENTIAL_ROUTES, "/login", "/logout", "/hello", "/status", "/pair", "/revoke", "/devices/rename", "/ports",
+const ROUTES = [...FILES_ROUTES, ...CREDENTIAL_ROUTES, ...GATEWAY_ROUTES, "/login", "/logout", "/hello", "/status", "/pair", "/revoke", "/devices/rename", "/ports",
   "/storage/versions/prune", "/storage/versions", "/storage/refresh", "/storage/clean/preview", "/storage/clean", "/storage/policy", "/storage",
   "/public-url/clear", "/public-url", "/setup-key/reveal", "/setup-key/replace", "/connect/unlink", "/connect/preferences", "/t3/restart",
   "/t3/updates/check", "/t3/update", "/ports/expose", "/ports/unexpose",
@@ -2675,6 +2685,17 @@ const server = createServer(async (req, res) => {
     // `viewer` says how this browser got in, so the page offers Lock only
     // where locking would end something.
     if (route === "/status") return sendJson(res, 200, { ...(await status()), viewer: { via: viewer.via } });
+
+    if (GATEWAY_ROUTES.includes(route)) {
+      if (req.method !== (route === "/gateways" ? "GET" : "POST")) return sendJson(res, 405, { ok: false, error: "Use the supported method for this gateway action." });
+      try {
+        if (route === "/gateways") return sendJson(res, 200, await gateways.handle(route));
+        let input;
+        try { input = JSON.parse(await readBody(req)); }
+        catch (error) { return sendJson(res, error.message === "body too large" ? 413 : 400, { ok: false, code: "invalid", error: "Send gateway details as a JSON object of at most 64 KiB." }); }
+        return sendJson(res, 200, await gateways.handle(route, input));
+      } catch (error) { const failure = gatewayFailure(error); return sendJson(res, failure.status, failure.body); }
+    }
 
     if (route === '/credentials' || route.startsWith('/credentials/')) {
       if (req.method !== (route === '/credentials' ? 'GET' : 'POST')) return sendJson(res, 405, { ok: false, error: 'Use the supported method for this credential action.' });

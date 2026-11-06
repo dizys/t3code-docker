@@ -840,6 +840,21 @@ mcp_editor_works() {
 }
 check "MCP controls refresh immediately and preserve editor revisions and values" mcp_editor_works
 
+gateways_page_works() {
+  [ "$HAS_BROWSER" -eq 1 ] || return 0
+  local audit=/tmp/t3-gateways-audit helper
+  docker exec "$NAME" mkdir -p "$audit/lib" "$audit/fixtures" || return 1
+  docker cp scripts/gateways-ui-audit.js "$NAME:$audit/gateways-ui-audit.js" >/dev/null 2>&1 || return 1
+  for helper in gateways-fixtures console-fixtures skills-fixtures mcp-fixtures files-fixtures; do
+    docker cp "scripts/lib/$helper.cjs" "$NAME:$audit/lib/$helper.cjs" >/dev/null 2>&1 || return 1
+  done
+  docker cp scripts/fixtures/console "$NAME:$audit/fixtures/console" >/dev/null 2>&1 || return 1
+  docker exec -e T3_GATEWAYS_MODULE=/opt/t3-setup/gateways.mjs -e T3_SETUP_MODULE=/opt/t3-setup/mcp.mjs \
+    -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3/node_modules -e T3_GATEWAYS_UI_OUTPUT="$audit/screens" \
+    "$NAME" node "$audit/gateways-ui-audit.js" "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
+}
+check "gateways connect once, keep no key in the page and explain every failure" gateways_page_works
+
 credentials_browser_works() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0
   local audit=/tmp/t3-credentials-audit
@@ -1053,6 +1068,18 @@ native_mcp_controls_work() {
   done
 }
 check "native MCP local and HTTP settings work in Claude, Codex, OpenCode and Cursor" "native_mcp_controls_work >>\"$UI_AUDIT_LOG\" 2>&1"
+
+native_gateways_work() {
+  local id executable
+  docker cp scripts/gateways-native-smoke.mjs "$NAME:/tmp/gateways-native-smoke.mjs" >/dev/null 2>&1 || return 1
+  for id in claude codex opencode; do
+    executable="$(status_json | jq -r --arg id "$id" '.harnesses[] | select(.id == $id) | .executable')"
+    [ -n "$executable" ] && [ "$executable" != null ] || return 1
+    docker exec -u t3 -e T3_SETUP_DIR=file:///opt/t3-setup/ -e T3_NATIVE_PROCESS_MODULE=file:///opt/t3-harness/native-process.mjs \
+      "$NAME" node /tmp/gateways-native-smoke.mjs "$id" "$executable" || return 1
+  done
+}
+check "gateway settings work through the real Claude, Codex and OpenCode" "native_gateways_work >>\"$UI_AUDIT_LOG\" 2>&1"
 
 # T3 learns about each agent through its settings file, as soon as the agent
 # lands. Read it the way T3 does: each points at the agent's launcher, which

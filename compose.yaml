@@ -68,6 +68,9 @@ services:
       # Setup UI. Pairing links are credentials, so it is loopback by default
       # too; publish it only as far as you need to reach it from a browser.
       - "${T3_SETUP_BIND_ADDR:-127.0.0.1}:${T3_SETUP_PORT:-3774}:3774"
+    # Lets agents reach a gateway running on the Docker host, on Linux too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Chromium needs more than the default 64 MB of shared memory.
     shm_size: ${T3_SHM_SIZE:-1gb}
     stop_grace_period: 30s

@@ -8,7 +8,9 @@ const TOKENS = [
   { pattern: /^(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}$/, label: 'a GitHub token', type: 'git', id: 'github', fields: { host: 'github.com', username: 'x-access-token', ...API('https://api.github.com/', 'user') }, env: { token: 'GH_TOKEN' } },
   { pattern: /^glpat-[A-Za-z0-9_.-]{16,}$/, label: 'a GitLab token', type: 'git', id: 'gitlab', fields: { host: 'gitlab.com', username: 'oauth2', ...API('https://gitlab.com/api/v4/', 'user', { authType: 'header', authName: 'PRIVATE-TOKEN' }) }, env: { token: 'GITLAB_TOKEN' } },
   { pattern: /^sk-ant-[A-Za-z0-9_-]{16,}$/, label: 'an Anthropic API key', type: 'token', id: 'anthropic', fields: API('https://api.anthropic.com/v1/', 'models', { authType: 'header', authName: 'x-api-key' }), env: { token: 'ANTHROPIC_API_KEY' } },
-  { pattern: /^sk-[A-Za-z0-9_-]{20,}$/, label: 'an OpenAI API key', type: 'token', id: 'openai', fields: API('https://api.openai.com/v1/', 'models'), env: { token: 'OPENAI_API_KEY' } },
+  // Only OpenAI's own prefixes. A bare `sk-` proves nothing: OpenRouter, DeepSeek and
+  // most AI gateways use it too, and Test would send their key to this address.
+  { pattern: /^sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}$/, label: 'an OpenAI API key', type: 'token', id: 'openai', fields: API('https://api.openai.com/v1/', 'models'), env: { token: 'OPENAI_API_KEY' } },
   { pattern: /^(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}$/, label: 'a Stripe key', type: 'token', id: 'stripe', fields: API('https://api.stripe.com/v1/', 'balance'), env: { token: 'STRIPE_API_KEY' } },
   { pattern: /^xox[abeprs]-[A-Za-z0-9-]{16,}$/, label: 'a Slack token', type: 'token', id: 'slack', fields: API('https://slack.com/api/', 'auth.test'), env: { token: 'SLACK_TOKEN' } },
   { pattern: /^npm_[A-Za-z0-9]{20,}$/, label: 'an npm token', type: 'registry', id: 'npm', fields: API('https://registry.npmjs.org/', '-/whoami'), env: { token: 'NPM_TOKEN' } },

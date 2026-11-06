@@ -361,6 +361,7 @@ function report({ credential, trust, signIn, sshAliases = true }, deleted) {
     lines.push(`Use it with: ${howToUse(credential, sshAliases)[0]}`);
   } else {
     if (credential.delivers?.length) lines.push(`Commands get: ${credential.delivers.join(', ')}`);
+    if (fields.baseUrl) lines.push(`Calls go to: ${fields.baseUrl}`);
     lines.push(`Use it with: t3-vault run ${id} -- <command>`);
     if (fields.baseUrl) lines.push(`Or: t3-vault http ${id} GET ${fields.testPath || '<path>'}`);
   }

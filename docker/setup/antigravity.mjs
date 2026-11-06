@@ -107,7 +107,7 @@ export function createAntigravity({ api, now = Date.now, maxAgeMs = 15_000 }) {
   const setEnabled = async (enabled) => {
     let settings = null;
     try {
-      settings = await api.call("server.getSettings", {});
+      settings = (await api.call("server.getConfig", {}))?.settings ?? null;
     } catch { /* older T3 still accepts the legacy patch below */ }
     // T3 0.1.0 retired the `providers` settings map. Its settings answer has
     // no such key, and enablement is an atomic default-instance mutation.

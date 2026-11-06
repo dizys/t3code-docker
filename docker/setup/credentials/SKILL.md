@@ -22,7 +22,7 @@ t3-vault http NAME GET PATH            # for credentials saved with an API addre
 ## When something is missing
 
 1. Call `request_secret` with `delivery: "file"`. In `reason`, say what it's for, where to get it and the name you'll save it under. For example: "To deploy with wrangler. Create one at dash.cloudflare.com/profile/api-tokens with Workers edit access. I'll save it in your Vault as cloudflare-token, so no agent has to ask again."
-2. Save it with `t3-vault add NAME --secret-file <file>`. This deletes T3's copy of the file. A recognized secret picks its own type, and `t3-vault types` lists the options. Add `--env VAR` for the variable name the tool expects, such as `CLOUDFLARE_API_TOKEN`.
+2. Save it with `t3-vault add NAME --secret-file <file>`. This deletes T3's copy of the file. A recognized secret picks its own type, and `t3-vault types` lists the options. For a key to a gateway or a self-hosted API, add `--base-url URL`, and check the `Calls go to:` line in the result before testing it. Add `--env VAR` for the variable name the tool expects, such as `CLOUDFLARE_API_TOKEN`.
 3. Use it with the command that `add` prints.
 
 If the user only wants it used once, use the file directly and skip saving it.

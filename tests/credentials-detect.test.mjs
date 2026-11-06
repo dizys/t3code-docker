@@ -16,7 +16,9 @@ const tokens = [
   ['a fine-grained GitHub token', 'github_pat_' + FILL, 'git', 'github', 'GH_TOKEN', { host: 'github.com' }],
   ['a GitLab token', 'glpat-' + FILL, 'git', 'gitlab', 'GITLAB_TOKEN', { host: 'gitlab.com', username: 'oauth2', baseUrl: 'https://gitlab.com/api/v4/', authType: 'header', authName: 'PRIVATE-TOKEN', testPath: 'user' }],
   ['an Anthropic key', 'sk-ant-' + FILL, 'token', 'anthropic', 'ANTHROPIC_API_KEY', { baseUrl: 'https://api.anthropic.com/v1/', authType: 'header', authName: 'x-api-key', testPath: 'models' }],
-  ['an OpenAI key', 'sk-' + FILL, 'token', 'openai', 'OPENAI_API_KEY', { baseUrl: 'https://api.openai.com/v1/', authType: 'bearer', testPath: 'models' }],
+  ['an OpenAI project key', 'sk-proj-' + FILL, 'token', 'openai', 'OPENAI_API_KEY', { baseUrl: 'https://api.openai.com/v1/', authType: 'bearer', testPath: 'models' }],
+  ['an OpenAI service account key', 'sk-svcacct-' + FILL, 'token', 'openai', 'OPENAI_API_KEY', { baseUrl: 'https://api.openai.com/v1/' }],
+  ['an OpenAI admin key', 'sk-admin-' + FILL, 'token', 'openai', 'OPENAI_API_KEY', { baseUrl: 'https://api.openai.com/v1/' }],
   ['a Stripe live key', 'sk_' + 'live_' + FILL, 'token', 'stripe', 'STRIPE_API_KEY', { baseUrl: 'https://api.stripe.com/v1/', authType: 'bearer', testPath: 'balance' }],
   ['a Stripe restricted test key', 'rk_' + 'test_' + FILL, 'token', 'stripe', 'STRIPE_API_KEY', { baseUrl: 'https://api.stripe.com/v1/' }],
   ['a Slack bot token', 'xoxb-' + FILL, 'token', 'slack', 'SLACK_TOKEN', { baseUrl: 'https://slack.com/api/', testPath: 'auth.test' }],
@@ -36,6 +38,16 @@ for (const [name, value, type, id, env, fields] of tokens) test('detects ' + nam
   const { fields: suggested, secrets, env: names } = detect(value), saved = normalize({ id, type, fields: suggested, secrets, env: names });
   assert.equal(saved.secrets.token, value);
   assert.equal(saved.env.token, env);
+});
+
+test('a bare sk- key could belong to anyone, so it gets no address', () => {
+  // OpenRouter, DeepSeek and most AI gateways use this prefix too. An address here
+  // would send the key to OpenAI the first time someone presses Test.
+  for (const value of ['sk-' + FILL, 'sk-or-v1-' + FILL, 'sk-gateway-' + FILL]) {
+    const found = detect(value);
+    assert.equal(found.confident, false, value); assert.equal(found.id, ''); assert.deepEqual(found.fields, {}); assert.deepEqual(found.env, {});
+    assert.deepEqual(found.secrets, { token: value });
+  }
 });
 
 test('a token too short to be a real one of its kind falls back to a plain token', () => {

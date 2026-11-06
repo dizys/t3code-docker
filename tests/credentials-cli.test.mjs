@@ -281,6 +281,7 @@ test('a recognized secret picks its own type, and --type overrides it', async t 
   const s = await sandbox(t), github = 'ghp_' + 'fixture0000000000000000fixture';
   const added = never(ok(await s.cli(['add', 'github', '--secret-file', await s.file(github)])), github);
   assert.match(added.out, /Commands get: GH_TOKEN/); assert.match(added.out, /t3-vault http github GET user/);
+  assert.match(added.out, /Calls go to: https:\/\/api\.github\.com\//, 'an address worked out from the value is never silent');
   const stored = await s.row('github');
   assert.equal(stored.type, 'git'); assert.equal(stored.fields.host, 'github.com'); assert.deepEqual(stored.env, { token: 'GH_TOKEN' });
   ok(await s.cli(['add', 'plain', '--type', 'token', '--secret-file', await s.file(github)]));

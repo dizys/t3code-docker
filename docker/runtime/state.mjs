@@ -18,8 +18,8 @@ export const defaultRunDir = (env = process.env) => `${env.T3CODE_HOME || `${env
 export const resolveRunDir = (env = process.env) => {
   if (!env.T3_RUN_DIR) return defaultRunDir(env);
   if (!env.T3_RUN_DIR.startsWith("/")) throw new Error("T3_RUN_DIR must be an absolute path.");
-  const trimmed = env.T3_RUN_DIR.replace(/\/+$/, "") || "/";
-  if (trimmed === "/" || trimmed === "/tmp") throw new Error("T3_RUN_DIR must not be / or /tmp.");
+  const normalized = path.normalize(env.T3_RUN_DIR).replace(/\/+$/, "") || "/";
+  if (normalized === "/" || normalized === "/tmp") throw new Error("T3_RUN_DIR must not be / or /tmp.");
   return env.T3_RUN_DIR;
 };
 export const runtimePaths = (env = process.env) => {

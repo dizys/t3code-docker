@@ -37,12 +37,11 @@ case "$T3_RUN_DIR" in
   /*) ;;
   *) log "ERROR: T3_RUN_DIR must be an absolute path (got '${T3_RUN_DIR}')"; exit 1 ;;
 esac
-t3_run_trimmed="$(printf '%s' "$T3_RUN_DIR" | sed 's:/*$::')"
-[ -n "$t3_run_trimmed" ] || t3_run_trimmed="/"
-case "$t3_run_trimmed" in
-  "/"|"/tmp") log "ERROR: T3_RUN_DIR must not be '${t3_run_trimmed}'"; exit 1 ;;
+t3_run_normalized="$(realpath -ms -- "$T3_RUN_DIR")"
+case "$t3_run_normalized" in
+  "/"|"/tmp") log "ERROR: T3_RUN_DIR must not be '${t3_run_normalized}'"; exit 1 ;;
 esac
-unset t3_run_trimmed
+unset t3_run_normalized
 : "${T3_PERSIST_AGENT_CREDENTIALS:=1}"
 : "${T3_PREINSTALL:=default}"
 # The image's own runtimes. T3 runs as the root-owned platform binary; setup

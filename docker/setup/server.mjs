@@ -1118,9 +1118,9 @@ const resolveRunDir = () => {
     console.error(`[setup] T3_RUN_DIR must be an absolute path (got '${explicit}'); refusing to start`);
     process.exit(1);
   }
-  const trimmed = explicit.replace(/\/+$/, "") || "/";
-  if (trimmed === "/" || trimmed === "/tmp") {
-    console.error(`[setup] T3_RUN_DIR must not be '${trimmed}'; refusing to start`);
+  const normalized = path.normalize(explicit).replace(/\/+$/, "") || "/";
+  if (normalized === "/" || normalized === "/tmp") {
+    console.error(`[setup] T3_RUN_DIR must not be '${normalized}'; refusing to start`);
     process.exit(1);
   }
   return explicit;

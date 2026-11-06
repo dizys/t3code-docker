@@ -475,6 +475,25 @@ start_preinstall() {
 
 start_preinstall
 
+# Say the setup key when it is new, and stay quiet otherwise. A generated key
+# is printed once so a hosting platform's log can serve it without a shell;
+# a kept key is never printed again, and a configured one was already chosen
+# by its owner. Reads $T3_SETUP_KEY_SOURCE and $T3_SETUP_KEY.
+announce_setup_key() {
+  case "$T3_SETUP_KEY_SOURCE" in
+    new)
+      log "T3_SETUP_KEY was not set; generated a setup key and kept it on the volume:"
+      log "    ${T3_SETUP_KEY}"
+      log "    It stays the same from now on. Set T3_SETUP_KEY to choose your own." ;;
+    boot)
+      log "T3_SETUP_KEY was not set, and ${T3CODE_HOME} could not keep a key; generated one for this start:"
+      log "    ${T3_SETUP_KEY}"
+      log "    It changes on every start. Set T3_SETUP_KEY to keep one." ;;
+    volume)
+      log "using the setup key kept on the volume (show it on the setup page under Environment)" ;;
+  esac
+}
+
 # The setup service exists for one job: minting a pairing link on demand,
 # without a shell in the container and without a restart. Everything after
 # pairing belongs to T3 Code's own UI, which does it better.
@@ -484,10 +503,10 @@ start_setup_service() {
 
   # The key: T3_SETUP_KEY, else the one kept on the volume since the first
   # start, else a new one, kept from now on (docker/setup/setup-key.mjs, which
-  # also writes it where t3-expose and friends read it). Printed on every start
-  # unless it was configured: on a hosting platform the log is the one place to
-  # find it without a shell. Each message names T3_SETUP_KEY on the line before
-  # the key, so `grep -A1 T3_SETUP_KEY` finds it whichever was printed.
+  # also writes it where t3-expose and friends read it). The key is never
+  # handed to child processes beyond the setup server itself: T3 Code's
+  # terminals inherit this shell's environment, and anything there can be
+  # read from /proc.
   local resolved
   if ! resolved="$("$T3_INFRA_NODE" /opt/t3-setup/setup-key.mjs --resolve)" || [ -z "$resolved" ]; then
     log "ERROR: could not settle on a setup key; the setup UI is off for this start"
@@ -495,28 +514,19 @@ start_setup_service() {
   fi
   T3_SETUP_KEY_SOURCE="${resolved%% *}"
   T3_SETUP_KEY="${resolved#* }"
-  case "$T3_SETUP_KEY_SOURCE" in
-    new)
-      log "T3_SETUP_KEY was not set; generated a setup key and kept it on the volume:"
-      log "    ${T3_SETUP_KEY}"
-      log "    It stays the same from now on. Set T3_SETUP_KEY to choose your own." ;;
-    volume)
-      log "T3_SETUP_KEY is not set; the setup key kept on the volume is:"
-      log "    ${T3_SETUP_KEY}" ;;
-    boot)
-      log "T3_SETUP_KEY was not set, and ${T3CODE_HOME} could not keep a key; generated one for this start:"
-      log "    ${T3_SETUP_KEY}"
-      log "    It changes on every start. Set T3_SETUP_KEY to keep one." ;;
-  esac
-  export T3_SETUP_KEY T3_SETUP_KEY_SOURCE
+  announce_setup_key
 
   (
+    export T3_SETUP_KEY T3_SETUP_KEY_SOURCE
     while :; do
       "$T3_INFRA_NODE" /opt/t3-setup/server.mjs \
         || log "setup service exited; restarting in 5s"
       sleep 5
     done
   ) &
+  # The server above already inherited its copy. Everything started after
+  # this point (T3 Code, its terminals, the agents in them) must not see it.
+  unset T3_SETUP_KEY
 
   if [ -n "$T3_SINGLE_PORT" ]; then
     log "setup UI on port ${T3_SETUP_PORT}, and on the one port below"

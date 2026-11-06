@@ -7,7 +7,7 @@ publishes ports. None of this needs a shell in the container or a restart.
 
 It's guarded by a setup key. Leave `T3_SETUP_KEY` empty and the first start
 generates one and keeps it on the volume (`/home/t3/.t3/setup-key`), so it stays
-the same across restarts, redeploys and recreates. Every start prints it to the
+the same across restarts, redeploys and recreates. The first start prints it to the
 log, on the line after the one that names `T3_SETUP_KEY`:
 
 ```bash

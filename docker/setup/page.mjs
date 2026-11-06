@@ -274,7 +274,7 @@ ${tab ? tabHeaders(true) + '\n' : ''}<main class="tc-standalone">
           ${t3Url ? `<a class="tc-btn tc-btn--lg" href="${escapeHtml(t3Url)}" rel="noopener">Open T3 Code</a>` : ""}
         </div>
       </form>
-      <div class="tc-note">Left <code>T3_SETUP_KEY</code> empty? The first start generated a key and kept it. Every start prints it to the log, under the line that names <code>T3_SETUP_KEY</code>:<br><code>docker compose logs t3code | grep -A1 T3_SETUP_KEY</code></div>
+      <div class="tc-note">Left <code>T3_SETUP_KEY</code> empty? The first start generated a key and kept it, and printed it to the log once, under the line that names <code>T3_SETUP_KEY</code>:<br><code>docker compose logs t3code | grep -A1 T3_SETUP_KEY</code>. Afterwards the setup page shows it again under Environment.</div>
     </div>
   </div>
 </main>

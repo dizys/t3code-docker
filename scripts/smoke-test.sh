@@ -127,7 +127,7 @@ t3_has_no_setup_key() {
   # process instead, whose environment came through the entrypoint.
   docker exec -u t3 "$1" /usr/local/bin/node -e '
     const fs = require("node:fs");
-    const pid = fs.readFileSync(`${process.env.T3_RUN_DIR || "/tmp/t3code"}/t3.pid`, "utf8").trim();
+    const pid = fs.readFileSync(`${process.env.T3_RUN_DIR || `${process.env.T3CODE_HOME || `${process.env.HOME || "/home/t3"}/.t3`}/run`}/t3.pid`, "utf8").trim();
     const env = fs.readFileSync(`/proc/${pid}/environ`, "utf8").split("\0");
     if (env.some(entry => /^T3_SETUP_KEY(?:_SOURCE)?=/.test(entry))) process.exit(1);
   '
@@ -1036,7 +1036,7 @@ native_skill_controls_work() {
   local id executable script
   docker exec -u t3 "$NAME" bash -lc '
     test -n "$OPENCODE_CONFIG_DIR" &&
-    test "$OPENCODE_CONFIG_DIR" = "$(cat "${T3_RUN_DIR:-/tmp/t3code}/opencode-config-dir")" &&
+    test "$OPENCODE_CONFIG_DIR" = "$(cat "${T3_RUN_DIR:-${T3CODE_HOME:-${HOME:-/home/t3}/.t3}/run}/opencode-config-dir")" &&
     test -d "$OPENCODE_CONFIG_DIR" && test ! -L "$OPENCODE_CONFIG_DIR"
   ' || return 1
   docker cp scripts/skills-native-smoke.mjs "$NAME:/tmp/skills-native-smoke.mjs" >/dev/null 2>&1 || return 1
@@ -1988,8 +1988,7 @@ check "and t3-expose follows the new key" \
 # T3 Code runs under docker/run-t3.sh, so the setup page can restart it (T3
 # Connect's link takes effect on a start) while the container keeps running.
 printf '\nRestarting T3 Code, T3 Connect\n'
-ONE_PID_FILE=/tmp/t3code/t3.pid
-one_t3_pid() { docker exec "${NAME}-one" cat "$ONE_PID_FILE" 2>/dev/null; }
+one_t3_pid() { docker exec "${NAME}-one" bash -lc 'cat "${T3_RUN_DIR:-${T3CODE_HOME:-${HOME:-/home/t3}/.t3}/run}/t3.pid"' 2>/dev/null; }
 one_restarts_t3() {
   local before started code
   before="$(one_t3_pid)"

@@ -14,12 +14,20 @@ export const releaseDirectory = (paths, { version, patchRevision }) => {
   if (!exactVersion(version) || (patchRevision !== undefined && !validPatchRevision(patchRevision))) throw new Error("Invalid runtime release or integration patch.");
   return patchRevision ? path.join(paths.versions, version, "patches", patchRevision) : path.join(paths.versions, version);
 };
+export const defaultRunDir = (env = process.env) => `${env.T3CODE_HOME || `${env.HOME || "/home/t3"}/.t3`}/run`;
+export const resolveRunDir = (env = process.env) => {
+  if (!env.T3_RUN_DIR) return defaultRunDir(env);
+  if (!env.T3_RUN_DIR.startsWith("/")) throw new Error("T3_RUN_DIR must be an absolute path.");
+  const trimmed = env.T3_RUN_DIR.replace(/\/+$/, "") || "/";
+  if (trimmed === "/" || trimmed === "/tmp") throw new Error("T3_RUN_DIR must not be / or /tmp.");
+  return env.T3_RUN_DIR;
+};
 export const runtimePaths = (env = process.env) => {
   const home = env.T3CODE_HOME || `${env.HOME || "/home/t3"}/.t3`;
   const root = path.join(home, "container-runtime");
   return { home, root, selection: path.join(root, "selection.json"), operation: path.join(root, "operation.json"), request: path.join(root, "request.json"),
     versions: path.join(root, "versions"), releases: path.join(root, "releases.json"), backup: path.join(root, "database-backup"),
-    binary: env.T3_INFRA_BINARY || "/opt/t3/t3", run: env.T3_RUN_DIR || "/tmp/t3code" };
+    binary: env.T3_INFRA_BINARY || "/opt/t3/t3", run: resolveRunDir(env) };
 };
 
 export async function readJson(file, missing = null) {

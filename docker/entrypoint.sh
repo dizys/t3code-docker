@@ -32,7 +32,17 @@ T3_HOME=/home/t3
 : "${T3_SINGLE_PORT:=}"
 # Where docker/run-t3.sh keeps T3 Code's pid and takes restart requests from
 # the setup page. Runtime only: nothing here outlives the container.
-: "${T3_RUN_DIR:=/tmp/t3code}"
+: "${T3_RUN_DIR:=${T3CODE_HOME}/run}"
+case "$T3_RUN_DIR" in
+  /*) ;;
+  *) log "ERROR: T3_RUN_DIR must be an absolute path (got '${T3_RUN_DIR}')"; exit 1 ;;
+esac
+t3_run_trimmed="$(printf '%s' "$T3_RUN_DIR" | sed 's:/*$::')"
+[ -n "$t3_run_trimmed" ] || t3_run_trimmed="/"
+case "$t3_run_trimmed" in
+  "/"|"/tmp") log "ERROR: T3_RUN_DIR must not be '${t3_run_trimmed}'"; exit 1 ;;
+esac
+unset t3_run_trimmed
 : "${T3_PERSIST_AGENT_CREDENTIALS:=1}"
 : "${T3_PREINSTALL:=default}"
 # The image's own runtimes. T3 runs as the root-owned platform binary; setup

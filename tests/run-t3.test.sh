@@ -96,5 +96,30 @@ status=0
 wait "$sup" || status=$?
 is "a stale request does not turn an exit into a restart" "1 0" "$(starts) $status"
 
+# Without T3_RUN_DIR the pid and request live under T3CODE_HOME/run.
+env -u T3_RUN_DIR T3CODE_HOME="$WORK/home/.t3" HOME="$WORK/home" \
+  bash "$RUN_T3" "$FAKE" "$WORK/log" "$WORK" &
+sup=$!
+wait_for 5 '[ -f "$WORK/home/.t3/run/t3.pid" ]' \
+  && ok "the default run dir is under T3CODE_HOME" \
+  || no "the default run dir is under T3CODE_HOME"
+kill -TERM "$sup" 2>/dev/null || true
+wait "$sup" 2>/dev/null || true
+
+# An explicit run dir outside /tmp is still honored (covered above), but /
+# and /tmp are refused instead of being created or chmodded.
+tmp_mode_before="$(stat -c %a /tmp)"
+for bad in / /tmp /tmp/ relative/path; do
+  out="$(T3_RUN_DIR="$bad" bash "$RUN_T3" "$FAKE" "$WORK/log" "$WORK" 2>&1)" && status=0 || status=$?
+  [ "$status" -ne 0 ] \
+    && ok "T3_RUN_DIR=$bad is refused (exit $status)" \
+    || no "T3_RUN_DIR=$bad is refused"
+  case "$out" in
+    *T3_RUN_DIR*) ok "T3_RUN_DIR=$bad says why" ;;
+    *) no "T3_RUN_DIR=$bad says why" ;;
+  esac
+done
+is "/tmp keeps its mode" "$tmp_mode_before" "$(stat -c %a /tmp)"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

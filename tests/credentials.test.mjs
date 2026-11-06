@@ -220,22 +220,32 @@ test('API helper authenticates internally, filters output and never follows redi
 test('SSH helper supplies askpass privately and filters both output streams', async t => {
   const { root } = await fixture(t);
   const fixtureFile = path.join(root, 'ssh.cjs');
-  await fs.writeFile(fixtureFile, `const {execFileSync}=require('node:child_process');
-const secret=execFileSync(process.env.SSH_ASKPASS,[],{encoding:'utf8'}).trimEnd();
-if(secret!==process.env.T3_CREDENTIAL_PASSWORD)process.exit(2);
+  await fs.writeFile(fixtureFile, `const fs=require('node:fs');
+if(process.env.T3_CREDENTIAL_PASSWORD!==undefined)process.exit(3);
+if((fs.statSync(process.env.T3_CREDENTIAL_PASSWORD_FILE).mode&0o777)!==0o600)process.exit(4);
+const secret=fs.readFileSync(process.env.T3_CREDENTIAL_PASSWORD_FILE,'utf8');
+const {execFileSync}=require('node:child_process');
+if(execFileSync(process.env.SSH_ASKPASS,[],{encoding:'utf8'}).trimEnd()!==secret)process.exit(2);
 process.stdout.write('output '+secret.slice(0,5));
 process.stderr.write('error '+secret.slice(0,5));
 setTimeout(()=>{process.stdout.write(secret.slice(5)+' done');process.stderr.write(secret.slice(5)+' done');},10);`);
   const out = sink(), err = sink();
+  let passwordFile;
   const code = await sshRequest({ ...ssh, knownHostsFile: '/synthetic/known_hosts/build-server', hostKeyType: 'ssh-ed25519' }, ['uptime'], { stdin: 'ignore', stdout: out, stderr: err,
     spawnProcess: (executable, args, options) => {
       assert.equal(executable, '/usr/bin/ssh'); assert.ok(args.includes('StrictHostKeyChecking=yes'));
       assert.equal(JSON.stringify(args).includes(secret), false);
+      assert.equal('T3_CREDENTIAL_PASSWORD' in options.env, false, 'the password itself never enters the environment');
+      passwordFile = options.env.T3_CREDENTIAL_PASSWORD_FILE;
+      assert.ok(passwordFile, 'only the private file path travels in env');
+      assert.equal(Object.values(options.env).some(value => typeof value === 'string' && value.includes(secret)), false, 'no variable carries the secret');
       assert.deepEqual(args.slice(-2), ['192.0.2.1', 'uptime']);
       return spawn(process.execPath, [fixtureFile], options);
     },
   });
   assert.equal(code, 0); assert.equal(out.text, 'output [redacted] done'); assert.equal(err.text, 'error [redacted] done');
+  assert.equal((await fs.stat(passwordFile).catch(error => error.code)), 'ENOENT', 'the password file goes with the call');
+  assert.equal((await fs.stat(path.dirname(passwordFile)).catch(error => error.code)), 'ENOENT');
   const controller = new AbortController(); let interrupted;
   t.after(() => interrupted?.kill());
   await assert.rejects(sshRequest({ ...ssh, knownHostsFile: '/synthetic/known_hosts/build-server', hostKeyType: 'ssh-ed25519' }, ['true'], { stdin: 'ignore', signal: controller.signal,
@@ -274,7 +284,8 @@ test('SSH with a key hands it over in a private file that is gone afterwards, ne
   assert.equal(out.text, 'printed [redacted]', 'a line of the key is hidden too');
   assert.equal(JSON.stringify(seen.args).includes(line), false);
   assert.equal(Object.values(seen.env).some(value => value.includes(line)), false);
-  assert.equal(seen.env.T3_CREDENTIAL_PASSWORD, process.env.T3_CREDENTIAL_PASSWORD);
+  assert.equal(seen.env.T3_CREDENTIAL_PASSWORD, undefined, 'no password variable for key auth');
+  assert.equal(seen.env.T3_CREDENTIAL_PASSWORD_FILE, undefined, 'nor a password file');
   await assert.rejects(fs.stat(seen.file), { code: 'ENOENT' });
   await assert.rejects(fs.stat(path.dirname(seen.file)), { code: 'ENOENT' });
 });

@@ -1919,7 +1919,9 @@ check "and it survives a restart" one_url_survives_restart
 # The status read above already used the cookie from before the restart; the
 # file and the log say why.
 check "the setup key is the same after a restart" \
-  "[ \"\$(docker exec ${NAME}-one cat $ONE_KEY_FILE)\" = \"\$ONE_KEY\" ] && output_has 'docker logs ${NAME}-one' 'the setup key kept on the volume is'"
+  "[ \"\$(docker exec ${NAME}-one cat $ONE_KEY_FILE)\" = \"\$ONE_KEY\" ] && output_has 'docker logs ${NAME}-one' 'using the setup key kept on the volume'"
+check "and a restart never prints it again" \
+  "[ \"\$(docker logs ${NAME}-one 2>&1 | grep -cF \"\$ONE_KEY\")\" = 1 ]"
 check "clearing it goes back to the platform's" \
   "one_set_url '{}' /clear >/dev/null && [ \"\$(one_public_url)\" = '${ONE_PLATFORM_URL} platform' ]"
 

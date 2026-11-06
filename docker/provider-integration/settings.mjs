@@ -219,12 +219,21 @@ export async function readJson(fs, file) {
   }
 }
 
-/** Replace a file atomically, so a crash never leaves it half-written, and nothing runs half of it. */
+/** Replace a file atomically, so a crash never leaves it half-written, and nothing runs half of it.
+ * The temp file is created exclusively, and a name collision picks a fresh name. */
 export async function writeFileAtomic(fs, file, text, mode = 0o600) {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
-  await fs.writeFile(tmp, text, { encoding: "utf8", mode });
-  await fs.rename(tmp, file);
+  for (let attempt = 0; ; attempt += 1) {
+    const tmp = `${file}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
+    try {
+      await fs.writeFile(tmp, text, { encoding: "utf8", mode, flag: "wx" });
+    } catch (error) {
+      if (error?.code === "EEXIST" && attempt < 4) continue;
+      throw error;
+    }
+    await fs.rename(tmp, file);
+    return;
+  }
 }
 
 /** Replace a JSON file atomically. */

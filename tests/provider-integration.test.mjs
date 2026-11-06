@@ -14,6 +14,7 @@ import {
   clearManaged,
   settingsPathFor,
   statePathFor,
+  writeFileAtomic,
 } from "../docker/provider-integration/settings.mjs";
 
 const HOME = "/home/t3";
@@ -716,4 +717,28 @@ test("useCliSignIn keeps an unreadable settings file, and a failed sync doesn't 
   assert.equal(report.ok, true);
   assert.equal(report.sync.ok, false);
   assert.equal(json(fs, SETTINGS).providerInstances.codex.config.setupMode, "existing");
+});
+
+test("writeFileAtomic creates its temp file exclusively and retries a stale name", async () => {
+  const writes = [];
+  let renamed = null;
+  let stale = true;
+  const fs = {
+    async mkdir() {},
+    async writeFile(file, data, options) {
+      writes.push({ file, options });
+      if (stale) {
+        stale = false;
+        throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+      }
+    },
+    async rename(from, to) {
+      renamed = [from, to];
+    },
+  };
+  await writeFileAtomic(fs, "/base/settings.json", "body");
+  assert.equal(writes.length, 2, "the colliding temp name is retried once");
+  assert.ok(writes.every((write) => write.options?.flag === "wx"), "no temp file is ever overwritten");
+  assert.notEqual(writes[0].file, writes[1].file, "the retry uses a fresh temp name");
+  assert.deepEqual(renamed, [writes[1].file, "/base/settings.json"]);
 });

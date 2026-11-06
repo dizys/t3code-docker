@@ -67,3 +67,50 @@ test('concurrent uploads across instances share one reserve',async t=>{
   const c=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs});
   const second=await c.start({dest:f.workspace,items:[item('b.bin',8*1024*1024)]});await c.cancel({ids:second.uploads.map(row=>row.id)});
 });
+
+test('restarted uploads restore remaining-byte reservations without double-counting',async t=>{
+  const f=await filesFixture(t),free=1024**3+10*1024*1024,statfs=async()=>({bavail:free,bsize:1});
+  const a=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs});
+  const first=await a.start({dest:f.workspace,items:[item('a.bin',8*1024*1024)]}),id=first.uploads[0].id;
+  await a.chunk({id,offset:0},Buffer.alloc(1024*1024));
+  // Simulate a restart: new instances recover the 7 MiB still missing from disk.
+  const b=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs}),c=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs});
+  await b.jobs();await c.jobs();
+  // 7 MiB promised plus 4 MiB wanted exceeds the 10 MiB headroom, while 3 MiB
+  // exactly fits. The duplicate recovery must not promise the same bytes twice.
+  await assert.rejects(c.start({dest:f.workspace,items:[item('b.bin',4*1024*1024)]}),{code:'no-space'});
+  const second=await c.start({dest:f.workspace,items:[item('c.bin',3*1024*1024)]}),other=second.uploads[0].id;
+  await c.chunk({id:other,offset:0},Buffer.alloc(3*1024*1024));await c.cancel({ids:[other]});
+  await b.chunk({id,offset:1024*1024},Buffer.alloc(7*1024*1024));
+  const done=await b.finish({id});assert.ok(done.path);
+  // The stale pre-restart handle releases nothing twice: the full 8 MiB fits again.
+  await a.cancel({ids:[id]});
+  const d=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs});
+  const third=await d.start({dest:f.workspace,items:[item('d.bin',8*1024*1024)]});await d.cancel({ids:third.uploads.map(row=>row.id)});
+});
+
+test('concurrent chunks across instances share the recovered reserve',async t=>{
+  const f=await filesFixture(t),free=1024**3+10*1024*1024,statfs=async()=>({bavail:free,bsize:1});
+  const a=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs});
+  const first=await a.start({dest:f.workspace,items:[item('a.bin',4*1024*1024),item('b.bin',4*1024*1024)]});
+  const [ida,idb]=first.uploads.map(row=>row.id);
+  const b=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs});
+  await b.jobs();
+  await Promise.all([a.chunk({id:ida,offset:0},Buffer.alloc(3*1024*1024)),b.chunk({id:idb,offset:0},Buffer.alloc(3*1024*1024))]);
+  await Promise.all([a.chunk({id:ida,offset:3*1024*1024},Buffer.alloc(1024*1024)),b.chunk({id:idb,offset:3*1024*1024},Buffer.alloc(1024*1024))]);
+  assert.ok((await a.finish({id:ida})).path);assert.ok((await b.finish({id:idb})).path);
+  const c=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs});
+  const second=await c.start({dest:f.workspace,items:[item('c.bin',8*1024*1024)]});await c.cancel({ids:second.uploads.map(row=>row.id)});
+});
+
+test('pruning recovered uploads releases their reservations',async t=>{
+  let clock=Date.now();
+  const f=await filesFixture(t,{now:()=>clock}),free=1024**3+10*1024*1024,statfs=async()=>({bavail:free,bsize:1});
+  const a=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs,now:()=>clock});
+  const first=await a.start({dest:f.workspace,items:[item('old.bin',8*1024*1024)]}),id=first.uploads[0].id;
+  const b=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs,now:()=>clock});
+  await b.jobs();clock+=25*3600_000;await b.prune();assert.equal(b.list().length,0);
+  const c=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs,now:()=>clock});
+  const second=await c.start({dest:f.workspace,items:[item('new.bin',10*1024*1024)]});await c.cancel({ids:second.uploads.map(row=>row.id)});
+  await a.cancel({ids:[id]});
+});

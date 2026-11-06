@@ -13,6 +13,10 @@ const RESERVE=1024**3,DAY=86400_000;
 // run under per-id locks, so uploads with different ids would otherwise each
 // see the full reserve and jointly spend past it.
 let reservedBytes=0;
+// Remaining bytes promised to unfinished uploads, by upload id. The first live
+// instance to load an id owns its global share; later duplicates track their
+// own copy without promising the same bytes twice.
+const reservedIds=new Map();
 const validId=id=>typeof id==='string'&&/^u_[0-9a-f-]{36}$/.test(id);
 const relative=value=>{
   if(typeof value!=='string'||!value||path.isAbsolute(value)||Buffer.byteLength(value)>4096)fail('invalid','Use a relative upload path.');
@@ -30,8 +34,8 @@ export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.
   const sessions=new Map(),locks=new Map(),metadata=createLimiter(1),starts=createLimiter(1);
   // This instance's share of reservedBytes, so its own rows are not counted twice.
   let counted=0;
-  const reserve=row=>{row.reserved=(row.reserved??0)+row.size;counted+=row.size;reservedBytes+=row.size;};
-  const release=(row,n=row.reserved??0)=>{n=Math.min(n,row.reserved??0);if(n>0){row.reserved-=n;counted-=n;reservedBytes-=n;}};
+  const reserve=row=>{row.reserved=(row.reserved??0)+row.size;counted+=row.size;reservedBytes+=row.size;if(row.size>0)reservedIds.set(row.id,(reservedIds.get(row.id)??0)+row.size);};
+  const release=(row,n=row.reserved??0)=>{n=Math.min(n,row.reserved??0);if(n>0){row.reserved-=n;counted-=n;const pending=reservedIds.get(row.id)??0,take=Math.min(n,pending);if(take>0){reservedBytes-=take;if(pending>take)reservedIds.set(row.id,pending-take);else reservedIds.delete(row.id);}}};
   const directory=path.join(policy.stateDir,'files','uploads');
   let loading;
   const lock=(id,work)=>{if(!locks.has(id))locks.set(id,createLimiter(1));return locks.get(id)(work);};
@@ -55,7 +59,9 @@ export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.
         if(row.result){normalizePath(row.result.path);row.reserved=0;sessions.set(row.id,row);continue;}
         const parent=await maybeStat(row.parent),temp=await maybeStat(row.temp);
         if(!parent?.isDirectory()||parent.isSymbolicLink()||identity(parent)!==row.parentIdentity||!temp?.isFile()||temp.isSymbolicLink()||identity(temp)!==row.identity||Number(temp.size)>row.size)continue;
-        row.received=Number(temp.size);row.reserved=0;sessions.set(row.id,row);
+        row.received=Number(temp.size);row.reserved=row.size-row.received;counted+=row.reserved;
+        if(row.reserved>0&&!reservedIds.has(row.id)){reservedIds.set(row.id,row.reserved);reservedBytes+=row.reserved;}
+        sessions.set(row.id,row);
       }catch{/* Foreign or incomplete metadata cannot authorize staging cleanup. */}
     }
     await trim();
@@ -85,7 +91,7 @@ export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.
       for(const item of items){
         if(item.directory){const parent=await parents(dest,item.parts,input);results.push({path:item.path,directory:true,result:{path:parent,directory:true}});continue;}
         const previous=[...sessions.values()].find(row=>!row.result&&row.dest===dest&&row.relative===item.path&&row.size===item.size&&row.lastModified===item.lastModified);
-        if(previous){const actual=await maybeStat(previous.temp);if(actual?.isFile()&&!actual.isSymbolicLink()&&identity(actual)===previous.identity&&Number(actual.size)<=previous.size){previous.received=Number(actual.size);previous.at=now();results.push({...previous,conflict:await conflict(previous)});continue;}fail('changed','An unfinished upload changed on disk. Cancel it before restarting.');}
+        if(previous){const actual=await maybeStat(previous.temp);if(actual?.isFile()&&!actual.isSymbolicLink()&&identity(actual)===previous.identity&&Number(actual.size)<=previous.size){const landed=Number(actual.size);if(landed>previous.received)release(previous,landed-previous.received);previous.received=landed;previous.at=now();results.push({...previous,conflict:await conflict(previous)});continue;}fail('changed','An unfinished upload changed on disk. Cancel it before restarting.');}
         const parent=await parents(dest,item.parts.slice(0,-1),input),target=path.join(parent,item.parts.at(-1)),id='u_'+randomUUID(),temp=path.join(parent,'.t3-upload-'+id+'.part');
         const row=await guard.run(input,[{path:target,mode:'write',missing:true,inUse:false}],async([target])=>{
           const handle=await fs.open(path.join(target.pin.parent,path.basename(temp)),'wx',0o600);

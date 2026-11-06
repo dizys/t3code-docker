@@ -14,6 +14,17 @@ Issues and pull requests are welcome. Before opening one:
 - **CI builds and tests both images on both architectures** before anything is
   published, so a change that only works on amd64 is caught. The slower agent
   lifecycle test runs on amd64 for every build.
+  Documentation-only changes keep lint, all source tests and Compose validation,
+  but skip the image matrix. The allowlist in `scripts/lib/ci-scope.mjs` is limited
+  to root documentation, `docs/` and the README screenshot generator. Any other
+  path, unavailable history or unknown event runs the full matrix; tags,
+  scheduled runs and manual dispatches always do. New PR pushes cancel that PR's
+  superseded run, without cancelling main or release runs.
+  Smoke checks print their elapsed time. The four Files browser audits run in
+  pairs with isolated fixtures and separate logs, retaining every theme,
+  viewport, interaction and polling wait on both architectures. All shared files
+  are copied before either audit starts, and either process failing fails the
+  check after both logs are collected.
 - **To work on the setup page or what it adds to T3 Code's pages**, run
   `node scripts/dev-console.mjs` inside a container from this image. It starts
   a scratch T3 Code and the setup page from your working tree behind the

@@ -18,6 +18,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/image-profile.sh
 . "$SCRIPT_DIR/lib/image-profile.sh"
+# shellcheck source=scripts/lib/parallel-checks.sh
+. "$SCRIPT_DIR/lib/parallel-checks.sh"
 
 VARIANT=""
 IMAGE=""
@@ -53,7 +55,14 @@ pass=0
 fail=0
 ok()   { printf '  \033[32mPASS\033[0m %s\n' "$1"; pass=$((pass+1)); }
 no()   { printf '  \033[31mFAIL\033[0m %s\n' "$1"; fail=$((fail+1)); }
-check() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else no "$1"; fi; }
+check() {
+  local check_started=$SECONDS
+  if eval "$2" >/dev/null 2>&1; then
+    ok "$1 ($((SECONDS - check_started))s)"
+  else
+    no "$1 ($((SECONDS - check_started))s)"
+  fi
+}
 # The setup service runs under a restart loop, so a single probe can land in the
 # gap and fail a release build for no reason. Retry the ones that only talk to
 # it; a genuine outage is caught separately by the crash-loop assertion below.
@@ -71,6 +80,7 @@ if [ -z "$UI_AUDIT_LOG" ]; then
   UI_AUDIT_LOG_CREATED=1
 fi
 cleanup() {
+  t3_parallel_cleanup
   docker rm -f "$NAME" "${NAME}-mount" "${NAME}-boot" "${NAME}-anon" "${NAME}-env" \
     "${NAME}-one" "${NAME}-badport" >/dev/null 2>&1 || true
   rm -f "${ONE_JAR:-}" 2>/dev/null || true
@@ -882,6 +892,23 @@ credentials_browser_works() {
 }
 check "Vault drafts, host trust, conflicts and recovery work on desktop, phone and Settings" credentials_browser_works
 
+files_audit() {
+  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    "$NAME" node "/tmp/t3-files-audit/$1" "http://127.0.0.1:3774/" "$SETUP_KEY"
+}
+files_layout_audit() {
+  files_audit files-ui-audit.js
+}
+files_changes_audit() {
+  files_audit files-change-ui-audit.js
+}
+files_space_audit() {
+  files_audit files-space-ui-audit.js
+}
+files_editor_audit() {
+  files_audit console-editor-ui-audit.js
+}
+
 files_browser_works() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0
   docker exec "$NAME" mkdir -p /tmp/t3-files-audit/lib /tmp/t3-files-audit/fixtures || return 1
@@ -893,14 +920,13 @@ files_browser_works() {
     docker cp "scripts/lib/$helper" "$NAME:/tmp/t3-files-audit/lib/$helper" >/dev/null 2>&1 || return 1
   done
   docker cp scripts/fixtures/console "$NAME:/tmp/t3-files-audit/fixtures/console" >/dev/null 2>&1 || return 1
-  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
-    "$NAME" node /tmp/t3-files-audit/files-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
-  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
-    "$NAME" node /tmp/t3-files-audit/files-change-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
-  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
-    "$NAME" node /tmp/t3-files-audit/files-space-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
-  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
-    "$NAME" node /tmp/t3-files-audit/console-editor-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
+  # All four use isolated in-memory APIs, browser contexts and output folders.
+  # Copy their shared inputs before starting either process. Retain every case,
+  # including the real polling waits, on both native architectures.
+  local result=0
+  t3_parallel_pair "$UI_AUDIT_LOG" files_layout_audit files_changes_audit || result=1
+  t3_parallel_pair "$UI_AUDIT_LOG" files_space_audit files_editor_audit || result=1
+  return "$result"
 }
 check "Files browsing, selection, previews, Sizes and recovery work in every layout" files_browser_works
 

@@ -122,6 +122,17 @@ done
 printf '\nServer\n'
 version="$(curl -fsS --noproxy '*' "$health_url" | jq -r .serverVersion)"
 [ -n "$version" ] && ok "health endpoint (serverVersion=$version)" || no "health endpoint"
+t3_has_no_setup_key() {
+  # docker exec inherits the container configuration. Inspect the running T3
+  # process instead, whose environment came through the entrypoint.
+  docker exec -u t3 "$1" /usr/local/bin/node -e '
+    const fs = require("node:fs");
+    const pid = fs.readFileSync(`${process.env.T3_RUN_DIR || "/tmp/t3code"}/t3.pid`, "utf8").trim();
+    const env = fs.readFileSync(`/proc/${pid}/environ`, "utf8").split("\0");
+    if (env.some(entry => /^T3_SETUP_KEY(?:_SOURCE)?=/.test(entry))) process.exit(1);
+  '
+}
+check "T3 Code does not inherit the configured setup key" "t3_has_no_setup_key $NAME"
 workspace_folder_default() {
   docker exec -u t3 "$NAME" /usr/local/bin/node --input-type=module -e '
     import { readFileSync } from "node:fs";
@@ -1845,6 +1856,7 @@ check "without T3_SETUP_KEY, the first start generates a setup key and keeps it"
   "[ -n \"\$ONE_KEY\" ] && output_has 'docker logs ${NAME}-one' 'generated a setup key and kept it on the volume'"
 check "and only the t3 user can read it" \
   "[ \"\$(docker exec ${NAME}-one stat -c '%a %U' $ONE_KEY_FILE)\" = '600 t3' ]"
+check "T3 Code does not inherit the generated setup key" "t3_has_no_setup_key ${NAME}-one"
 
 # Captured rather than piped into `grep -q`, for the reason given at
 # page_says_mount below: grep exiting early kills curl under pipefail.
@@ -1946,7 +1958,10 @@ check "and it survives a restart" one_url_survives_restart
 # The status read above already used the cookie from before the restart; the
 # file and the log say why.
 check "the setup key is the same after a restart" \
-  "[ \"\$(docker exec ${NAME}-one cat $ONE_KEY_FILE)\" = \"\$ONE_KEY\" ] && output_has 'docker logs ${NAME}-one' 'the setup key kept on the volume is'"
+  "[ \"\$(docker exec ${NAME}-one cat $ONE_KEY_FILE)\" = \"\$ONE_KEY\" ] && output_has 'docker logs ${NAME}-one' 'using the setup key kept on the volume'"
+check "and a restart never prints it again" \
+  "[ \"\$(docker logs ${NAME}-one 2>&1 | grep -cF \"\$ONE_KEY\")\" = 1 ]"
+check "nor inherits the kept setup key" "t3_has_no_setup_key ${NAME}-one"
 check "clearing it goes back to the platform's" \
   "one_set_url '{}' /clear >/dev/null && [ \"\$(one_public_url)\" = '${ONE_PLATFORM_URL} platform' ]"
 

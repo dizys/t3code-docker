@@ -18,6 +18,8 @@ env:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    # Two minutes of work. A test file that never exits would otherwise hold up every job for six hours.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

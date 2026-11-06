@@ -70,7 +70,7 @@ if(action==='list') {
     assert.equal(hello.protocol, 2); assert.equal(hello.signedIn, true);
     assert.equal(hello.nav.attention, hello.attention); assert.equal(hello.nav.current, null);
     const pages = hello.nav.groups.flatMap(g => g.pages);
-    assert.equal(pages.length, 13); assert(hello.palette.some(p => p.route === 'files'));
+    assert.equal(pages.length, 14); assert(hello.palette.some(p => p.route === 'files'));
     assert.deepEqual(Object.keys(hello.icons).sort(), [...new Set([...pages, ...hello.palette].map(p => p.icon))].sort());
     assert(!('paths' in hello)); assert(!('server' in hello));
   }

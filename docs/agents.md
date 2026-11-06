@@ -39,6 +39,10 @@ under Devices.
 [`examples/opencode/`](../examples/opencode/)), or point a provider instance's
 environment variables at a compatible endpoint.
 
+**Your own AI gateway**, such as CLIProxyAPI, LiteLLM or OpenRouter, is set up on
+the [Gateways](gateways.md) page. Each agent gets a new choice beside its direct
+sign-in.
+
 ## Signing agents in and keeping them up to date
 
 **Muse Code** is an optional agent: choose **Install** on its row in

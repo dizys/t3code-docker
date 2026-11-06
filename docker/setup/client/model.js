@@ -1394,6 +1394,11 @@ const T3Model = (() => {
       items.push({ target: 'credential', id: item.id, key: 'credential:' + item.id, icon: 'key-round', tone: warn ? 'warn' : 'danger', severity: warn ? 1 : 0,
         name: item.id, text: credentialProblem(item.code), action: { cmd: 'goto', route: 'vault/' + item.id, label: 'Review' } });
     }
+    for (const item of s.gateways?.attention || []) {
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(item.id || '') || item.id.length > 64) continue;
+      items.push({ target: 'gateway', id: item.id, key: 'gateway:' + item.id, icon: 'waypoints', tone: 'danger', severity: 0,
+        name: item.name, text: item.message || 'This gateway isn’t answering.', action: { cmd: 'goto', route: 'gateways/' + item.id, label: 'Review' } });
+    }
     // Stable within a severity: the order each page lists them in.
     return items.map((item, i) => [item, i]).sort((a, b) => a[0].severity - b[0].severity || a[1] - b[1]).map(([item]) => item);
   };
@@ -1563,6 +1568,7 @@ const T3Model = (() => {
       agents: warn(agents.filter((a) => a.attention).length) || running(busy(agents)),
       instructions: null,
       vault: warn(s.credentials?.attention?.length || 0),
+      gateways: warn(s.gateways?.attention?.length || 0),
       mcp: warn((s.context?.mcp?.providers || []).filter(p => p.supported && s.harnesses?.some(a => a.id === p.provider && a.installed)).reduce((n, p) => n + (p.diverged?.length || 0) + (p.error ? 1 : 0), 0)),
       toolchains: warn(tools.filter((t) => t.state === 'failed').length) || running(busy(tools)),
       // A source control CLI someone installed and has not signed in is as
@@ -1766,6 +1772,7 @@ const T3Model = (() => {
     add('MCP servers', 'Rescan MCP servers', 'refresh-cw', { cmd: 'mcp.refresh' });
     for (const server of s.context?.mcp?.shared?.servers || []) add('MCP servers', server.name, 'plug', { cmd: 'mcp.view', id: server.name });
     for (const provider of s.context?.mcp?.providers || []) for (const name of provider.diverged || []) add('MCP servers', 'Review ' + name + ' in ' + ({ claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' }[provider.provider] || provider.provider), 'triangle-alert', { cmd: 'mcp.view', id: name, provider: provider.provider }, { attention: true });
+    add('Gateways', 'Add gateway…', 'waypoints', { cmd: 'gateways.add' }, { keywords: 'ai gateway proxy router custom endpoint base url cliproxyapi litellm openrouter' });
     add('Storage', 'Free up disk space', 'hard-drive', { cmd: 'storage.goto' }, { keywords: 'disk space caches cleanup folders usage manage storage', attention: Boolean(diskWarning(s)) });
     add('Storage', 'Storage maintenance…', 'settings-2', { cmd: 'storage.preferences' }, { keywords: 'cache limits automatic cleanup retention preferences' });
 

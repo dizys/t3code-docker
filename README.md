@@ -175,6 +175,7 @@ instead. Details: [Reaching the server from a phone](docs/remote-access.md).
 | [Giving agents a browser](docs/agent-browser.md) | T3's server browser and the browser MCP servers |
 | [Context management](docs/context-management.md) | Global `AGENTS.md` and the shared skill library |
 | [MCP servers](docs/mcp-servers.md) | Define once, compare and configure native agent copies |
+| [Gateways](docs/gateways.md) | Route Claude Code, Codex and OpenCode through your own AI gateway |
 | [Files](docs/files.md) | Browse, edit, upload, ZIP, Trash and project cleanup |
 | [Storage management](docs/storage.md) | Disk usage, cache cleanup, version retention |
 | [Configuration](docs/configuration.md) | Every environment variable, volumes, building |

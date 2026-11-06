@@ -160,6 +160,7 @@
     readMarkdown: (file) => readMarkdownFile(file, 64 * 1024), downloadMarkdown: (...args) => downloadMarkdown(...args) });
   const mcpUI = T3McpUI.create({ api, getStatus: () => state.status, render: () => render() });
   const credentialsUI = T3CredentialsUI.create({ api, getStatus: () => state.status, render: () => render(), onChange: () => loadStatus(true) });
+  const gatewaysUI = T3GatewaysUI.create({ api, getStatus: () => state.status, render: () => render(), onChange: () => loadStatus(true), go: (route) => go(route) });
   const filesUI = T3FilesUI.create({ api, base: BASE, getStatus: () => state.status, getRoute: () => state.route, render: () => render(), go: route => go(route) });
 
   /** Whether this browser came in on its T3 Code session rather than the key, so Lock would end nothing. */
@@ -242,6 +243,7 @@
         if (state.route === 'mcp') mcpUI.activate();
         // A link the page hasn't handled yet belongs to that navigation, which would close whatever this opened.
         if (state.route === 'vault' && (location.hash === shownHash || !location.hash.includes('/'))) credentialsUI.activate();
+        if (state.route === 'gateways' && (location.hash === shownHash || !location.hash.includes('/'))) gatewaysUI.activate();
         if (state.route === 'files') filesUI.activate();
         if (state.route === 'instructions' && state.contextTab === 'instructions') void loadInstructionsPreview();
       } else if (!locked) {
@@ -912,8 +914,8 @@
     </div>`;
 
   /** The page a "Needs you" item lives on, and that page's link when they all share one. */
-  const NEEDS_PAGES = { agents: 'All agents', toolchains: 'All toolchains', sourcecontrol: 'Source control', ports: 'All ports', server: 'Server', storage: 'Storage', updates: 'Updates', vault: 'Vault' };
-  const needsPage = (x) => x.target === 'credential' ? 'vault' : x.target === 'port' ? 'ports' : x.target === 'harness' ? 'agents'
+  const NEEDS_PAGES = { agents: 'All agents', toolchains: 'All toolchains', sourcecontrol: 'Source control', ports: 'All ports', server: 'Server', storage: 'Storage', updates: 'Updates', vault: 'Vault', gateways: 'Gateways' };
+  const needsPage = (x) => x.target === 'credential' ? 'vault' : x.target === 'gateway' ? 'gateways' : x.target === 'port' ? 'ports' : x.target === 'harness' ? 'agents'
     : x.target === 'server' ? (x.action && x.action.route) || 'server'
       : x.target === 'toolchain' && M.SOURCE_CONTROL[x.id] ? 'sourcecontrol' : 'toolchains';
 
@@ -1299,7 +1301,7 @@
       <div class="tc-group" data-key="agents-list">
         ${rows.length ? html`<div class="tc-list">${rows.map((row) => resourceRow(row))}</div>`
           : html`<div class="tc-empty tc-empty--compact"><span class="tc-empty-desc">Couldn’t read the agents just now. The console tries again on its own.</span></div>`}
-        <div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>Turn each agent on in T3 Code under ${TAB ? html`<button class="tc-crumb-link tc-settings-link" type="button" data-cmd="embed.settings" data-path="/settings/providers">Settings → Providers</button>` : 'Settings → Providers'}.</span></div>
+        <div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>Turn each agent on in T3 Code under ${TAB ? html`<button class="tc-crumb-link tc-settings-link" type="button" data-cmd="embed.settings" data-path="/settings/providers">Settings → Providers</button>` : 'Settings → Providers'}. To use your own endpoint, <a class="tc-cred-link" href="#gateways">add a gateway</a>.</span></div>
       </div>`;
   };
 
@@ -1925,6 +1927,7 @@
     overview: overviewPage, access: accessPage, agents: agentsPage, instructions: instructionsPage,
     mcp: () => html`${mcpUI.phoneHead()}${pageHead('mcp', { sub: 'Servers your agents can start or connect to. Define one once, then add it to the agents you choose.' })}${mcpUI.content()}`,
     vault: () => html`${pageHead('vault')}${credentialsUI.content()}`,
+    gateways: () => html`${gatewaysUI.phoneHead()}${pageHead('gateways')}${gatewaysUI.content()}`,
     toolchains: toolchainsPage, sourcecontrol: sourceControlPage, ports: portsPage,
     updates: updatesPage, storage: storagePage, server: serverPage, more: morePage,
   };
@@ -2047,6 +2050,7 @@
     if (!await skillsUI.beforeNavigate()) return false;
     if (!await mcpUI.beforeNavigate()) return false;
     if (!await credentialsUI.beforeNavigate()) return false;
+    if (!await gatewaysUI.beforeNavigate()) return false;
     return filesUI.beforeNavigate();
   };
   let hostLeaving = false;
@@ -2079,6 +2083,7 @@
     if (route === 'instructions' && state.contextTab === 'instructions' && state.status) void loadInstructionsPreview(true);
     if (route === 'mcp' && state.status) mcpUI.activate(true);
     if (route === 'vault' && state.status) credentialsUI.activate(true);
+    if (route === 'gateways' && state.status) gatewaysUI.activate(true);
     if (route === 'files' && state.status) filesUI.activate();
   };
   const navigateFromHash = async focus => {
@@ -3831,6 +3836,7 @@
     'skills.group': (a) => skillsUI.group(a.id),
     'skills.copy': (a) => skillsUI.copy(a.id, a.provider),
     'skills.copy-group': (a) => skillsUI.copyGroup(a.id),
+    'gateways.add': () => go('gateways/new'),
     'mcp.refresh': () => mcpUI.refresh(),
     'mcp.view': (a) => mcpUI.view(a.id, a.provider),
     'mcp.add': () => mcpUI.add(),
@@ -4240,7 +4246,7 @@
   // -------------------------------------------------------------- palette --
   const openPalette = () => {
     const layer = Kit.palette({
-      items: () => [...M.paletteItems(state.status || {}, state.ports, ui, now()), ...skillsUI.paletteItems().map(item => ({ ...item, group: 'Instructions & skills', keywords: item.desc || '' })), ...filesUI.paletteItems(), ...credentialsUI.paletteItems()],
+      items: () => [...M.paletteItems(state.status || {}, state.ports, ui, now()), ...skillsUI.paletteItems().map(item => ({ ...item, group: 'Instructions & skills', keywords: item.desc || '' })), ...gatewaysUI.paletteItems(), ...filesUI.paletteItems(), ...credentialsUI.paletteItems()],
       search: M.searchPalette,
       run: (item) => {
         const { cmd, ...args } = item.cmd;
@@ -4255,7 +4261,7 @@
 
   // ------------------------------------------------------------ shortcuts --
   Kit.bind('mod+k', openPalette);
-  Kit.bind('/', () => state.route === 'files' ? filesUI.focusSearch() : state.route === 'mcp' ? mcpUI.focusSearch() : state.route === 'vault' ? credentialsUI.focusSearch() : state.route === 'instructions' && state.contextTab === 'skills' ? skillsUI.focusSearch() : openPalette());
+  Kit.bind('/', () => state.route === 'files' ? filesUI.focusSearch() : state.route === 'mcp' ? mcpUI.focusSearch() : state.route === 'gateways' ? gatewaysUI.focusSearch() : state.route === 'vault' ? credentialsUI.focusSearch() : state.route === 'instructions' && state.contextTab === 'skills' ? skillsUI.focusSearch() : openPalette());
   for (const page of T3Routes.PAGES) {
     if (page.key) Kit.bind('g ' + page.key, () => { keyboardNav = true; go(page.route); });
   }

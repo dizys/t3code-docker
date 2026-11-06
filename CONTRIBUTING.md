@@ -136,6 +136,23 @@ revision conflicts and failed/late reads in both themes at phone, desktop
 and embedded sizes. It uses response fixtures, with screenshots under
 `/tmp/t3-mcp-ui-audit`. The standard screenshot matrix includes `mcp`.
 
+For gateway changes, `node scripts/gateways-native-smoke.mjs PROVIDER
+/absolute/path/to/executable` runs an adapter's real output through real Claude,
+Codex and OpenCode against a fixture gateway, in a disposable home and without a
+sign-in. It holds each assumption the adapters rest on, such as `-c` beating
+`config.toml` and `settings.json` beating the environment.
+`scripts/t3-integration-smoke.mjs` holds the T3 API they use, including redaction
+and usage hubs.
+`node scripts/gateways-ui-audit.js http://127.0.0.1:23785/__setup/ dev` walks the
+whole page in both themes at phone, desktop, embedded and (with
+`T3_UI_AUDIT_TAB=1`) tab sizes, and fails if its layout drifts from MCP servers'.
+It uses the real service over the stand-ins in
+`scripts/lib/gateways-fixtures.cjs`, where addresses such as `down.example.test`
+fail in particular ways. Screenshots go to `/tmp/t3-gateways-ui-audit`.
+A stand-in can't tell you T3 changed. For anything touching how instances or
+processes behave, run the real thing: `node scripts/dev-console.mjs`, a fixture
+gateway, and real turns in T3's model picker.
+
 For repository skill updates, `node scripts/skills-update-ui-audit.js
 http://127.0.0.1:23785/__setup/ dev` covers the Updates view, review queue, supporting-file diffs and folds,
 replacement consent, pinned phone actions, pending-save guards, conflicts, expiry

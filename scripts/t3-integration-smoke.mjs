@@ -8,6 +8,7 @@ import net from "node:net";
 import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import { createGatewayT3 } from "../docker/setup/gateways/t3.mjs";
 import { createT3Api } from "../docker/setup/t3-api.mjs";
 import { createRuntimeManager } from "../docker/runtime/manager.mjs";
 import { releaseForVersion, unpackRelease, archiveStem } from "../docker/runtime/releases.mjs";
@@ -48,6 +49,36 @@ try {
   };
   const before = await until(() => api.call("server.getConfig", {}));
   assert.equal(before.newProjectsRoot, path.join(env.T3CODE_HOME, "projects"));
+  // Gateways rest on these exact calls, and on T3 redacting what it was given.
+  const gatewayT3 = createGatewayT3(api), gatewayInstance = "codex_gw_smoke", gatewaySecret = "sk-integration-smoke";
+  await gatewayT3.upsert(gatewayInstance, { driver: "codex", displayName: "Codex · Smoke", enabled: false, environment: [{ name: "T3_GATEWAY_KEY", value: gatewaySecret, sensitive: true }, { name: "PLAIN", value: "", sensitive: false }], config: { customModels: ["smoke-model"] } });
+  await gatewayT3.setModelsHidden([{ provider: gatewayInstance, model: "smoke-hidden", hidden: true }]);
+  const gatewayRead = await until(async () => { const state = await gatewayT3.read(); return state.instances[gatewayInstance] && state; });
+  const [gatewayKey, gatewayPlain] = gatewayRead.instances[gatewayInstance].environment;
+  assert.deepEqual([gatewayKey.value, gatewayKey.sensitive, gatewayKey.valueRedacted], ["", true, true], "T3 redacts a sensitive value on the way out");
+  assert.equal(gatewayPlain.value, "", "T3 keeps an explicitly empty value");
+  assert.deepEqual(gatewayRead.instances[gatewayInstance].config.customModels, ["smoke-model"]);
+  assert.deepEqual(gatewayRead.preferences[gatewayInstance].hiddenModels, ["smoke-hidden"]);
+  await fs.access(path.join(env.T3CODE_HOME, "userdata/secrets", `provider-env-${Buffer.from(gatewayInstance).toString("base64url")}-${Buffer.from("T3_GATEWAY_KEY").toString("base64url")}.bin`));
+  assert.ok(!(await fs.readFile(path.join(env.T3CODE_HOME, "userdata/settings.json"), "utf8")).includes(gatewaySecret), "the secret isn't in settings.json");
+
+  // Limits rest on T3 taking a hub through settings, its key as a secret that a redacted value keeps.
+  const hubId = "cliproxy-smoke", hubKey = "hub-integration-smoke";
+  await gatewayT3.setHub(hubId, { kind: "cliproxy", label: "Smoke", url: "http://127.0.0.1:9", managementKey: hubKey, enabled: false });
+  const hubRead = await until(async () => { const state = await gatewayT3.read(); return state.hubSources[hubId] && state; });
+  assert.equal(hubRead.hubs, true, "T3 reports hubs in its settings");
+  assert.notEqual(hubRead.hubSources[hubId].managementKey, hubKey, "T3 redacts a management key on the way out");
+  assert.ok(!(await fs.readFile(path.join(env.T3CODE_HOME, "userdata/settings.json"), "utf8")).includes(hubKey), "the management key isn't in settings.json");
+  const hubSecret = path.join(env.T3CODE_HOME, "userdata/secrets", `usage-limit-source-${Buffer.from(hubId).toString("base64url")}.bin`);
+  await fs.access(hubSecret);
+  assert.ok(Array.isArray(await gatewayT3.hubReports({ timeoutMs: 15_000 })), "T3 sends hub reports on its config stream");
+  await gatewayT3.setHub(hubId, { ...hubRead.hubSources[hubId], label: "Renamed" });
+  await until(async () => (await gatewayT3.read()).hubSources[hubId]?.label === "Renamed");
+  await fs.access(hubSecret);
+  await gatewayT3.setHub(hubId, null);
+  await until(async () => !(await gatewayT3.read()).hubSources[hubId]);
+  await gatewayT3.remove(gatewayInstance);
+  assert.equal((await gatewayT3.read()).instances[gatewayInstance], undefined);
   const connectFacts = async (executable) => {
     const output = await execute(executable, ["connect", "status", "--json"], { env, timeout: 60_000 });
     const result = JSON.parse(output.stdout.slice(output.stdout.indexOf("{")));

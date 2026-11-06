@@ -41,12 +41,6 @@ async function syncFile(target) {
   try { await directory.sync(); } finally { await directory.close(); }
 }
 
-async function syncedCopy(source, target) {
-  await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-  await fs.copyFile(source, target);
-  await syncFile(target);
-}
-
 export async function snapshotDatabase(paths, id) {
   const existing = await readJson(path.join(paths.backup, "complete.json"));
   if (existing?.id === id) return;
@@ -79,9 +73,59 @@ export async function restoreDatabase(paths, id) {
     throw new Error("The upgrade's database snapshot is incomplete. Refusing to start against partially restored data.");
   }
   const userdata = path.join(paths.home, "userdata");
-  // Also remove databases introduced by the trial, and all of their sidecars.
-  for (const file of await databaseFiles(userdata)) await fs.rm(path.join(userdata, file), { force: true });
-  for (const file of backup.files) await syncedCopy(path.join(paths.backup, "files", file), path.join(userdata, file));
+  await fs.mkdir(userdata, { recursive: true, mode: 0o700 });
+  const wanted = new Set(backup.files);
+  const isMain = (file) => /\.(?:sqlite3?|db)$/.test(file);
+  const syncDir = async (dir) => {
+    const handle = await fs.open(dir, "r");
+    try { await handle.sync(); } finally { await handle.close(); }
+  };
+  const parents = new Set([userdata]);
+  const changed = (file) => {
+    for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+      parents.add(dir);
+      if (dir === userdata) break;
+    }
+  };
+  const staged = [];
+  try {
+    // Finish every copy before touching live databases or their WALs. A
+    // missing backup or a full disk must leave committed userdata intact.
+    for (const file of backup.files) {
+      const target = path.join(userdata, file);
+      await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+      const tmp = `${target}.restore`;
+      staged.push([tmp, target]);
+      await fs.rm(tmp, { force: true });
+      await fs.copyFile(path.join(paths.backup, "files", file), tmp);
+      await syncFile(tmp);
+      changed(target);
+    }
+    // A replaced main must not pair with the trial's WAL. Leave sidecars of
+    // trial-only databases alone until every wanted replacement is durable.
+    for (const file of await databaseFiles(userdata)) {
+      if (!isMain(file) && wanted.has(file.replace(/-(?:wal|shm|journal)$/, ""))) {
+        const target = path.join(userdata, file);
+        await fs.rm(target, { force: true });
+        changed(target);
+      }
+    }
+    for (const [tmp, target] of staged) await fs.rename(tmp, target);
+    for (const dir of parents) await syncDir(dir);
+  } catch (error) {
+    for (const [tmp] of staged) await fs.rm(tmp, { force: true }).catch(() => {});
+    throw error;
+  }
+  // Remove trial-only files after the replacements are durable. Older
+  // snapshots can explicitly contain WALs, so retain every wanted file.
+  for (const file of await databaseFiles(userdata)) {
+    if (!wanted.has(file)) {
+      const target = path.join(userdata, file);
+      await fs.rm(target, { force: true });
+      changed(target);
+    }
+  }
+  for (const dir of parents) await syncDir(dir);
 }
 
 export function validateRequest(request) {

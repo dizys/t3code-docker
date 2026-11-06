@@ -10,7 +10,7 @@ import { nativeRegistry } from "./fixtures/native-registry.mjs";
 import { PATCH_REVISION, channelTag, distributionTag, manifestUrl } from "../docker/runtime/distribution-spec.mjs";
 import { runtimePaths, writeJson, readJson, readSelection, selectedRuntime, releaseDirectory, exactVersion } from "../docker/runtime/state.mjs";
 import { createRuntimeManager, packageRelease, installRelease, executableVersion } from "../docker/runtime/manager.mjs";
-import { recoverUpdate, snapshotDatabase, syncAuthentication, pruneRuntimes, projectScopes } from "../docker/runtime/supervisor.mjs";
+import { recoverUpdate, restoreDatabase, snapshotDatabase, syncAuthentication, pruneRuntimes, projectScopes } from "../docker/runtime/supervisor.mjs";
 
 const NIGHTLY = "0.0.46-nightly.20261011.2980";
 const cleanups = new WeakMap();
@@ -48,6 +48,24 @@ async function databaseContent(file) {
   const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(file, { readOnly: true });
   try { return db.prepare("SELECT body FROM content").get().body; } finally { db.close(); }
+}
+
+async function databaseWithWal(t, file, value) {
+  const writer = spawn(process.execPath, ["--input-type=module", "-e", `
+    import { DatabaseSync } from "node:sqlite";
+    const db = new DatabaseSync(process.argv[1]);
+    db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE IF NOT EXISTS content (body TEXT); DELETE FROM content");
+    db.prepare("INSERT INTO content VALUES (?)").run(process.argv[2]);
+    process.send("committed");
+    setInterval(() => {}, 1000);
+  `, file, value], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+  const exited = new Promise((resolve) => writer.once("exit", resolve));
+  const stop = async () => { writer.kill("SIGKILL"); await exited; };
+  cleanups.get(t).push(stop);
+  let committed = false;
+  writer.on("message", (message) => { if (message === "committed") committed = true; });
+  await waitFor(() => committed);
+  return { stop };
 }
 
 test("only stable and real nightly versions can select a runtime", () => {
@@ -446,6 +464,122 @@ for (const mode of ["crash", "hang"]) test(`a ${mode} trial restores SQLite and 
   assert.equal(await databaseContent(path.join(paths.home, "userdata/statev2.sqlite")), "original database");
   assert.equal(await fs.readFile(path.join(paths.home, "userdata/introduced.sqlite")).catch(() => null), null);
   assert.doesNotThrow(() => process.kill(sup.child.pid, 0));
+});
+
+test("a damaged backup refuses restore and keeps userdata", async (t) => {
+  const { paths } = await world(t);
+  const id = randomUUID();
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "original data");
+  await snapshotDatabase(paths, id);
+  await fs.rm(path.join(paths.backup, "files/statev2.sqlite"));
+  await assert.rejects(restoreDatabase(paths, id));
+  assert.equal(await databaseContent(database), "original data");
+});
+
+test("a missing backup file leaves committed WAL data intact", async (t) => {
+  const { paths } = await world(t);
+  const id = randomUUID();
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  const writer = await databaseWithWal(t, database, "committed original data");
+  await snapshotDatabase(paths, id);
+  await writer.stop(); // Simulate an exited trial without checkpointing its WAL.
+  const wal = await fs.readFile(`${database}-wal`);
+  await fs.rm(path.join(paths.backup, "files/statev2.sqlite"));
+  await assert.rejects(restoreDatabase(paths, id), { code: "ENOENT" });
+  assert.deepEqual(await fs.readFile(`${database}-wal`), wal);
+  assert.equal(await databaseContent(database), "committed original data");
+});
+
+test("restore replaces a main without replaying the trial's stale WAL", async (t) => {
+  const { paths } = await world(t);
+  const id = randomUUID(), database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "before trial");
+  await snapshotDatabase(paths, id);
+  const writer = await databaseWithWal(t, database, "trial-only data");
+  await writer.stop();
+  assert.ok((await fs.stat(`${database}-wal`)).size > 0);
+  await restoreDatabase(paths, id);
+  await assert.rejects(fs.access(`${database}-wal`), { code: "ENOENT" });
+  assert.equal(await databaseContent(database), "before trial");
+});
+
+test("a partial staging copy keeps every database and removes temporary files", async (t) => {
+  const { paths } = await world(t);
+  const id = randomUUID(), userdata = path.join(paths.home, "userdata");
+  for (const name of ["state.sqlite", "statev2.sqlite"]) await seedDatabase(path.join(userdata, name), name);
+  await snapshotDatabase(paths, id);
+  const backup = await readJson(path.join(paths.backup, "complete.json"));
+  const originals = await Promise.all(backup.files.map((name) => fs.readFile(path.join(userdata, name))));
+  const failingSource = path.join(paths.backup, "files", backup.files.at(-1));
+  const copyFile = fs.copyFile;
+  t.mock.method(fs, "copyFile", async (source, target, ...args) => {
+    if (source !== failingSource) return copyFile(source, target, ...args);
+    await fs.writeFile(target, "partial staging copy");
+    throw Object.assign(new Error("Fixture disk full"), { code: "ENOSPC" });
+  });
+  await assert.rejects(restoreDatabase(paths, id), { code: "ENOSPC" });
+  assert.deepEqual((await fs.readdir(userdata)).sort(), [...backup.files].sort());
+  for (const [index, name] of backup.files.entries()) assert.deepEqual(await fs.readFile(path.join(userdata, name)), originals[index]);
+});
+
+test("restore preserves WAL files explicitly included in an older snapshot", async (t) => {
+  const { paths } = await world(t);
+  const id = randomUUID(), userdata = path.join(paths.home, "userdata");
+  const database = path.join(userdata, "statev2.sqlite");
+  const writer = await databaseWithWal(t, database, "legacy snapshot data");
+  await writer.stop();
+  const files = ["statev2.sqlite", "statev2.sqlite-wal"];
+  await fs.mkdir(path.join(paths.backup, "files"), { recursive: true });
+  for (const name of files) await fs.copyFile(path.join(userdata, name), path.join(paths.backup, "files", name));
+  await writeJson(path.join(paths.backup, "complete.json"), { id, files });
+  for (const name of [...files, "statev2.sqlite-shm"]) await fs.rm(path.join(userdata, name), { force: true });
+  await seedDatabase(database, "trial data");
+  await restoreDatabase(paths, id);
+  assert.equal(await databaseContent(database), "legacy snapshot data");
+});
+
+test("restore stages replacements before removing trial databases", async (t) => {
+  const { paths } = await world(t);
+  const id = randomUUID();
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "original data");
+  await snapshotDatabase(paths, id);
+  await fs.rm(database);
+  await seedDatabase(database, "trial data");
+  await seedDatabase(path.join(paths.home, "userdata/introduced.sqlite"), "trial-only");
+  await fs.mkdir(path.join(paths.home, "userdata/cache/nested"), { recursive: true });
+  await seedDatabase(path.join(paths.home, "userdata/cache/nested/introduced.db"), "nested trial-only");
+  await fs.writeFile(path.join(paths.home, "userdata/cache/settings.json"), "keep settings");
+  await restoreDatabase(paths, id);
+  assert.equal(await databaseContent(database), "original data");
+  assert.equal(await fs.readFile(path.join(paths.home, "userdata/introduced.sqlite")).catch(() => null), null);
+  await assert.rejects(fs.access(path.join(paths.home, "userdata/cache/nested/introduced.db")), { code: "ENOENT" });
+  assert.equal(await fs.readFile(path.join(paths.home, "userdata/cache/settings.json"), "utf8"), "keep settings");
+});
+
+test("recovery retries an interrupted multi-database promotion before boot", async (t) => {
+  const { paths } = await world(t);
+  const request = { id: randomUUID(), version: NIGHTLY, channel: "nightly", fromVersion: "0.0.45", phase: "restoring", previous: await readSelection(paths) };
+  const userdata = path.join(paths.home, "userdata");
+  for (const name of ["state.sqlite", "statev2.sqlite"]) await seedDatabase(path.join(userdata, name), "original " + name);
+  await snapshotDatabase(paths, request.id);
+  for (const name of ["state.sqlite", "statev2.sqlite"]) await fs.writeFile(path.join(userdata, name), "partially migrated");
+  await writeJson(paths.request, request);
+  const backup = await readJson(path.join(paths.backup, "complete.json"));
+  const rename = fs.rename;
+  const fault = t.mock.method(fs, "rename", async (source, target) => {
+    if (source.endsWith(".restore") && target === path.join(userdata, backup.files.at(-1))) throw Object.assign(new Error("Fixture interrupted promotion"), { code: "EIO" });
+    return rename(source, target);
+  });
+  await assert.rejects(recoverUpdate(paths), { code: "EIO" });
+  assert.equal((await readJson(paths.request)).phase, "restoring");
+  assert.equal((await readJson(path.join(paths.backup, "complete.json"))).id, request.id);
+  fault.mock.restore();
+  await recoverUpdate(paths);
+  for (const name of backup.files) assert.equal(await databaseContent(path.join(userdata, name)), "original " + name);
+  assert.equal((await readJson(paths.operation)).phase, "interrupted");
+  assert.equal(await readJson(paths.request), null);
 });
 
 test("an interrupted trial restores its original snapshot before any runtime boots", async (t) => {

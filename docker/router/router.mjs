@@ -37,12 +37,22 @@ const NOT_LISTENING = new Set(["ECONNREFUSED", "ENOENT", "EADDRNOTAVAIL"]);
 /** A peer address as a person would write it: no IPv4-mapped IPv6 prefix. */
 export const plainAddress = (address) => String(address ?? "").replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, "");
 
-/** The path of a request-target, whatever form it arrived in. */
+/** Percent-decoding for routing only: one pass, so double-encoding stays encoded. */
+const decodeOnce = (path) => {
+  if (!path.includes("%")) return path;
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+};
+
+/** The path of a request-target, whatever form it arrived in, percent-decoded once for routing. */
 export const pathOf = (target) => {
   const raw = String(target ?? "");
-  if (raw.startsWith("/")) return raw.split(/[?#]/, 1)[0];
+  if (raw.startsWith("/")) return decodeOnce(raw.split(/[?#]/, 1)[0]);
   try {
-    return new URL(raw).pathname;
+    return decodeOnce(new URL(raw).pathname);
   } catch {
     return raw;
   }
@@ -69,7 +79,9 @@ export const normalizePrefix = (value) => {
   const trimmed = String(value ?? "").trim().replace(/\/+$/, "");
   if (!trimmed) return DEFAULT_SETUP_PREFIX;
   const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return /^(\/[\w\-.~]+)+$/.test(prefixed) ? prefixed : null;
+  if (!/^(\/[\w\-.~]+)+$/.test(prefixed)) return null;
+  if (prefixed.split("/").some((segment) => segment === "." || segment === "..")) return null;
+  return prefixed;
 };
 
 /** Which service a request is for: "setup" for the prefix and below, else "t3". */
@@ -97,36 +109,28 @@ const connectionTokens = (raw) => {
  *
  * Hop-by-hop headers stay here, as does anything Connection names. For an
  * upgrade, Connection and Upgrade are what the request is for, so they go on.
- * X-Forwarded-For gains the address this hop saw. X-Forwarded-Proto and
- * X-Forwarded-Host are kept when a proxy in front set them (a platform's TLS
- * terminator knows the scheme; this hop does not) and filled in otherwise.
+ * No proxy in front is trusted, so any X-Forwarded-* the client sent is
+ * dropped as spoofable: X-Forwarded-For is this hop's peer alone,
+ * X-Forwarded-Proto is how this hop was reached, and X-Forwarded-Host is the
+ * Host the client sent here.
  */
 export const forwardHeaders = (raw, { peer, encrypted = false, upgrade = null } = {}) => {
   const listed = connectionTokens(raw);
   const out = [];
-  const forwardedFor = [];
   let host = null;
-  let proto = false;
-  let forwardedHost = false;
   for (let i = 0; i < raw.length; i += 2) {
     const name = raw[i];
     const value = raw[i + 1];
     const lower = name.toLowerCase();
-    if (lower === "x-forwarded-for") {
-      forwardedFor.push(value);
-      continue;
-    }
+    if (lower.startsWith("x-forwarded-")) continue;
     if (HOP_BY_HOP.has(lower) || listed.has(lower)) continue;
     if (lower === "host") host = value;
-    else if (lower === "x-forwarded-proto") proto = true;
-    else if (lower === "x-forwarded-host") forwardedHost = true;
     out.push(name, value);
   }
   const address = plainAddress(peer);
-  if (address) forwardedFor.push(address);
-  if (forwardedFor.length) out.push("X-Forwarded-For", forwardedFor.join(", "));
-  if (!proto) out.push("X-Forwarded-Proto", encrypted ? "https" : "http");
-  if (!forwardedHost && host) out.push("X-Forwarded-Host", host);
+  if (address) out.push("X-Forwarded-For", address);
+  out.push("X-Forwarded-Proto", encrypted ? "https" : "http");
+  if (host) out.push("X-Forwarded-Host", host);
   if (upgrade) out.push("Connection", "Upgrade", "Upgrade", upgrade);
   return out;
 };

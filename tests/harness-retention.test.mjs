@@ -190,3 +190,20 @@ test("cleanup mode consent cannot be reused even when the removable set is ident
   assert.equal((await manager.retention.prune({ token: all.token, includePrevious: "true" })).code, "invalid-options");
   assert.deepEqual(f.removed, []);
 });
+
+test("applying several retained versions runs one prunable-driven plan, not one per item", async (t) => {
+  const f = await fixture(t);
+  const prunable = [];
+  const original = f.ctx.run;
+  f.ctx.run = (args, options) => {
+    if (args.includes("ls") && args.includes("--prunable")) prunable.push(args);
+    return original(args, options);
+  };
+  const plan = await planRetention(f.ctx);
+  assert.ok(plan.removableCount >= 3, `expected 3+ retained items, got ${plan.removableCount}`);
+  prunable.length = 0;
+  const result = await applyRetention(f.ctx, plan);
+  assert.equal(prunable.length, 1, `expected exactly 1 prunable plan, got ${prunable.length}`);
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.removed.length, plan.removableCount);
+});

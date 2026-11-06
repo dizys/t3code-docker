@@ -95,6 +95,7 @@ export function createRunner() {
 export function createFs() {
   return {
     readFile: (path, encoding = "utf8") => fsp.readFile(path, encoding),
+    readdir: (dirPath) => fsp.readdir(dirPath),
     lstat: (path) => fsp.lstat(path),
     realpath: (path) => fsp.realpath(path),
     writeFile: (path, data, options) => fsp.writeFile(path, data, options),

@@ -102,7 +102,8 @@ const frame = (theme, desk, phone) => `<!doctype html><html><head><style>
   const browser = await chromium.launch({ executablePath: CHROME, args: ["--no-sandbox"] });
   try {
     for (const theme of ["light", "dark"]) {
-      const desk = await shoot(browser, { width: 1280, height: 780, scale: 2, theme, route: "overview", status: heroStatus, ports: heroPorts });
+      // Keep the full grouped sidebar and its footer in view, including Gateways.
+      const desk = await shoot(browser, { width: 1280, height: 860, scale: 2, theme, route: "overview", status: heroStatus, ports: heroPorts });
       const phone = await shoot(browser, { width: 390, height: 844, scale: 3, theme, route: "agents", status: heroStatus, ports: heroPorts });
       const context = await browser.newContext({ viewport: { width: 1136, height: 704 }, deviceScaleFactor: 2 });
       const page = await context.newPage();

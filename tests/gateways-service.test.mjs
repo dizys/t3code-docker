@@ -68,13 +68,16 @@ async function gatewayServer(t, models = ['claude-opus-4-8', 'gpt-6-astra']) {
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  // A failed `after` hook skips the ones behind it, and an open server would then hold this file up forever.
+  server.unref();
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   return { url: `http://127.0.0.1:${server.address().port}`, state };
 }
 
 async function harness(t, options = {}) {
   const root = await fs.mkdtemp(path.join(tmpdir(), 't3-gateways-'));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  // Retried, because agents settle in the background and can still be writing here when a test ends.
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 10 }));
   const home = path.join(root, 'home'), t3 = fakeT3(options), vault = fakeVault();
   await fs.mkdir(path.join(home, '.claude'), { recursive: true });
   const stopped = [], processes = { stop: async (agent, instanceId) => { stopped.push(instanceId); return 1; } };
@@ -711,6 +714,7 @@ async function hubServer(t, { accounts = [{ provider: 'claude' }, { provider: 'c
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  server.unref();
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   return { state, url: `http://127.0.0.1:${server.address().port}` };
 }

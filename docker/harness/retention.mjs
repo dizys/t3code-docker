@@ -25,7 +25,10 @@ function providerPaths(value, result = []) {
   return result;
 }
 
-async function references(ctx) {
+/** Processes and provider selections change under cleanup (a tool starts, a
+ * setup choice lands), so these are re-read before every deletion. mise's
+ * prunable set is the expensive capture and is shared with the plan. */
+async function liveReferences(ctx) {
   const processes = await (ctx.retentionProcesses || processSnapshot)();
   if (!processes.complete) throw new Error("Running tools could not be checked. Older versions were kept.");
   const settings = path.join(ctx.env.T3CODE_HOME || path.join(ctx.home, ".t3"), "userdata/settings.json");
@@ -40,7 +43,11 @@ async function references(ctx) {
     try { providers.push(await ctx.fs.realpath(selected)); }
     catch (error) { if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw new Error("Provider paths could not be checked. Older versions were kept."); }
   }
-  return { prunable: await mise.listPrunable(ctx), providers, processes: processes.processes };
+  return { providers, processes: processes.processes };
+}
+
+async function references(ctx) {
+  return { prunable: await mise.listPrunable(ctx), ...(await liveReferences(ctx)) };
 }
 
 /** Verify both the path mise reported and its ancestors. Symlinked installs
@@ -105,7 +112,7 @@ export async function planRetention(ctx, { saved, only, includePrevious = false 
     removableCount: items.filter((item) => item.eligible).length, retainedCount: items.filter((item) => !item.eligible).length };
 }
 
-/** Whether one planned removal is still safe under the captured references:
+/** Whether one planned removal is still safe under the current references:
  * the version is still prunable at the same path, and that path is still an
  * ordinary install no provider selection or running process points at. */
 async function stillRemovable(ctx, refs, item) {
@@ -126,14 +133,19 @@ export async function applyRetention(ctx, plan, { signal, onProgress } = {}) {
   const removed = [], failed = [];
   const eligible = plan.items.filter((candidate) => candidate.eligible);
   if (!eligible.length) return { removed, failed, warning: plan.warning };
-  // References are captured once for the whole pass. Each candidate is then
-  // rechecked on its own against that capture, instead of re-running the full
-  // plan (and its mise queries) once per item.
-  let refs;
-  try { refs = await references(ctx); }
+  // mise's prunable set is captured once for the pass: while the caller holds
+  // the harness lock only our own removals below change it, and each targets
+  // a different version. Processes and provider selections change under us,
+  // so those are re-read before every deletion instead of once up front.
+  // shortcut: project requirements added mid-pass are unseen until the next plan; re-query prunable per item if that window matters.
+  let prunable;
+  try { prunable = await mise.listPrunable(ctx); }
   catch (error) { return { removed, failed, warning: error.message }; }
   for (const item of eligible) {
     if (signal?.aborted) break;
+    let refs;
+    try { refs = { prunable, ...(await liveReferences(ctx)) }; }
+    catch (error) { return { removed, failed, warning: error.message }; }
     if (!(await stillRemovable(ctx, refs, item))) continue;
     try {
       onProgress?.({ phase: "retaining", tool: item.name, version: item.version });

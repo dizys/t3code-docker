@@ -207,3 +207,26 @@ test("applying several retained versions runs one prunable-driven plan, not one 
   assert.equal(result.failed.length, 0);
   assert.equal(result.removed.length, plan.removableCount);
 });
+
+test("a process starting on the next candidate after the first uninstall protects it", async (t) => {
+  const f = await fixture(t);
+  const plan = await planRetention(f.ctx);
+  const eligible = plan.items.filter((item) => item.eligible);
+  assert.ok(eligible.length >= 2, `expected 2+ retained items, got ${eligible.length}`);
+  const [first, next] = eligible;
+  const original = f.ctx.run;
+  let uninstalls = 0;
+  f.ctx.run = (args, options) => {
+    const out = original(args, options);
+    if (args.includes("uninstall") && ++uninstalls === 1) {
+      // A tool starts on the next candidate only after the first removal.
+      f.setProcesses({ complete: true, processes: [{ args: ["node", path.join(next.path, "bin/tool")] }] });
+    }
+    return out;
+  };
+  const result = await applyRetention(f.ctx, plan);
+  assert.ok(f.removed.includes(first.version), `expected ${first.version} removed, got ${f.removed}`);
+  assert.equal(f.removed.includes(next.version), false, `${next.version} gained a process mid-pass and must be kept`);
+  assert.ok(result.removed.some((item) => item.version === first.version));
+  assert.equal(result.removed.some((item) => item.version === next.version), false);
+});

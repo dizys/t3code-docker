@@ -192,11 +192,11 @@ function fakeT3({ tokens = new Set(["good"]), protocolVersion = 1, settingsForma
     const answer = (exit) => socket.deliver({ _tag: "Exit", requestId: message.id, exit });
     const ok = (value) => answer({ _tag: "Success", value });
     switch (message.tag) {
-      case "server.getConfig": return ok({ providers: [provider()] });
-      case "server.getSettings":
-        return ok(t3.settingsFormat === "instance"
+      // Settings come with the config: T3 has no method that returns them alone.
+      case "server.getConfig":
+        return ok({ providers: [provider()], settings: t3.settingsFormat === "instance"
           ? { providerInstances: { antigravity: t3.instance } }
-          : { providers: { antigravity: { enabled: t3.settings.enabled } }, providerInstances: {} });
+          : { providers: { antigravity: { enabled: t3.settings.enabled } }, providerInstances: {} } });
       case "server.updateSettings":
         if (message.payload.providerInstanceMutation?.operation === "upsert") {
           t3.instance = message.payload.providerInstanceMutation.instance;

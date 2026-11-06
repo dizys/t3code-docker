@@ -179,6 +179,10 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 # --- unprivileged half -------------------------------------------------------
+# Keep a configured key available to the resolver, but out of the environment
+# of helpers and background installs. Only the resolver and Setup need it.
+export -n T3_SETUP_KEY T3_SETUP_KEY_SOURCE
+
 # Reached either by the step-down above, or directly because the container was
 # started with a `user:` setting. In the latter case nothing can fix ownership,
 # so say what is wrong instead of letting the server fail on its first write.
@@ -490,7 +494,7 @@ announce_setup_key() {
       log "    ${T3_SETUP_KEY}"
       log "    It changes on every start. Set T3_SETUP_KEY to keep one." ;;
     volume)
-      log "using the setup key kept on the volume (show it on the setup page under Environment)" ;;
+      log "using the setup key kept on the volume (show it under Server → This console in a paired T3 Code browser, or read ${T3CODE_HOME}/setup-key)" ;;
   esac
 }
 
@@ -503,12 +507,11 @@ start_setup_service() {
 
   # The key: T3_SETUP_KEY, else the one kept on the volume since the first
   # start, else a new one, kept from now on (docker/setup/setup-key.mjs, which
-  # also writes it where t3-expose and friends read it). The key is never
-  # handed to child processes beyond the setup server itself: T3 Code's
-  # terminals inherit this shell's environment, and anything there can be
-  # read from /proc.
+  # also writes it where t3-expose and friends read it). Pass a configured key
+  # explicitly to the resolver, and export the result only to Setup. T3 Code
+  # and its terminals must not inherit it in their environment.
   local resolved
-  if ! resolved="$("$T3_INFRA_NODE" /opt/t3-setup/setup-key.mjs --resolve)" || [ -z "$resolved" ]; then
+  if ! resolved="$(T3_SETUP_KEY="${T3_SETUP_KEY:-}" "$T3_INFRA_NODE" /opt/t3-setup/setup-key.mjs --resolve)" || [ -z "$resolved" ]; then
     log "ERROR: could not settle on a setup key; the setup UI is off for this start"
     return 0
   fi
@@ -524,10 +527,6 @@ start_setup_service() {
       sleep 5
     done
   ) &
-  # The server above already inherited its copy. Everything started after
-  # this point (T3 Code, its terminals, the agents in them) must not see it.
-  unset T3_SETUP_KEY
-
   if [ -n "$T3_SINGLE_PORT" ]; then
     log "setup UI on port ${T3_SETUP_PORT}, and on the one port below"
   else
@@ -536,6 +535,9 @@ start_setup_service() {
 }
 
 start_setup_service
+# Setup already inherited its copy, if it started. Clear the variables even
+# when Setup is disabled, missing, or could not resolve a key.
+unset T3_SETUP_KEY T3_SETUP_KEY_SOURCE
 
 # T3_SINGLE_PORT: one listener in front of both services, for hosting platforms
 # and tunnels that route a single port. The setup page answers under its prefix

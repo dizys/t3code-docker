@@ -3707,6 +3707,10 @@ body[data-console-route="files"]:has(.tc-layer) .tc-toaster { visibility: hidden
 .tc-gw-mx { --mx-name-width: 17rem; --mx-status-width: 10.75rem; --mx-actions-width: 5.75rem;
   --mx-cols: minmax(var(--mx-name-width), 1fr) var(--mx-status-width) repeat(var(--mx-agent-count, 3), var(--mx-agent-width)) var(--mx-actions-width);
   min-width: calc(var(--mx-name-width) + var(--mx-status-width) + var(--mx-agent-count, 3) * var(--mx-agent-width) + var(--mx-actions-width) + 1.5rem); }
+@container (max-width: 74rem) {
+  .tc-gw-mx { --mx-name-width: 14rem; --mx-status-width: 8rem; --mx-agent-width: 6.25rem; }
+  .tc-gw-mx .tc-mx-agent-kind { overflow: hidden; text-overflow: ellipsis; }
+}
 .tc-gw-status-head { padding-left: 0.75rem; font-size: 0.75rem; font-weight: 500; color: var(--fg-muted); }
 .tc-gw-row { min-height: 5.25rem; }
 .tc-gw-row[data-tone="warn"] { background: color-mix(in srgb, var(--warn) 4%, transparent); }

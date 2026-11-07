@@ -117,7 +117,7 @@ and to GHCR as `ghcr.io/dizys/t3code-docker`, each for `linux/amd64` and
 - **Every T3 Code agent.** Claude Code, Codex and OpenCode install on first
   start; Grok, Cursor, Muse Code, Pi and Antigravity take one click.
 - **Your own AI gateway.** Connect CLIProxyAPI, LiteLLM, OpenRouter or a
-  compatible endpoint to Claude Code, Codex and OpenCode from
+  compatible endpoint to Claude Code, Codex, OpenCode, Pi and Grok Build from
   [Setup → Gateways](docs/gateways.md), then choose it per thread.
 - **Toolchains that survive upgrades.** Go, Rust, Bun, Deno and uv, plus about
   a thousand more tools through mise, live on the volume at exact versions.
@@ -154,7 +154,7 @@ access: you bring your own subscriptions or API keys.
 In **Setup → Gateways**, choose **Add gateway…**, pick its type, and enter its
 address and API key. Setup tests the connection from inside the container,
 discovers its models, and shows which agents its APIs support. Choose which
-of **Claude Code, Codex and OpenCode** to connect, then add the gateway.
+of **Claude Code, Codex, OpenCode, Pi and Grok Build** to connect, then add the gateway.
 
 Each connected agent gets a labelled entry in T3 Code's model picker, such as
 **Claude · CLIProxy**. Choose it per thread. Your direct sign-ins stay available,
@@ -202,7 +202,7 @@ instead. Details: [Reaching the server from a phone](docs/remote-access.md).
 | [Giving agents a browser](docs/agent-browser.md) | T3's server browser and the browser MCP servers |
 | [Context management](docs/context-management.md) | Global `AGENTS.md` and the shared skill library |
 | [MCP servers](docs/mcp-servers.md) | Define once, compare and configure native agent copies |
-| [Gateways](docs/gateways.md) | Connect Claude Code, Codex and OpenCode to a gateway, choose models and show CLIProxyAPI account limits |
+| [Gateways](docs/gateways.md) | Connect five agents to a gateway, choose models and show CLIProxyAPI account limits |
 | [Files](docs/files.md) | Browse, edit, upload, ZIP, Trash and project cleanup |
 | [Storage management](docs/storage.md) | Disk usage, cache cleanup, version retention |
 | [Configuration](docs/configuration.md) | Every environment variable, volumes, building |

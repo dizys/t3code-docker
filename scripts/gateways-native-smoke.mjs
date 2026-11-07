@@ -24,10 +24,10 @@ const { scanClaudeSettings } = await import(setup("gateways/conflicts"));
 const { withNativeProcess } = await import(process.env.T3_NATIVE_PROCESS_MODULE || new URL("../docker/harness/native-process.mjs", import.meta.url));
 
 const [agentId, executable] = process.argv.slice(2);
-assert.ok(["claude", "codex", "opencode"].includes(agentId) && path.isAbsolute(executable || ""), "Pass an agent and the absolute path to it.");
-const agent = agentOf(agentId), KEY = "sk-smoke-gateway", MODELS = ["claude-smoke-opus", "claude-haiku-5-5", "gpt-smoke-codex", "smoke-model"];
+assert.ok(["claude", "codex", "opencode", "pi", "grok"].includes(agentId) && path.isAbsolute(executable || ""), "Pass an agent and the absolute path to it.");
+const agent = agentOf(agentId), KEY = "sk-smoke-gateway", MODELS = ["claude-smoke-opus", "claude-haiku-5-5", "gpt-smoke-codex", "grok-4.6", "smoke-model"];
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "t3-gateway-native-"));
-const home = path.join(root, "home"), work = path.join(home, "work"), files = path.join(root, "files");
+const home = path.join(root, "home"), work = path.join(home, "work"), files = path.join(root, "gateway files");
 await fs.mkdir(work, { recursive: true });
 let ids = 0;
 
@@ -44,7 +44,7 @@ const gatewayServer = async () => {
     request.on("data", chunk => { text += chunk; });
     request.on("end", () => {
       const url = new URL(request.url, "http://fixture"), body = text ? JSON.parse(text) : {}, id = `fixture_${++ids}`;
-      requests.push({ method: request.method, path: url.pathname, authorization: request.headers.authorization, apiKey: request.headers["x-api-key"], model: body.model });
+      requests.push({ method: request.method, path: url.pathname, authorization: request.headers.authorization, apiKey: request.headers["x-api-key"], model: body.model, reasoningEffort: body.reasoning_effort ?? body.reasoning?.effort });
       if (url.pathname.endsWith("/models")) { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ data: MODELS.map(model => ({ id: model, type: "model", display_name: model, created_at: "2026-01-01T00:00:00Z" })), has_more: false })); return; }
       if (url.pathname.endsWith("/messages")) {
         const message = { id, type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 1 } };
@@ -54,7 +54,18 @@ const gatewayServer = async () => {
       }
       if (url.pathname.endsWith("/responses")) {
         const item = { type: "message", id: `item_${id}`, role: "assistant", status: "completed", content: [{ type: "output_text", text: "ok", annotations: [] }] };
-        sse(response, [["response.created", { type: "response.created", response: { id } }], ["response.output_item.done", { type: "response.output_item.done", output_index: 0, item }], ["response.completed", { type: "response.completed", response: { id, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }]]);
+        const result = { id, object: 'response', created_at: 1, model: body.model, status: 'completed', output: [item],
+          error: null, incomplete_details: null, instructions: null, metadata: {}, parallel_tool_calls: true,
+          tools: [], tool_choice: 'auto', temperature: 1, top_p: 1,
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } } };
+        sse(response, [["response.created", { type: "response.created", sequence_number: 0, response: { ...result, status: 'in_progress', output: [] } }],
+          ["response.output_item.done", { type: "response.output_item.done", sequence_number: 1, output_index: 0, item }],
+          ["response.completed", { type: "response.completed", sequence_number: 2, response: result }]]);
+        return;
+      }
+      if (url.pathname.endsWith('/chat/completions')) {
+        sse(response, [[null, { id, created: 1, model: body.model, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: null }] }],
+          [null, { id, created: 1, model: body.model, object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }]]);
         return;
       }
       response.writeHead(404).end();
@@ -67,8 +78,9 @@ const gatewayServer = async () => {
 const gatewayFor = url => ({ id: "smoke", name: "Smoke", url, accent: "#6366f1", models: { ids: MODELS, manual: [] }, agents: { [agentId]: { on: true } } });
 const instanceFor = gateway => mergeInstance(agent, desiredInstance(agent, gateway, { dir: files }), undefined, { key: KEY });
 const processEnv = (instance, more = {}) => ({ HOME: home, PATH: process.env.PATH, ...Object.fromEntries(instance.environment.map(row => [row.name, row.value])), ...more });
-// T3's tokenizer: single quotes are literal.
-const tokenize = text => [...String(text).matchAll(/'([^']*)'|(\S+)/g)].map(match => match[1] ?? match[2]);
+// The generated subset of T3's tokenizer: literal single quotes and escaped double quotes.
+const tokenize = text => [...String(text).matchAll(/'([^']*)'|("(?:\\.|[^"\\])*")|(\S+)/g)]
+  .map(match => match[1] ?? (match[2] ? JSON.parse(match[2]) : match[3]));
 const posts = gateway => gateway.requests.filter(request => request.method === "POST");
 
 const runClaude = async (env, stdin = "") => new Promise((resolve, reject) => {
@@ -82,6 +94,73 @@ const runClaude = async (env, stdin = "") => new Promise((resolve, reject) => {
 });
 
 const smokes = {
+  async pi() {
+    const gateway = await gatewayServer(), gw = gatewayFor(gateway.url), paths = filesFor(agent, gw, files);
+    gw.models.capabilities = { 'smoke-model': { supported: true, effort: ['low', 'high', 'ultra'] } };
+    await fs.mkdir(files, { recursive: true });
+    await fs.writeFile(paths.config, fileText(agent, gw, files));
+    const env = processEnv(instanceFor(gw), { PI_OFFLINE: '1' });
+    const args = tokenize(instanceFor(gw).config.launchArgs);
+    try {
+      const { stdout } = await promisify(execFile)(executable, [...args, '--offline', '--list-models'], { cwd: work, env, timeout: 30000 });
+      assert.match(stdout, /smoke-model/);
+      await new Promise((resolve, reject) => {
+        const child = execFile(executable, [...args, '--offline', '--no-session', '--provider', 't3gw_smoke', '--model', 'smoke-model', '--thinking', 'low', '--print', 'reply ok'],
+          { cwd: work, env, timeout: 30000 }, error => error ? reject(error) : resolve());
+        child.stdin.end();
+      });
+      const [turn] = posts(gateway);
+      assert.equal(turn?.path, '/v1/chat/completions');
+      assert.equal(turn.authorization, `Bearer ${KEY}`);
+      assert.equal(turn.model, 'smoke-model');
+      assert.equal(turn.reasoningEffort, 'low');
+    } finally { await gateway.close(); }
+  },
+  async grok() {
+    const gateway = await gatewayServer(), gw = gatewayFor(gateway.url), paths = filesFor(agent, gw, files);
+    gw.agents.grok.scope = 'all';
+    gw.models.capabilities = { 'smoke-model': { supported: true, effort: ['low', 'high', 'ultra'] } };
+    await fs.mkdir(path.dirname(paths.config), { recursive: true });
+    await fs.writeFile(paths.config, fileText(agent, gw, files));
+    const env = processEnv(instanceFor(gw));
+    try {
+      const { stdout } = await promisify(execFile)(executable, ['models'], { cwd: work, env, timeout: 30000 });
+      assert.match(stdout, /smoke-model/);
+      await withNativeProcess({ executable, home: work, env, timeoutMs: 30000 }, ['agent', 'stdio'], async ({ child, nextLine }) => {
+        let id = 0;
+        const call = async (method, params) => {
+          const requestId = ++id;
+          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }) + '\n');
+          for (;;) {
+            const line = JSON.parse(await nextLine());
+            if (line.id !== requestId) continue;
+            assert.equal(line.error, undefined, JSON.stringify(line.error));
+            return line.result;
+          }
+        };
+        await call('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'fixture', version: '1' } });
+        await call('authenticate', { methodId: 'xai.api_key' });
+        const session = await call('session/new', { cwd: work, mcpServers: [] });
+        assert.deepEqual(session.models.availableModels.map(model => model.modelId).sort(), [...MODELS].sort());
+        for (const model of session.models.availableModels) {
+          const meta = model._meta;
+          if (model.modelId === 'smoke-model') {
+            assert.equal(meta.supportsReasoningEffort, true);
+            assert.deepEqual(meta.reasoningEfforts.map(option => option.value).sort(), ['high', 'low']);
+          } else {
+            assert.notEqual(meta.supportsReasoningEffort, true);
+            assert.deepEqual(meta.reasoningEfforts ?? [], []);
+          }
+        }
+        await call('session/set_model', { sessionId: session.sessionId, modelId: 'smoke-model' });
+        await call('session/prompt', { sessionId: session.sessionId, prompt: [{ type: 'text', text: 'reply ok' }] });
+      });
+      const turns = posts(gateway), turn = turns.find(request => request.model === 'smoke-model');
+      assert.ok(turn, JSON.stringify(turns));
+      assert.equal(turn.reasoningEffort, 'low');
+      assert.ok(turns.every(request => request.path === '/v1/responses' && request.authorization === `Bearer ${KEY}` && MODELS.includes(request.model)), JSON.stringify(turns));
+    } finally { await gateway.close(); }
+  },
   async claude() {
     const gateway = await gatewayServer(), elsewhere = await gatewayServer(), settings = path.join(home, ".claude", "settings.json");
     try {
@@ -168,5 +247,6 @@ try {
   await smokes[agentId]();
   console.log(`${agent.name}: a gateway works through its real settings.`);
 } finally {
-  await fs.rm(root, { recursive: true, force: true }).catch(() => {});
+  if (process.env.T3_GATEWAY_SMOKE_KEEP) console.log(`Fixture files: ${root}`);
+  else await fs.rm(root, { recursive: true, force: true }).catch(() => {});
 }

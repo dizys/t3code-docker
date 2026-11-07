@@ -42,8 +42,14 @@ test('an agent’s line names its protocol and models', () => {
 });
 
 test('models a check found are compared with what’s applied', () => {
-  assert.deepEqual(plain(S.newModels(gateway({ latest: ['b', 'c'] }))), { added: ['c'], removed: ['a'] });
-  assert.deepEqual(plain(S.newModels(gateway())), { added: [], removed: [] });
+  assert.deepEqual(plain(S.newModels(gateway({ latest: ['b', 'c'] }))), { added: ['c'], removed: ['a'], changed: [] });
+  assert.deepEqual(plain(S.newModels(gateway())), { added: [], removed: [], changed: [] });
+});
+
+test('a capability-only change is reported as changed, not added or removed', () => {
+  const over = { models: { ids: ['a', 'b'], capabilities: { a: { supported: true, effort: ['low'] } } },
+    latest: ['a', 'b'], latestCapabilities: { a: { supported: true, effort: ['low', 'high'] } } };
+  assert.deepEqual(plain(S.newModels(gateway(over))), { added: [], removed: [], changed: ['a'] });
 });
 
 test('a test’s lines read in order, and only say what’s known', () => {

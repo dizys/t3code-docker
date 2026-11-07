@@ -10,6 +10,9 @@
 //                environment it opened with, so anything held there would stay
 //                old. A path doesn't change, and the files can.
 //                `enabled_providers` narrows its catalog to the gateway.
+//   Pi           a launch-only provider extension, leaving its home untouched.
+//   Grok Build   a private home with copied behavior and linked user resources,
+//                but no shared credentials, caches or sessions.
 //
 // Adapters own a declared set of fields, and nothing else. An instance someone
 // adjusted in T3 Code keeps what they added, and a comparison only looks at
@@ -17,7 +20,8 @@
 // so it is never written without a reason.
 import path from 'node:path';
 import { AGENTS, GATEWAY_INSTANCE_ENV, GATEWAY_KEY_ENV, NO_KEY } from './catalog.mjs';
-import { canChat, cleanModelIds, newestIn } from './models.mjs';
+import { canChat, cleanModelIds, cleanReasoning, newestIn } from './models.mjs';
+import { stringify as toml } from '../vendor/toml-patch.mjs';
 
 const plain = (name, value) => ({ name, value, sensitive: false });
 const secret = name => ({ name, value: '', sensitive: true, secret: true });
@@ -27,6 +31,91 @@ const providerId = gateway => 't3gw_' + gateway.id.replaceAll('-', '_');
 
 const CLAUDE_ALIAS_NAME = /^ANTHROPIC_DEFAULT_(?:OPUS|SONNET|HAIKU|FABLE)_MODEL$/;
 const CLAUDE_ALIASES = Object.freeze({ opus: 'ANTHROPIC_DEFAULT_OPUS_MODEL', sonnet: 'ANTHROPIC_DEFAULT_SONNET_MODEL', haiku: 'ANTHROPIC_DEFAULT_HAIKU_MODEL', fable: 'ANTHROPIC_DEFAULT_FABLE_MODEL' });
+
+// OpenCode's two config majors take the same facts in different words, and a
+// file carrying both is refused outright by v1, so the file is written for the
+// installed major and rewritten when it changes. Either way a model only gets
+// the reasoning controls its gateway advertised: v1 earns a `low/medium/high`
+// variant set from `reasoning: true` alone, and v2 invents the same trio for a
+// model saying nothing, so unknown models have to say "none" out loud.
+// A budget or a toggle alone offers no level to choose, so nothing is invented
+// for them: the model keeps the gateway's own default.
+const LEGACY_EFFORTS = Object.freeze(['low', 'medium', 'high']);
+const openCodeEntry = (major, model, reasoning) => {
+  const efforts = reasoning?.supported === true ? reasoning.effort ?? [] : [];
+  if (major >= 2) return { name: model, capabilities: { reasoning: efforts.length ? { supported: true, effort: efforts } : { supported: false } } };
+  if (!efforts.length) return { name: model, reasoning: false, variants: Object.fromEntries(LEGACY_EFFORTS.map(level => [level, { disabled: true }])) };
+  return { name: model, reasoning: true, variants: Object.fromEntries([...new Set([...efforts, ...LEGACY_EFFORTS])].map(level => [level, efforts.includes(level) ? { reasoningEffort: level } : { disabled: true }])) };
+};
+// v2 also reads the v1 spelling, badly: it ignores reasoning and disabled
+// variants and shows the trio it invented. So the v2 spelling exists for v2
+// only, and the default is v1, still the catalogue's default install.
+const openCodeConfig = (gateway, models, files, { major = 1 } = {}) => {
+  const id = providerId(gateway).replaceAll('_', '-'), name = gateway.name.replace(/[{}]/g, '');
+  const entries = Object.fromEntries(models.map(model => [model, openCodeEntry(major, model, cleanReasoning(gateway.models?.capabilities?.[model]))]));
+  // Braces would be expanded by OpenCode: see models.mjs.
+  return JSON.stringify({
+    ...(major >= 2
+      ? { providers: { [id]: { name, package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: `${gateway.url}/v1`, apiKey: `{file:${files.key}}` }, models: entries } } }
+      : { provider: { [id]: { name, npm: '@ai-sdk/openai-compatible', options: { baseURL: `${gateway.url}/v1`, apiKey: `{file:${files.key}}` }, models: entries } } }),
+    enabled_providers: [id],
+  }, null, 2);
+};
+
+const PI_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+// Claude's native effort control cannot represent none/minimal/ultra. Codex's
+// turn schema takes the advertised string unchanged. Neither gets guessed levels
+// or a fabricated default; an empty list explicitly suppresses bundled controls.
+const t3Models = (agent, gateway, models, supported) => !supported ? models : models.map(slug => {
+  const reasoning = cleanReasoning(gateway.models?.capabilities?.[slug]);
+  const efforts = (reasoning?.supported ? reasoning.effort ?? [] : [])
+    .filter(level => agent !== 'claude' || ['low', 'medium', 'high', 'xhigh', 'max'].includes(level));
+  return { slug, capabilities: { optionDescriptors: efforts.length ? [{
+    id: agent === 'claude' ? 'effort' : 'reasoningEffort', label: 'Reasoning', type: 'select',
+    options: efforts.map(id => ({ id, label: id })),
+  }] : [] } };
+});
+
+const piConfig = (gateway, models) => {
+  const config = { baseUrl: `${gateway.url}/v1`, api: 'openai-completions', models: models.map(id => {
+    const reasoning = cleanReasoning(gateway.models?.capabilities?.[id]);
+    const efforts = reasoning?.supported ? reasoning.effort ?? [] : [];
+    const thinkingLevelMap = Object.fromEntries(PI_LEVELS.map(level => {
+      const effort = level === 'off' ? 'none' : level;
+      return [level, efforts.includes(effort) ? effort : null];
+    }));
+    return { id, name: id, reasoning: Object.values(thinkingLevelMap).some(Boolean), thinkingLevelMap,
+      input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      // Operational fallback limits, not discovered capability claims. Pi needs
+      // these to register any custom model. No name-based reasoning defaults.
+      contextWindow: 128000, maxTokens: 8192,
+      compat: { supportsStore: false, supportsDeveloperRole: false } };
+  }) };
+  // A launch-only extension leaves Pi's agent directory and mutable state alone.
+  // Gateway data is a JSON literal, never executable source supplied by a server.
+  return `export default function (pi) {\n  pi.registerProvider(${JSON.stringify(providerId(gateway))}, { ...${JSON.stringify(config, null, 2)}, apiKey: "$${GATEWAY_KEY_ENV}" });\n}\n`;
+};
+
+const grokConfig = (gateway, models, files, { baseConfig = {} } = {}) => toml({
+  ...baseConfig,
+  endpoints: { xai_api_base_url: `${gateway.url.replaceAll('$', '%24')}/v1` },
+  // Grok's auxiliary defaults otherwise request built-in models even when they
+  // are absent from the picker. Keep titles and helpers on a configured route.
+  models: { allowed_models: models, ...(models.length ? { default: models[0], session_summary: models[0],
+    image_description: models[0], web_search: models[0], prompt_suggestion: models[0] } : {}) },
+  model: Object.fromEntries(models.map(id => {
+    const reasoning = cleanReasoning(gateway.models?.capabilities?.[id]);
+    // Grok's enum cannot deserialize ultra, even if a gateway advertises it.
+    const efforts = reasoning?.supported ? (reasoning.effort ?? []).filter(level => level !== 'ultra') : [];
+    return [id, { model: id, name: id, base_url: `${gateway.url.replaceAll('$', '%24')}/v1`,
+      api_base_url: `${gateway.url.replaceAll('$', '%24')}/v1`, env_key: 'XAI_API_KEY', api_backend: 'responses',
+      supports_backend_search: false, supports_reasoning_effort: efforts.length > 0,
+      reasoning_efforts: efforts.map(value => ({ value, label: value })) }];
+  })),
+  features: { ...baseConfig.features, remote_fetch: false, managed_config: false, telemetry: false, feedback: false },
+  shell_environment_policy: { ...baseConfig.shell_environment_policy,
+    exclude: unique([...(baseConfig.shell_environment_policy?.exclude ?? []), 'XAI_API_KEY']) },
+}, { inlineTableStart: 3 });
 
 const SPECS = Object.freeze({
   claude: Object.freeze({
@@ -44,20 +133,20 @@ const SPECS = Object.freeze({
         return id ? [plain(name, id)] : [];
       }),
     ],
-    config: (gateway, models, base) => ({
+    config: (gateway, models, base, files, capabilities) => ({
       binaryPath: base.binaryPath,
       homePath: base.homePath,
       // Claude Code's own model discovery stays off: only newer T3 releases show
       // what it finds, and it would list CLIProxyAPI's `claude-` renamings of models
       // this list already has. T3 drops any it already lists.
-      customModels: models,
+      customModels: t3Models('claude', gateway, models, capabilities),
     }),
   }),
   codex: Object.freeze({
     configKeys: ['binaryPath', 'homePath', 'shadowHomePath', 'launchArgs', 'customModels'],
     compatible: id => /(?:^|\/)(?:gpt|chatgpt|codex|o\d)/i.test(id),
     environment: () => [secret(GATEWAY_KEY_ENV)],
-    config: (gateway, models, base) => {
+    config: (gateway, models, base, files, capabilities) => {
       const id = providerId(gateway), key = name => `model_providers.${id}.${name}`;
       // Single-quoted for T3's tokenizer, double-quoted inside so Codex reads TOML strings.
       const overrides = [['model_provider', id], [key('name'), gateway.id], [key('base_url'), `${gateway.url}/v1`], [key('env_key'), GATEWAY_KEY_ENV], [key('wire_api'), 'responses']];
@@ -69,7 +158,7 @@ const SPECS = Object.freeze({
         homePath: base.homePath,
         shadowHomePath: base.shadowHomePath,
         launchArgs: [base.launchArgs, ...overrides.map(([name, value]) => `-c '${name}="${value}"'`), keepFromShells].filter(Boolean).join(' '),
-        customModels: models,
+        customModels: t3Models('codex', gateway, models, capabilities),
       };
     },
   }),
@@ -79,35 +168,56 @@ const SPECS = Object.freeze({
     environment: (gateway, models, files) => [plain('OPENCODE_CONFIG', files.config)],
     config: (gateway, models, base) => ({ binaryPath: base.binaryPath }),
     // The key has its own file, so the config can be rewritten without knowing it.
-    file: (gateway, models, files) => {
-      const id = providerId(gateway).replaceAll('_', '-');
-      return JSON.stringify({
-        // Braces would be expanded by OpenCode: see models.mjs.
-        provider: { [id]: { name: gateway.name.replace(/[{}]/g, ''), npm: '@ai-sdk/openai-compatible',
-          options: { baseURL: `${gateway.url}/v1`, apiKey: `{file:${files.key}}` },
-          models: Object.fromEntries(models.map(model => [model, { name: model }])) } },
-        enabled_providers: [id],
-      }, null, 2);
-    },
+    file: openCodeConfig,
+  }),
+  pi: Object.freeze({
+    configKeys: ['binaryPath', 'launchArgs', 'customModels'],
+    compatible: () => true,
+    environment: (gateway, models, files, instances) => [secret(GATEWAY_KEY_ENV),
+      ...(instances?.pi?.environment ?? []).filter(row => row.name === 'PI_CODING_AGENT_DIR' && !row.sensitive && typeof row.value === 'string' && row.value)
+        .map(row => plain(row.name, row.value))],
+    config: (gateway, models, base, files) => ({ binaryPath: base.binaryPath,
+      launchArgs: [base.launchArgs, `--extension ${JSON.stringify(files.config)}`].filter(Boolean).join(' '),
+      customModels: models.map(id => `${providerId(gateway)}/${id}`) }),
+    file: piConfig,
+  }),
+  grok: Object.freeze({
+    configKeys: ['binaryPath', 'customModels'],
+    compatible: id => /(?:^|\/)grok/i.test(id),
+    environment: (gateway, models, files) => [secret('XAI_API_KEY'), plain('GROK_HOME', path.dirname(files.config)),
+      // Never let inherited environment overlays or a direct key defeat the
+      // private model configuration or authenticate auxiliary service calls.
+      plain('GROK_CONFIG', ''), plain('GROK_CONFIG_PATH', ''),
+      plain('GROK_MODELS_BASE_URL', ''), plain('GROK_MODELS_LIST_URL', ''), plain('GROK_XAI_API_BASE_URL', `${gateway.url}/v1`),
+      plain('GROK_AUTH_PROVIDER_COMMAND', ''), plain('GROK_DEPLOYMENT_KEY', ''), plain('GROK_DISABLE_AUTOUPDATER', '1'),
+      ...['GROK_SESSION_SUMMARY_MODEL', 'GROK_IMAGE_DESCRIPTION_MODEL', 'GROK_WEB_SEARCH_MODEL', 'GROK_PROMPT_SUGGESTIONS_MODEL']
+        .map(name => plain(name, models[0] ?? ''))],
+    config: (gateway, models, base) => ({ binaryPath: base.binaryPath, customModels: models }),
+    file: grokConfig,
   }),
 });
 
 export const instanceIdFor = (gatewayId, agent) => `${agent.driver}_gw_${gatewayId}`;
 
 /** Where an agent's files live, for an agent that takes settings from files. */
-export const filesFor = (agent, gateway, dir) => SPECS[agent.id].file ? { config: path.join(dir, `${gateway.id}.json`), key: path.join(dir, `${gateway.id}.key`) } : null;
+export const filesFor = (agent, gateway, dir) => agent.id === 'pi' ? { config: path.join(dir, `${gateway.id}.pi.mjs`) }
+  : agent.id === 'grok' ? { config: path.join(dir, `${gateway.id}.grok`, 'config.toml') }
+    : SPECS[agent.id].file ? { config: path.join(dir, `${gateway.id}.json`), key: path.join(dir, `${gateway.id}.key`) } : null;
 
-/** The text of an agent's config file, or null if it has none. */
-export const fileText = (agent, gateway, dir) => {
+/** The text of an agent's config file, or null if it has none. Options carry the installed major for an agent whose file spelling changed between majors. */
+export const fileText = (agent, gateway, dir, options) => {
   const files = filesFor(agent, gateway, dir);
-  return files ? SPECS[agent.id].file(gateway, modelsFor(agent, gateway), files) : null;
+  return files ? SPECS[agent.id].file(gateway, modelsFor(agent, gateway), files, options) : null;
 };
 
 /** What this gateway offers this agent, given how wide the person asked it to look. */
 export function modelsFor(agent, gateway) {
   const spec = SPECS[agent.id], discovered = gateway.models?.ids ?? [], manual = gateway.models?.manual ?? [];
   const wide = gateway.agents?.[agent.id]?.scope === 'all';
-  return cleanModelIds([...discovered.filter(id => wide || canChat(id) && spec.compatible(id)), ...manual]);
+  // Grok expands environment references in every TOML string value. A model id
+  // must never turn into a credential when its generated config is loaded.
+  return cleanModelIds([...discovered.filter(id => wide || canChat(id) && spec.compatible(id)), ...manual])
+    .filter(id => agent.id !== 'grok' || !id.includes('$'));
 }
 
 /** The parts of an agent's default instance a gateway instance runs with, so both use the same install and home. */
@@ -120,15 +230,15 @@ export function inheritedFrom(agent, instances) {
 const defined = value => Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
 
 /** The instance a gateway asks for. Secret rows are placeholders until `mergeInstance`. */
-export function desiredInstance(agent, gateway, { instances = {}, enabled = true, dir = '' } = {}) {
+export function desiredInstance(agent, gateway, { instances = {}, enabled = true, dir = '', customModelCapabilityOverrides = false } = {}) {
   const spec = SPECS[agent.id], models = modelsFor(agent, gateway);
   return {
     driver: agent.driver,
     displayName: `${agent.short} · ${gateway.name}`,
     accentColor: gateway.accent,
     enabled,
-    environment: [...spec.environment(gateway, models, filesFor(agent, gateway, dir)), plain(GATEWAY_INSTANCE_ENV, instanceIdFor(gateway.id, agent))],
-    config: defined(spec.config(gateway, models, inheritedFrom(agent, instances))),
+    environment: [...spec.environment(gateway, models, filesFor(agent, gateway, dir), instances), plain(GATEWAY_INSTANCE_ENV, instanceIdFor(gateway.id, agent))],
+    config: defined(spec.config(gateway, models, inheritedFrom(agent, instances), filesFor(agent, gateway, dir), customModelCapabilityOverrides === true)),
   };
 }
 
@@ -182,6 +292,10 @@ export const reachesProcess = name => !['name', 'accent', 'customModels', 'missi
 export function modelsToHide(agent, gateway, provider) {
   const discovered = gateway.models?.ids ?? [];
   if (agent.id === 'opencode' || !discovered.length || !provider?.models?.length) return [];
+  if (agent.id === 'pi') {
+    const served = new Set(modelsFor(agent, gateway).map(id => `${providerId(gateway)}/${id}`));
+    return provider.models.filter(model => !model.isCustom && !served.has(model.slug)).map(model => model.slug);
+  }
   const served = new Set(discovered.map(id => id.toLowerCase()));
   return provider.models.filter(model => !model.isCustom && !served.has(String(model.slug).toLowerCase())).map(model => model.slug);
 }

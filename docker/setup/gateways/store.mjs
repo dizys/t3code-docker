@@ -13,7 +13,7 @@ export const gatewayStorePath = baseDir => path.join(baseDir, 'setup', 'gateways
 export const gatewayFilesDir = baseDir => path.join(baseDir, 'setup', 'gateways', 'agents');
 // A revision covers what someone decided. Health checks and model syncing write
 // in the background, and must not read as a change anyone has to refresh for.
-const decisions = ({ check, latest, agents = {}, ...gateway }) => ({ ...gateway, agents: Object.fromEntries(Object.entries(agents).map(([id, { on, scope }]) => [id, { on, scope }])) });
+const decisions = ({ check, latest, latestCapabilities, agents = {}, ...gateway }) => ({ ...gateway, agents: Object.fromEntries(Object.entries(agents).map(([id, { on, scope }]) => [id, { on, scope }])) });
 export const revisionOf = gateways => createHash('sha256').update(JSON.stringify(gateways.map(decisions))).digest('hex').slice(0, 32);
 const problem = (code, message) => Object.assign(new Error(message), { code });
 

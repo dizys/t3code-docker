@@ -12,17 +12,27 @@ const ACCOUNTS = [{ id: 'a', driver: 'claudeAgent', email: 'claude@example.com',
 const BUILT_IN = { claudeAgent: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'], codex: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.5'] };
 
 const memoryFiles = () => {
-  const files = new Map();
+  const files = new Map(), links = new Map();
   const missing = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
   return {
     files,
     readFile: async file => { if (!files.has(file)) throw missing(); return files.get(file); },
     writeFile: async (file, text) => { files.set(file, text); },
     rename: async (from, to) => { files.set(to, files.get(from)); files.delete(from); },
-    rm: async file => { files.delete(file); },
+    rm: async file => { files.delete(file); links.delete(file); },
     mkdir: async () => {},
     realpath: async file => file,
     stat: async () => ({ mode: 0o600 }),
+    lstat: async file => {
+      if (!files.has(file) && !links.has(file)) throw missing();
+      return { mode: 0o600, isSymbolicLink: () => links.has(file) };
+    },
+    symlink: async (origin, target) => {
+      if (files.has(target) || links.has(target)) throw Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
+      links.set(target, origin);
+    },
+    readlink: async file => { if (!links.has(file)) throw missing(); return links.get(file); },
+    unlink: async file => { if (!links.delete(file)) throw missing(); },
   };
 };
 
@@ -45,7 +55,9 @@ const memoryT3 = () => {
   const state = { down: false, hubs: {}, reports: [], instances: {
     claudeAgent: { driver: 'claudeAgent', config: { binaryPath: '/launchers/claude' } },
     codex: { driver: 'codex', config: { binaryPath: '/launchers/codex' } },
-    opencode: { driver: 'opencode', config: { binaryPath: '/launchers/opencode' } } }, preferences: {} };
+    opencode: { driver: 'opencode', config: { binaryPath: '/launchers/opencode' } },
+    pi: { driver: 'pi', config: { binaryPath: '/launchers/pi' } },
+    grok: { driver: 'grok', config: { binaryPath: '/launchers/grok' } } }, preferences: {} };
   const t3 = { state,
     read: async () => {
       if (state.down) throw new Error('T3 Code is not answering');

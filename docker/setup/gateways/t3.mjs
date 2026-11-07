@@ -12,7 +12,8 @@ export function createGatewayT3(api) {
     if (!settings || typeof settings.providerInstances !== 'object' || settings.providerInstances === null) throw Object.assign(new Error('This version of T3 Code can’t manage provider instances. Update T3 Code on the Updates page.'), { code: 'unsupported' });
     return { instances: settings.providerInstances, providers: Array.isArray(config.providers) ? config.providers : [], preferences: settings.providerModelPreferences ?? {},
       // Older releases have no hubs at all, which is different from having none.
-      hubs: 'usageLimitSources' in settings, hubSources: settings.usageLimitSources ?? {} };
+      hubs: 'usageLimitSources' in settings, hubSources: settings.usageLimitSources ?? {},
+      customModelCapabilityOverrides: config.customModelCapabilityOverrides === true };
   };
   const mutate = (providerInstanceMutation) => api.call('server.updateSettings', { patch: {}, providerInstanceMutation });
   return {

@@ -9,18 +9,19 @@ import path from 'node:path';
 import test from 'node:test';
 import { createGatewayService, gatewayFailure } from '../docker/setup/gateways.mjs';
 import { createGatewayT3 } from '../docker/setup/gateways/t3.mjs';
+import { parse as parseToml } from '../docker/setup/vendor/toml-patch.mjs';
 
 const REDACTED = { redacted: true };
 const redacted = instance => ({ ...instance, environment: instance.environment?.map(row => row.sensitive ? { ...row, value: '', valueRedacted: true } : row) });
 
-function fakeT3({ instances = {}, models = {} } = {}) {
+function fakeT3({ instances = {}, models = {}, customModelCapabilityOverrides = false } = {}) {
   const state = { instances: { claudeAgent: { driver: 'claudeAgent', config: { binaryPath: '/launchers/claude' } }, codex: { driver: 'codex', config: { binaryPath: '/launchers/codex' } }, opencode: { driver: 'opencode', config: { binaryPath: '/launchers/opencode', serverPassword: 'must-not-copy' } }, ...instances }, preferences: {} };
   // As on a real server, an instance is only checked again when it's written.
   const checked = new Map();
-  const t3 = { state, writes: [], refreshed: [], secrets: new Map(), hidden: [], down: false, failFor: null, status: 'ready', hubs: {}, hubWrites: [], reports: [], reportReads: 0, hubFails: false, hubStreamFails: false,
+  const t3 = { state, customModelCapabilityOverrides, writes: [], refreshed: [], secrets: new Map(), hidden: [], down: false, failFor: null, status: 'ready', hubs: {}, hubWrites: [], reports: [], reportReads: 0, hubFails: false, hubStreamFails: false,
     read: async () => {
       if (t3.down) throw new Error('T3 Code is not answering');
-      return { hubs: true, hubSources: Object.fromEntries(Object.entries(t3.hubs).map(([id, source]) => [id, { ...source, managementKey: REDACTED }])), instances: Object.fromEntries(Object.entries(state.instances).map(([id, instance]) => [id, redacted(instance)])), preferences: state.preferences,
+      return { customModelCapabilityOverrides: t3.customModelCapabilityOverrides, hubs: true, hubSources: Object.fromEntries(Object.entries(t3.hubs).map(([id, source]) => [id, { ...source, managementKey: REDACTED }])), instances: Object.fromEntries(Object.entries(state.instances).map(([id, instance]) => [id, redacted(instance)])), preferences: state.preferences,
         providers: Object.entries(state.instances).filter(([id]) => id.includes('_gw_')).map(([instanceId, instance]) => ({ instanceId, status: t3.status, installed: true, checkedAt: checked.get(instanceId), models: (models[instance.driver] ?? []).map(slug => ({ slug })) })) };
     },
     refresh: async id => { t3.refreshed.push(id); },
@@ -59,12 +60,14 @@ function fakeVault() {
 }
 
 async function gatewayServer(t, models = ['claude-opus-4-8', 'gpt-6-astra']) {
-  const state = { models, keys: [], status: 200 };
+  const state = { models, capabilities: {}, catalog: null, keys: [], status: 200 };
   const server = http.createServer((req, res) => {
     state.keys.push(req.headers.authorization); req.resume();
     req.on('end', () => {
       res.writeHead(req.method === 'GET' ? state.status : 400, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(req.url === '/v1/models' ? { data: state.models.map(id => ({ id })) } : {}));
+      res.end(JSON.stringify(req.url === '/v1/models' ? { data: state.models.map(id => ({ id, ...(state.capabilities[id] ? { reasoning: state.capabilities[id] } : {}) })) }
+        : state.catalog && req.url === '/' ? { message: 'CLIProxyAPI' }
+          : state.catalog && req.url === '/v1/models?client_version=0.144.0' ? { models: state.catalog } : {}));
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -81,7 +84,7 @@ async function harness(t, options = {}) {
   const home = path.join(root, 'home'), t3 = fakeT3(options), vault = fakeVault();
   await fs.mkdir(path.join(home, '.claude'), { recursive: true });
   const stopped = [], processes = { stop: async (agent, instanceId) => { stopped.push(instanceId); return 1; } };
-  const service = createGatewayService({ baseDir: path.join(root, 'state'), home, env: {}, io: fs, t3, vault, processes, wait: options.wait ?? (() => Promise.resolve()) });
+  const service = createGatewayService({ baseDir: path.join(root, 'state'), home, env: {}, io: fs, t3, vault, processes, wait: options.wait ?? (() => Promise.resolve()), ...(options.now ? { now: options.now } : {}), ...(options.getHarness ? { getHarness: options.getHarness } : {}) });
   return { service, t3, vault, home, root, stopped, processes, gateway: await gatewayServer(t, options.gatewayModels) };
 }
 const add = (h, agents = ['claude', 'codex', 'opencode'], over = {}) => h.service.create({ gateway: { name: 'My Proxy', preset: 'cliproxyapi', url: h.gateway.url, agents, ...over }, key: 'sk-one' });
@@ -96,6 +99,114 @@ test('adding a gateway creates one instance per agent and leaves default instanc
   for (const id of ['claudeAgent', 'codex', 'opencode']) assert.deepEqual(h.t3.state.instances[id], before[id]);
   assert.equal(h.t3.state.instances['claudeAgent_gw_my-proxy'].config.binaryPath, '/launchers/claude');
   assert.equal(h.t3.state.instances['opencode_gw_my-proxy'].config.serverPassword, undefined);
+});
+
+test('Pi and Grok lifecycle stays scoped through reapply, rotation, model changes and removal', async t => {
+  const h = await harness(t, { gatewayModels: ['grok-custom', 'gpt-custom'], instances: {
+    pi: { driver: 'pi', config: { binaryPath: '/launchers/pi', launchArgs: '--offline' } },
+    grok: { driver: 'grok', config: { binaryPath: '/launchers/grok' } },
+  } });
+  const direct = structuredClone(h.t3.state.instances);
+  const { id, results } = await add(h, ['pi', 'grok']);
+  assert.ok(results.every(row => row.ok), JSON.stringify(results));
+  await settled();
+  const dir = path.join(h.root, 'state/setup/gateways/agents'), piFile = path.join(dir, `${id}.pi.mjs`), grokHome = path.join(dir, `${id}.grok`);
+  assert.match(h.t3.state.instances[`pi_gw_${id}`].config.launchArgs, /^--offline --extension /);
+  assert.equal(h.t3.state.instances[`grok_gw_${id}`].config.binaryPath, '/launchers/grok');
+  assert.equal(h.t3.secrets.get(`pi_gw_${id}/T3_GATEWAY_KEY`), 'sk-one');
+  assert.equal(h.t3.secrets.get(`grok_gw_${id}/XAI_API_KEY`), 'sk-one');
+  for (const file of [piFile, path.join(grokHome, 'config.toml')]) {
+    assert.doesNotMatch(await fs.readFile(file, 'utf8'), /sk-one/);
+    assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+  }
+  assert.equal((await fs.stat(grokHome)).mode & 0o777, 0o700);
+  h.t3.writes.length = 0; h.stopped.length = 0;
+  let view = await h.service.status();
+  assert.ok((await h.service.reapply({ id, revision: view.revision })).results.every(row => row.action === 'none'));
+  assert.deepEqual(h.t3.writes, []);
+  assert.deepEqual(h.stopped, []);
+  await h.vault.replace(`${id}-gateway`, 'sk-two');
+  view = await h.service.status();
+  await h.service.reapply({ id, revision: view.revision });
+  assert.equal(h.t3.secrets.get(`pi_gw_${id}/T3_GATEWAY_KEY`), 'sk-two');
+  assert.equal(h.t3.secrets.get(`grok_gw_${id}/XAI_API_KEY`), 'sk-two');
+  assert.deepEqual(h.stopped.sort(), [`grok_gw_${id}`, `pi_gw_${id}`]);
+  await settled();
+  h.gateway.state.models.push('grok-new');
+  h.gateway.state.capabilities['grok-new'] = { supported_efforts: ['low', 'max', 'ultra'] };
+  h.stopped.length = 0;
+  view = await h.service.status();
+  await h.service.refreshModels({ id, revision: view.revision });
+  assert.match(await fs.readFile(piFile, 'utf8'), /grok-new/);
+  const config = parseToml(await fs.readFile(path.join(grokHome, 'config.toml'), 'utf8'));
+  assert.deepEqual(config.model['grok-new'].reasoning_efforts.map(row => row.value), ['low', 'max']);
+  assert.deepEqual(h.stopped.sort(), [`grok_gw_${id}`, `pi_gw_${id}`]);
+  await settled();
+  await fs.mkdir(path.join(grokHome, 'sessions'));
+  await fs.writeFile(path.join(grokHome, 'sessions/keep'), 'history');
+  view = await h.service.status();
+  await h.service.remove({ id, revision: view.revision });
+  assert.equal(await fs.readFile(path.join(grokHome, 'sessions/keep'), 'utf8'), 'history');
+  assert.equal(await fs.lstat(path.join(grokHome, 'skills')).catch(() => null), null);
+  assert.equal(await fs.stat(piFile).catch(() => null), null);
+  assert.equal(await fs.stat(path.join(grokHome, 'config.toml')).catch(() => null), null);
+  assert.deepEqual(h.t3.state.instances, direct);
+});
+
+test('Grok preserves behavior and resources without sharing direct routing, auth or sessions', async t => {
+  const h = await harness(t, { gatewayModels: ['grok-custom'], instances: { grok: { driver: 'grok',
+    environment: [{ name: 'GROK_HOME', value: 'my-grok', sensitive: false }], config: {} } } });
+  const source = path.join(h.home, 'my-grok');
+  await fs.mkdir(path.join(source, 'skills'), { recursive: true });
+  const text = '[endpoints]\nxai_api_base_url = "https://direct.invalid/v1"\n[models]\ndefault = "direct"\n[model.direct]\napi_key = "sk-direct"\n[skills]\npaths = ["${GROK_HOME}/extra-skills"]\n[ui]\ntheme = "dark"\n[mcp_servers.local]\ncommand = "${GROK_HOME}/bin/mcp"\n[shell_environment_policy]\nexclude = ["MY_SECRET"]\n';
+  await fs.writeFile(path.join(source, 'config.toml'), text);
+  await fs.writeFile(path.join(source, 'auth.json'), 'direct auth');
+  await fs.writeFile(path.join(source, 'skills/keep'), 'skill');
+  const { id, results } = await add(h, ['grok']);
+  assert.ok(results[0].ok, JSON.stringify(results));
+  const target = path.join(h.root, `state/setup/gateways/agents/${id}.grok`);
+  const generated = await fs.readFile(path.join(target, 'config.toml'), 'utf8'), config = parseToml(generated);
+  assert.doesNotMatch(generated, /sk-direct|direct.invalid/);
+  assert.equal(config.ui.theme, 'dark');
+  assert.deepEqual(config.skills.paths, [path.join(source, 'extra-skills')]);
+  assert.equal(config.mcp_servers.local.command, path.join(source, 'bin/mcp'));
+  assert.deepEqual(config.shell_environment_policy.exclude, ['MY_SECRET', 'XAI_API_KEY']);
+  assert.equal(await fs.readlink(path.join(target, 'skills')), path.join(source, 'skills'));
+  assert.equal(await fs.stat(path.join(target, 'auth.json')).catch(() => null), null);
+  assert.equal(await fs.readFile(path.join(source, 'config.toml'), 'utf8'), text);
+  await settled();
+  const { revision } = await h.service.status();
+  await h.service.remove({ id, revision });
+  assert.equal(await fs.readFile(path.join(source, 'skills/keep'), 'utf8'), 'skill');
+  assert.equal(await fs.readFile(path.join(source, 'auth.json'), 'utf8'), 'direct auth');
+});
+
+test('invalid Grok user TOML fails only Grok without overwriting user files', async t => {
+  const h = await harness(t, { gatewayModels: ['grok-custom'] }), source = path.join(h.home, '.grok');
+  await fs.mkdir(source);
+  await fs.writeFile(path.join(source, 'config.toml'), '[invalid');
+  const { results } = await add(h, ['pi', 'grok']);
+  assert.equal(results.find(row => row.agent === 'pi').ok, true);
+  assert.match(results.find(row => row.agent === 'grok').error, /not valid TOML/);
+  assert.equal(h.t3.state.instances['grok_gw_my-proxy'], undefined);
+  assert.equal(await fs.readFile(path.join(source, 'config.toml'), 'utf8'), '[invalid');
+});
+
+test('CLIProxyAPI catalog discovery feeds every supported gateway adapter', async t => {
+  const ids = ['claude-model', 'gpt-model', 'grok-model'], h = await harness(t, { gatewayModels: ids });
+  h.gateway.state.catalog = ids.map(slug => ({ slug, supported_reasoning_levels: [{ effort: 'low' }, { effort: 'max' }] }));
+  const { id, results } = await add(h, ['claude', 'codex', 'opencode', 'pi', 'grok']);
+  assert.ok(results.every(row => row.ok), JSON.stringify(results));
+  const saved = JSON.parse(await fs.readFile(path.join(h.root, 'state/setup/gateways/gateways.json'), 'utf8')).gateways[0];
+  assert.deepEqual(Object.keys(saved.models.capabilities).sort(), [...ids].sort());
+  assert.deepEqual(h.t3.state.instances[`claudeAgent_gw_${id}`].config.customModels, ['claude-model']);
+  assert.deepEqual(h.t3.state.instances[`codex_gw_${id}`].config.customModels, ['gpt-model']);
+  const dir = path.join(h.root, 'state/setup/gateways/agents');
+  const opencode = JSON.parse(await fs.readFile(path.join(dir, `${id}.json`), 'utf8'));
+  for (const model of ids) assert.deepEqual(opencode.provider['t3gw-my-proxy'].models[model].variants.max, { reasoningEffort: 'max' });
+  assert.match(await fs.readFile(path.join(dir, `${id}.pi.mjs`), 'utf8'), /"max": "max"/);
+  const grok = parseToml(await fs.readFile(path.join(dir, `${id}.grok/config.toml`), 'utf8'));
+  assert.deepEqual(grok.model['grok-model'].reasoning_efforts.map(row => row.value), ['low', 'max']);
 });
 
 test('a typed key goes to the Vault and each instance’s secret, and to nowhere else', async t => {
@@ -290,10 +401,10 @@ test('a key rotated in the Vault page is noticed, and applied on request', async
   await settled();
   await h.vault.replace(`${id}-gateway`, 'sk-rotated');
   const before = await h.service.status();
-  assert.deepEqual(before.gateways[0].agents.map(agent => agent.state), ['key-stale', 'key-stale', 'key-stale']);
+  assert.deepEqual(before.gateways[0].agents.filter(agent => agent.connected).map(agent => agent.state), ['key-stale', 'key-stale', 'key-stale']);
   await h.service.reapply({ id, revision: before.revision });
   assert.equal(h.t3.secrets.get('codex_gw_my-proxy/T3_GATEWAY_KEY'), 'sk-rotated');
-  assert.deepEqual((await h.service.status()).gateways[0].agents.map(agent => agent.state), ['ready', 'ready', 'ready']);
+  assert.deepEqual((await h.service.status()).gateways[0].agents.filter(agent => agent.connected).map(agent => agent.state), ['ready', 'ready', 'ready']);
 });
 
 test('a key deleted from the Vault is flagged, and working agents are left running', async t => {
@@ -403,6 +514,106 @@ test('new models from a health check wait until someone applies them', async t =
   assert.equal((await h.service.status()).gateways[0].latest, null);
 });
 
+test('advertised reasoning facts are kept on create and in the view', async t => {
+  const h = await harness(t);
+  h.gateway.state.capabilities['gpt-6-astra'] = { supported_efforts: ['high', 'low'] };
+  await add(h, ['opencode']);
+  const view = await h.service.status();
+  assert.deepEqual(view.gateways[0].models.capabilities, { 'gpt-6-astra': { supported: true, effort: ['low', 'high'] } });
+  assert.equal(view.gateways[0].latestCapabilities, null);
+  const stored = JSON.parse(await fs.readFile(path.join(h.root, 'state/setup/gateways/gateways.json'), 'utf8'));
+  assert.deepEqual(stored.gateways[0].models.capabilities, { 'gpt-6-astra': { supported: true, effort: ['low', 'high'] } });
+});
+
+test('a capability-only change is pending without bumping the revision', async t => {
+  const h = await harness(t), { id } = await add(h, ['opencode']);
+  await settled();
+  h.t3.writes.length = 0;
+  const { revision } = await h.service.status();
+  h.gateway.state.capabilities['gpt-6-astra'] = { supported_efforts: ['low', 'high'] };
+  await h.service.test({ id });
+  const view = await h.service.status();
+  assert.equal(view.revision, revision, 'background syncing must not read as a change');
+  assert.deepEqual(view.gateways[0].latest, ['claude-opus-4-8', 'gpt-6-astra'], 'same ids, re-set so the apply flow runs');
+  assert.deepEqual(view.gateways[0].latestCapabilities, { 'gpt-6-astra': { supported: true, effort: ['low', 'high'] } });
+  assert.deepEqual(view.gateways[0].models.capabilities, {}, 'not applied yet');
+  assert.deepEqual(h.t3.writes, [], 'noticing facts must not restart anything');
+  await h.service.refreshModels({ id, revision: view.revision });
+  const applied = await h.service.status();
+  assert.deepEqual(applied.gateways[0].models.capabilities, { 'gpt-6-astra': { supported: true, effort: ['low', 'high'] } });
+  assert.equal(applied.gateways[0].latest, null);
+  assert.equal(applied.gateways[0].latestCapabilities, null);
+});
+
+test('advertised reasoning facts are kept on refresh', async t => {
+  const h = await harness(t), { id } = await add(h, ['codex']);
+  await settled();
+  h.gateway.state.capabilities['gpt-6-astra'] = { supported_efforts: ['low', 'high'] };
+  const { revision } = await h.service.status();
+  await h.service.refreshModels({ id, revision });
+  assert.deepEqual((await h.service.status()).gateways[0].models.capabilities, { 'gpt-6-astra': { supported: true, effort: ['low', 'high'] } });
+});
+
+test('negotiated Claude and Codex capabilities apply without changing direct instances or restarting helpers', async t => {
+  const h = await harness(t, { customModelCapabilityOverrides: true });
+  const direct = structuredClone(h.t3.state.instances);
+  h.gateway.state.capabilities['claude-opus-4-8'] = { supported_efforts: ['low', 'max', 'ultra'] };
+  h.gateway.state.capabilities['gpt-6-astra'] = { supported_efforts: ['none', 'high', 'ultra'] };
+  const { id } = await add(h, ['claude', 'codex']);
+  await settled();
+  const configs = () => ['claudeAgent', 'codex'].map(driver => h.t3.state.instances[`${driver}_gw_${id}`].config.customModels);
+  assert.deepEqual(configs().map(entries => entries[0].capabilities.optionDescriptors[0].options.map(row => row.id)), [['low', 'max'], ['none', 'high', 'ultra']]);
+  for (const [key, instance] of Object.entries(direct)) assert.deepEqual(h.t3.state.instances[key], instance);
+  h.t3.writes.length = 0; h.stopped.length = 0;
+  await h.service.setAgent({ id, agent: 'codex', connected: true, revision: (await h.service.status()).revision });
+  assert.deepEqual(h.t3.writes, [], 'reapply with the same support and facts is a no-op');
+  h.gateway.state.capabilities['gpt-6-astra'] = { supported: false };
+  await h.service.test({ id });
+  const view = await h.service.status();
+  assert.deepEqual(h.t3.writes, [], 'health checks never apply new controls');
+  await h.service.refreshModels({ id, revision: view.revision });
+  assert.deepEqual(configs()[1][0].capabilities, { optionDescriptors: [] });
+  assert.deepEqual(h.stopped, [], 'T3 reads these capabilities without restarting the native helper');
+});
+
+test('runtime upgrades and downgrades change desired entry shape consistently in reconciliation and drift detection', async t => {
+  let time = Date.now();
+  const h = await harness(t, { now: () => time }), { id } = await add(h, ['codex']);
+  await settled();
+  const instance = `codex_gw_${id}`;
+  assert.ok(h.t3.state.instances[instance].config.customModels.every(id => typeof id === 'string'));
+  for (const supported of [true, false]) {
+    h.t3.customModelCapabilityOverrides = supported;
+    time += 60_000; // Expire the normal live-config read cache, without sleeping.
+    const view = await h.service.status();
+    assert.equal(view.gateways[0].agents.find(agent => agent.id === 'codex').state, 'drift');
+    await h.service.setAgent({ id, agent: 'codex', connected: true, revision: view.revision });
+    assert.ok(h.t3.state.instances[instance].config.customModels.every(entry => typeof entry === (supported ? 'object' : 'string')));
+    assert.notEqual((await h.service.status()).gateways[0].agents.find(agent => agent.id === 'codex').state, 'drift');
+  }
+});
+
+test('the bridge requires an explicit boolean capability advertisement', async () => {
+  for (const flag of [undefined, false, 'true', 1, true]) {
+    const t3 = createGatewayT3({ call: async () => ({ settings: { providerInstances: {} }, customModelCapabilityOverrides: flag }) });
+    assert.equal((await t3.read()).customModelCapabilityOverrides, flag === true);
+  }
+});
+
+test('OpenCode v2 gets the providers config shape from the harness version', async t => {
+  const h = await harness(t, { getHarness: async provider => provider === 'opencode' ? { id: 'opencode', version: '2.2.6' } : undefined });
+  h.gateway.state.capabilities['gpt-6-astra'] = { supported_efforts: ['low', 'high'] };
+  const { id } = await add(h, ['opencode']);
+  const config = JSON.parse(await fs.readFile(path.join(h.root, `state/setup/gateways/agents/${id}.json`), 'utf8'));
+  assert.equal(config.provider, undefined, 'v1 spelling must not appear');
+  const provider = config.providers['t3gw-my-proxy'];
+  assert.equal(provider.package, '@opencode/ai/providers/openai-compatible');
+  assert.equal(provider.settings.baseURL, `${h.gateway.url}/v1`);
+  assert.match(provider.settings.apiKey, /^\{file:.*\.key\}$/);
+  assert.deepEqual(provider.models['gpt-6-astra'].capabilities.reasoning, { supported: true, effort: ['low', 'high'] });
+  assert.deepEqual(provider.models['claude-opus-4-8'].capabilities.reasoning, { supported: false });
+});
+
 test('refreshing with the same models restarts nothing', async t => {
   const h = await harness(t), { id } = await add(h, ['codex']);
   await settled();
@@ -506,7 +717,7 @@ test('testing an unsaved address changes nothing', async t => {
   const { result } = await h.service.test({ url: `${h.gateway.url}/v1`, key: 'sk-try' });
   assert.equal(result.ok, true);
   assert.equal(h.gateway.state.keys[0], 'Bearer sk-try');
-  assert.deepEqual(result.offers, { claude: 1, codex: 1, opencode: 2 });
+  assert.deepEqual(result.offers, { claude: 1, codex: 1, opencode: 2, pi: 2, grok: 0 });
   assert.equal((await h.service.status()).gateways.length, 0);
   assert.equal(h.vault.rows.size, 0);
 });

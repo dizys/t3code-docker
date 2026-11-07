@@ -83,3 +83,16 @@ test('client compilation cannot load operator Vite environment files from a sour
   }
   await assertPublicBuildEnvironment(root);
 });
+
+test('integration smoke checks capability negotiation on the correct side of the runtime upgrade', async () => {
+  const script = await fs.readFile(new URL('../scripts/t3-integration-smoke.mjs', import.meta.url), 'utf8');
+  const upgrade = script.indexOf('const answer = await manager.update(');
+  assert.ok(upgrade > 0);
+  const upstream = script.slice(0, upgrade), patched = script.slice(upgrade);
+  assert.match(upstream, /gatewayRead\.customModelCapabilityOverrides, false/);
+  assert.match(upstream, /const customModels = \["smoke-model"\]/);
+  assert.doesNotMatch(upstream, /customModelCapabilityOverrides, true/);
+  assert.match(patched, /gatewayT3\.read\(\)\)\.customModelCapabilityOverrides, true/);
+  assert.match(patched, /customModels: richCustomModels/);
+  assert.match(patched, /config\.customModels, richCustomModels/);
+});

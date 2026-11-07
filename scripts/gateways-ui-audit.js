@@ -29,7 +29,7 @@ const SECRET = 'sk-audit-secret-value', MANAGEMENT = 'management-audit-value';
       const viewport = TAB ? { width: Number(variant.slice(4)), height: 820 } : phone ? { width: 390, height: 844 } : { width: 1280, height: 900 };
       const context = await scope.context(browser, { viewport, colorScheme: theme, reducedMotion: 'reduce', hasTouch: phone });
       const page = await context.newPage(), errors = [], calls = [];
-      let fixture = createGatewaysFixtures({ scenario: 'empty' }), gate = null, gateRoute = null, conflict = false, installed = ['claude', 'codex', 'opencode'];
+      let fixture = createGatewaysFixtures({ scenario: 'empty' }), gate = null, gateRoute = null, conflict = false, installed = ['claude', 'codex', 'opencode', 'pi', 'grok'];
       page.on('pageerror', error => errors.push(error.message));
       const status = () => { const s = statusFor('skills'); for (const agent of s.harnesses) agent.installed = installed.includes(agent.id); return s; };
       await routeConsole(page, { status, ports: () => portsFor('ready') });
@@ -129,8 +129,10 @@ const SECRET = 'sk-audit-secret-value', MANAGEMENT = 'management-audit-value';
       await leave('key');
       await check().getByText('Connected').waitFor();
       if (phone) await target.locator('.tc-wizard-rail-toggle').click();
-      assert.equal(await target.locator('[data-gw-agent="codex"]').isDisabled(), true, 'Without the Responses API, Codex can’t be chosen');
-      await target.getByText('This gateway has no Responses API').waitFor();
+      for (const driver of ['codex', 'grok']) {
+        assert.equal(await target.locator(`[data-gw-agent="${driver}"]`).isDisabled(), true, 'Without the Responses API, ' + driver + ' can’t be chosen');
+        await target.locator(`[data-key="gw-pick-${driver}"]`).getByText('This gateway has no Responses API').waitFor();
+      }
       if (phone) await target.locator('.tc-wizard-rail-toggle').click();
 
       // ---- a fix in one press, and a gateway that says what it is ---------------------
@@ -187,6 +189,8 @@ const SECRET = 'sk-audit-secret-value', MANAGEMENT = 'management-audit-value';
       const hubs = Object.values((await fixture.t3()).state.hubs);
       assert.deepEqual(hubs.map(hub => [hub.kind, hub.url, hub.managementKey]), [['cliproxy', 'http://host.docker.internal:8317', MANAGEMENT]], 'T3 Code has the hub');
       const id = 'cliproxyapi';
+      const instances = (await fixture.t3()).state.instances;
+      for (const driver of ['claudeAgent', 'codex', 'opencode', 'pi', 'grok']) assert.ok(instances[driver + '_gw_' + id], driver + ' connects through the editor');
       await target.locator(phone ? `[data-key="gw-phone-${id}"]` : `[data-key="gw-${id}"]`).waitFor();
       if (!phone) await target.locator(`[data-key="gw-limits-${id}"]`).getByText('3 accounts').waitFor({ timeout: 8000 });
       await noOverflow('page'); await shot('page');

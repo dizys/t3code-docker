@@ -7,10 +7,13 @@
 // words are never shown, because an error body can echo the key.
 import { PROTOCOLS } from './catalog.mjs';
 import { parseAddress, withHost } from './address.mjs';
-import { parseModelList } from './models.mjs';
+import { parseModelCapabilities, parseModelList } from './models.mjs';
 
 const DOCKER_HOST = 'host.docker.internal';
 const MAX_LIST_BYTES = 8 * 1024 * 1024;
+// This is the catalog schema version we understand, not an installed agent's
+// version. Newer versions advertise max/ultra as well. No inference is sent.
+const CATALOG_PATH = '/v1/models?client_version=0.144.0';
 
 // Gateways answer by client. CLIProxyAPI gives anything naming this header its
 // Anthropic list, where other vendors' models wear `claude-` names so Claude Code
@@ -98,13 +101,13 @@ const routeState = status => {
  * Probe an address. Never throws: a failure is a result.
  *
  *   { at, ok, code, message, hint, fix, ms, url, notes, insecure, product,
- *     models: { listed, ids }, protocols: { messages, responses, chat } }
+ *     models: { listed, ids, capabilities }, protocols: { messages, responses, chat } }
  */
 export async function probeGateway({ url: input, key = '', fetchImpl = globalThis.fetch, timeoutMs = 6000, now = Date.now, signal } = {}) {
   const at = now(), address = parseAddress(input);
-  if (!address.ok) return { at, ok: false, code: 'invalid', message: address.error, models: { listed: false, ids: [] }, protocols: {} };
+  if (!address.ok) return { at, ok: false, code: 'invalid', message: address.error, models: { listed: false, ids: [], capabilities: {} }, protocols: {} };
   const { url, notes, insecure } = address, headers = headersFor(key), limit = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
-  const finish = (result) => ({ at, url, notes, insecure, ms: Math.max(0, now() - at), models: { listed: false, ids: [] }, protocols: {}, ...result });
+  const finish = (result) => ({ at, url, notes, insecure, ms: Math.max(0, now() - at), models: { listed: false, ids: [], capabilities: {} }, protocols: {}, ...result });
   const request = (path, init = {}) => fetchImpl(url + path, { redirect: 'manual', ...init, headers: { ...headers, ...init.headers }, signal: limit() });
 
   let list;
@@ -119,14 +122,17 @@ export async function probeGateway({ url: input, key = '', fetchImpl = globalThi
       ...(target?.ok ? { hint: `It points to ${target.url}.`, fix: { url: target.url, label: 'Use that address' } } : { hint: 'Use the address it redirects to.' }) });
   }
 
-  const readIds = async response => {
+  // The ids and the reasoning facts ride in the same list entry, so read them
+  // from the same body: a second read would see a second response.
+  const readModels = async response => {
     const body = response.ok ? await readJson(response) : (await discard(response), null);
-    return body === null ? null : parseModelList(body);
+    const ids = body === null ? null : parseModelList(body);
+    return ids === null ? null : { ids, capabilities: parseModelCapabilities(body) ?? {} };
   };
-  let ids = await readIds(list);
+  let listed = await readModels(list);
   // Anthropic's own API refuses a list without its header.
-  if (ids === null && list.status !== 401 && list.status !== 403) ids = await request('/v1/models', { headers: ANTHROPIC }).then(readIds, () => null);
-  const models = { listed: ids !== null, ids: ids ?? [] };
+  if (listed === null && list.status !== 401 && list.status !== 403) listed = await request('/v1/models', { headers: ANTHROPIC }).then(readModels, () => null);
+  const models = { listed: listed !== null, ids: listed?.ids ?? [], capabilities: listed?.capabilities ?? {} };
   const product = identify(address, limit, fetchImpl);
   const routes = await Promise.all(Object.values(PROTOCOLS).map(async protocol => {
     try {
@@ -142,6 +148,21 @@ export async function probeGateway({ url: input, key = '', fetchImpl = globalThi
     return finish({ ok: false, code: 'unauthorized', status: list.status, protocols, models,
       message: key ? 'The gateway turned this key down.' : 'This gateway needs a key.',
       hint: key ? 'Check that it’s a key for this gateway and that it’s still active.' : 'Enter one above.' });
+  }
+  // CLIProxyAPI's ordinary list strips capability metadata. Its Codex-client
+  // catalog describes every provider, not just OpenAI. Keep the ordinary ids
+  // authoritative when available: catalog templates must never add phantom
+  // routes. Failure, redirects, and older servers gracefully retain that list.
+  if (known === 'cliproxyapi') {
+    try {
+      const response = await request(CATALOG_PATH);
+      const body = response.ok ? await readJson(response) : (await discard(response), null);
+      if (Array.isArray(body?.models)) {
+        const ids = parseModelList(body), capabilities = parseModelCapabilities(body) ?? {};
+        if (!models.listed) { models.ids = ids; models.listed = true; }
+        for (const id of models.ids) if (!Object.hasOwn(models.capabilities, id) && Object.hasOwn(capabilities, id)) models.capabilities[id] = capabilities[id];
+      }
+    } catch { /* The optional catalog must not break an otherwise working gateway. */ }
   }
   if (!values.includes('available') && !models.listed) {
     const notJson = list.ok;

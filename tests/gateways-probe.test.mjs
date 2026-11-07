@@ -25,7 +25,7 @@ test('a working gateway reports its models and every protocol it has', async t =
   const server = await serve(gateway({ '/v1/responses': (req, res) => json(res, 404, {}) })); within(t, server);
   const result = await probeGateway({ url: server.url + '/v1', key: 'sk-test' });
   assert.equal(result.ok, true);
-  assert.deepEqual(result.models, { listed: true, ids: ['model-a', 'model-b'] });
+  assert.deepEqual(result.models, { listed: true, ids: ['model-a', 'model-b'], capabilities: {} });
   assert.deepEqual(result.protocols, { messages: 'available', responses: 'missing', chat: 'available' });
   assert.equal(result.url, server.url);
   assert.match(result.notes[0], /Removed \/v1/);
@@ -61,7 +61,7 @@ test('Anthropic\'s own API lists models only when its header is there', async t 
     : json(res, 400, { error: 'anthropic-version: header is required' }) })); within(t, server);
   const result = await probeGateway({ url: server.url, key: 'sk-test' });
   assert.equal(result.ok, true);
-  assert.deepEqual(result.models, { listed: true, ids: ['claude-opus-5-5'] });
+  assert.deepEqual(result.models, { listed: true, ids: ['claude-opus-5-5'], capabilities: {} });
 });
 
 test('a refused key is not asked about twice', async t => {
@@ -170,4 +170,65 @@ test('a bad address fails before anything is sent', async () => {
 test('an upstream error after the list is unknown, not missing', async t => {
   const server = await serve(gateway({ '/v1/messages': (req, res) => json(res, 502, {}) })); within(t, server);
   assert.equal((await probeGateway({ url: server.url })).protocols.messages, 'unknown');
+});
+
+test('reasoning facts listed beside a model ride along with the list', async t => {
+  const server = await serve(gateway({ '/v1/models': (req, res) => json(res, 200, { data: [
+    { id: 'model-b', reasoning: { supported_efforts: ['high', 'low'] } },
+    { id: 'model-a' },
+  ] }) })); within(t, server);
+  const result = await probeGateway({ url: server.url, key: 'sk-test' });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.models, { listed: true, ids: ['model-a', 'model-b'], capabilities: { 'model-b': { supported: true, effort: ['low', 'high'] } } });
+});
+
+test('CLIProxyAPI catalog enriches shared models without adding template-only ids', async t => {
+  const server = await serve(gateway({
+    '/': (req, res) => json(res, 200, { message: 'CLIProxyAPI' }),
+    '/v1/models?client_version=0.144.0': (req, res) => json(res, 200, { models: [
+      { slug: 'model-a', supported_reasoning_levels: [{ effort: 'low' }, { effort: 'ultra' }, { effort: '{file:secret}' }] },
+      { slug: 'model-b', supported_reasoning_levels: [] },
+      { slug: 'template-only', supported_reasoning_levels: [{ effort: 'high' }] },
+    ] }),
+  })); within(t, server);
+  const result = await probeGateway({ url: server.url, key: 'sk-catalog' });
+  assert.deepEqual(result.models, { listed: true, ids: ['model-a', 'model-b'], capabilities: { 'model-a': { supported: true, effort: ['low', 'ultra'] } } });
+  const catalog = server.requests.find(row => row.url.includes('client_version'));
+  assert.equal(catalog.method, 'GET');
+  assert.equal(catalog.headers.authorization, 'Bearer sk-catalog');
+  assert.equal(catalog.headers['anthropic-version'], undefined);
+});
+
+test('optional CLIProxyAPI catalog failures leave ordinary discovery working', async t => {
+  for (const [status, body] of [[404, {}], [401, {}], [200, { models: 'invalid' }], [302, {}]]) {
+    const server = await serve(gateway({ '/': (req, res) => json(res, 200, { message: 'CLIProxyAPI' }),
+      '/v1/models?client_version=0.144.0': (req, res) => json(res, status, body) })); within(t, server);
+    const result = await probeGateway({ url: server.url });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.models, { listed: true, ids: ['model-a', 'model-b'], capabilities: {} });
+  }
+});
+
+test('catalog can supply discovery on CLIProxyAPI when its ordinary list is unavailable', async t => {
+  const server = await serve(gateway({ '/': (req, res) => json(res, 200, { message: 'CLIProxyAPI' }),
+    '/v1/models': (req, res) => json(res, 404, {}),
+    '/v1/models?client_version=0.144.0': (req, res) => json(res, 200, { models: [{ slug: 'claude-model', supported_reasoning_levels: [{ effort: 'max' }] }] }) })); within(t, server);
+  const result = await probeGateway({ url: server.url });
+  assert.deepEqual(result.models, { listed: true, ids: ['claude-model'], capabilities: { 'claude-model': { supported: true, effort: ['max'] } } });
+});
+
+test('ordinary explicit reasoning facts win over CLIProxyAPI catalog templates', async t => {
+  const server = await serve(gateway({ '/': (req, res) => json(res, 200, { message: 'CLIProxyAPI' }),
+    '/v1/models': (req, res) => json(res, 200, { data: [{ id: 'model-a', reasoning: false }] }),
+    '/v1/models?client_version=0.144.0': (req, res) => json(res, 200, { models: [{ slug: 'model-a', supported_reasoning_levels: [{ effort: 'high' }] }] }) })); within(t, server);
+  assert.deepEqual((await probeGateway({ url: server.url })).models.capabilities, { 'model-a': { supported: false } });
+});
+
+test('other gateways and rejected keys never request the CLIProxyAPI catalog', async t => {
+  for (const identified of [false, true]) {
+    const server = await serve(gateway({ '/': (req, res) => json(res, 200, identified ? { message: 'CLIProxyAPI' } : {}),
+      ...(identified ? { '/v1/models': (req, res) => json(res, 401, {}) } : {}) })); within(t, server);
+    await probeGateway({ url: server.url });
+    assert.ok(!server.requests.some(row => row.url.includes('client_version')));
+  }
 });

@@ -39,6 +39,9 @@ export function createLatestCache({ keys, lookup, read, write, ttlMs = DEFAULT_T
   let running = null;
   let runningManual = false;
   let queued = null;
+  // Bounded like the throttle in server.mjs: a rotating set of keys must not
+  // grow this forever. The oldest go first.
+  const FAILURES_KEPT = 500;
   let failures = {};
   const lookups = new Map();
   let saving = Promise.resolve();
@@ -75,7 +78,12 @@ export function createLatestCache({ keys, lookup, read, write, ttlMs = DEFAULT_T
       versions[key] = entry;
       delete failures[key];
     } catch (error) {
-      if (lookups.get(key) === request) failures[key] = { at: now(), error: String(error?.message ?? error).slice(0, 300) };
+      if (lookups.get(key) === request) {
+        delete failures[key];
+        failures[key] = { at: now(), error: String(error?.message ?? error).slice(0, 300) };
+        const over = Object.keys(failures).length - FAILURES_KEPT;
+        if (over > 0) for (const old of Object.keys(failures).slice(0, over)) delete failures[old];
+      }
     } finally {
       if (lookups.get(key) === request) lookups.delete(key);
     }
@@ -84,6 +92,12 @@ export function createLatestCache({ keys, lookup, read, write, ttlMs = DEFAULT_T
     // Targeted and bulk checks can finish together. Serialize snapshots so
     // a slow older write cannot restore obsolete state after a newer one.
     saving = saving.then(async () => {
+      // A key nobody asks about anymore leaves no failure behind: entries
+      // older than the answers they shadow are dropped on save.
+      const at = now();
+      for (const [key, hit] of Object.entries(failures)) {
+        if (!hit || !Number.isFinite(hit.at) || at - hit.at >= ttlMs) delete failures[key];
+      }
       try { await write(JSON.stringify({ checkedAt, versions, failures }, null, 2)); }
       catch { /* a read-only volume still has the answers in memory */ }
     });

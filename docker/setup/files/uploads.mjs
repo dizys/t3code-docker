@@ -8,6 +8,14 @@ import { readText, statRevision } from './text.mjs';
 
 export const CHUNK_BYTES=8*1024*1024;
 const RESERVE=1024**3,DAY=86400_000;
+// Bytes promised to in-flight uploads but not yet on disk, across every
+// instance in this process. Starts share one queue so checking free space and
+// registering claims cannot race across instances. Chunks run under per-id
+// locks, with pending claims deducted from the available space.
+let reservedBytes=0;
+// One remaining-byte claim per upload id, shared by duplicate live instances.
+const reservedIds=new Map();
+const starts=createLimiter(1);
 const validId=id=>typeof id==='string'&&/^u_[0-9a-f-]{36}$/.test(id);
 const relative=value=>{
   if(typeof value!=='string'||!value||path.isAbsolute(value)||Buffer.byteLength(value)>4096)fail('invalid','Use a relative upload path.');
@@ -22,7 +30,15 @@ const digest=async(file,expected)=>{
   }finally{await handle.close();}
 };
 export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.statfs(value),onFinish=()=>{}}) {
-  const sessions=new Map(),locks=new Map(),metadata=createLimiter(1),starts=createLimiter(1);
+  const sessions=new Map(),locks=new Map(),metadata=createLimiter(1);
+  const reserve=row=>{row.reserved=row.size;reservedBytes+=row.size;if(row.size>0)reservedIds.set(row.id,row.size);};
+  // Reconcile an absolute remainder: duplicate instances must not release the same chunk twice.
+  const release=(row,n=row.reserved??0)=>{
+    row.reserved=Math.max(0,(row.reserved??0)-n);
+    const pending=reservedIds.get(row.id)??0,remaining=Math.min(pending,row.reserved);
+    reservedBytes-=pending-remaining;
+    if(remaining)reservedIds.set(row.id,remaining);else reservedIds.delete(row.id);
+  };
   const directory=path.join(policy.stateDir,'files','uploads');
   let loading;
   const lock=(id,work)=>{if(!locks.has(id))locks.set(id,createLimiter(1));return locks.get(id)(work);};
@@ -43,10 +59,12 @@ export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.
         const content=await readText(file),row=JSON.parse(content.text);
         if(row.id!==id||!Number.isSafeInteger(row.size)||row.size<0||!Number.isSafeInteger(row.received)||row.received<0||row.received>row.size||!Number.isFinite(row.at))continue;
         relative(row.relative);normalizePath(row.dest);normalizePath(row.parent);if(row.temp!==path.join(row.parent,'.t3-upload-'+row.id+'.part'))continue;
-        if(row.result){normalizePath(row.result.path);sessions.set(row.id,row);continue;}
+        if(row.result){normalizePath(row.result.path);row.reserved=0;sessions.set(row.id,row);continue;}
         const parent=await maybeStat(row.parent),temp=await maybeStat(row.temp);
         if(!parent?.isDirectory()||parent.isSymbolicLink()||identity(parent)!==row.parentIdentity||!temp?.isFile()||temp.isSymbolicLink()||identity(temp)!==row.identity||Number(temp.size)>row.size)continue;
-        row.received=Number(temp.size);sessions.set(row.id,row);
+        row.received=Number(temp.size);row.reserved=row.size-row.received;
+        if(row.reserved>0&&!reservedIds.has(row.id)){reservedIds.set(row.id,row.reserved);reservedBytes+=row.reserved;}
+        sessions.set(row.id,row);
       }catch{/* Foreign or incomplete metadata cannot authorize staging cleanup. */}
     }
     await trim();
@@ -69,23 +87,22 @@ export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.
     const results=[],created=[];
     const pending=items.filter(item=>!item.directory&&![...sessions.values()].some(row=>!row.result&&row.dest===dest&&row.relative===item.path&&row.size===item.size&&row.lastModified===item.lastModified));
     const required=pending.reduce((sum,row)=>sum+row.size,0);if(!Number.isSafeInteger(required))fail('too-large','This upload is too large. Upload a smaller selection.');
-    const device=String((await fs.lstat(dest,{bigint:true})).dev),reserved=[...sessions.values()].filter(row=>!row.result&&row.parentIdentity.split(':')[0]===device).reduce((sum,row)=>sum+row.size-row.received,0);
-    const freeBytes=await enough(dest,required+reserved);
+    const freeBytes=await enough(dest,required+reservedBytes);
     if([...sessions.values()].filter(row=>!row.result).length+pending.length>2048)fail('busy','There are too many unfinished uploads. Cancel old uploads before starting more.');
     try{
       for(const item of items){
         if(item.directory){const parent=await parents(dest,item.parts,input);results.push({path:item.path,directory:true,result:{path:parent,directory:true}});continue;}
         const previous=[...sessions.values()].find(row=>!row.result&&row.dest===dest&&row.relative===item.path&&row.size===item.size&&row.lastModified===item.lastModified);
-        if(previous){const actual=await maybeStat(previous.temp);if(actual?.isFile()&&!actual.isSymbolicLink()&&identity(actual)===previous.identity&&Number(actual.size)<=previous.size){previous.received=Number(actual.size);previous.at=now();results.push({...previous,conflict:await conflict(previous)});continue;}fail('changed','An unfinished upload changed on disk. Cancel it before restarting.');}
+        if(previous){const actual=await maybeStat(previous.temp);if(actual?.isFile()&&!actual.isSymbolicLink()&&identity(actual)===previous.identity&&Number(actual.size)<=previous.size){const landed=Number(actual.size);if(landed>previous.received)release(previous,landed-previous.received);previous.received=landed;previous.at=now();results.push({...previous,conflict:await conflict(previous)});continue;}fail('changed','An unfinished upload changed on disk. Cancel it before restarting.');}
         const parent=await parents(dest,item.parts.slice(0,-1),input),target=path.join(parent,item.parts.at(-1)),id='u_'+randomUUID(),temp=path.join(parent,'.t3-upload-'+id+'.part');
         const row=await guard.run(input,[{path:target,mode:'write',missing:true,inUse:false}],async([target])=>{
           const handle=await fs.open(path.join(target.pin.parent,path.basename(temp)),'wx',0o600);
           try{const stat=await handle.stat({bigint:true});return {id,dest,parent:target.pin.parent,parentIdentity:identity(target.pin.stat),relative:item.path,target:target.path,temp,identity:identity(stat),size:item.size,lastModified:item.lastModified,received:0,at:now(),existingRevision:target.stat?statRevision(target.stat):null};}finally{await handle.close();}
         });
-        sessions.set(id,row);created.push(row);results.push({...row,conflict:await conflict(row)});
+        sessions.set(id,row);reserve(row);created.push(row);results.push({...row,conflict:await conflict(row)});
       }
       for(const row of created)await persist(row);return {ok:true,chunkBytes:CHUNK_BYTES,freeBytes,uploads:results.map(row=>row.directory?row:publicSession(row))};
-    }catch(error){for(const row of created){await forget(row.id);await safeUnlink(row);}throw error;}
+    }catch(error){for(const row of created){release(row);await forget(row.id);await safeUnlink(row);}throw error;}
   });
   const publicSession=row=>({id:row.id,path:row.relative,size:row.size,received:row.received,...(row.conflict?{conflict:row.conflict}:{}),...(row.result?{result:row.result}:{})});
   const get=async id=>{await ready();if(!validId(id)||!sessions.has(id))fail('missing','This upload session is no longer here. Drop the file again to start or resume.');return sessions.get(id);};
@@ -96,14 +113,14 @@ export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.
     if(!Buffer.isBuffer(body)||body.length>CHUNK_BYTES)fail('too-large','Each upload chunk can contain up to 8 MiB.');
     if(input.offset===null||input.offset===undefined)fail('invalid','Each upload chunk needs its offset.');const offset=Number(input.offset);if(!Number.isSafeInteger(offset)||offset<0||offset!==row.received)fail('changed','Continue this upload from the saved offset.',{received:row.received});
     if(row.received+body.length>row.size)fail('invalid','This chunk exceeds the declared file size.');
-    await enough(row.parent,body.length);
+    await enough(row.parent,body.length+reservedBytes-(reservedIds.get(row.id)??0));
     return guard.run(input,[{path:row.target,mode:'write',missing:true,inUse:false}],async([target])=>{
       if(identity(target.pin.stat)!==row.parentIdentity||target.pin.parent!==row.parent)fail('changed','The upload folder changed. Cancel this upload and choose the folder again.');
       const temp=path.join(`/proc/self/fd/${target.pin.handle.fd}`,path.basename(row.temp)),handle=await fs.open(temp,constants.O_RDWR|constants.O_NOFOLLOW|constants.O_NONBLOCK);
       try{
         const stat=await handle.stat({bigint:true});if(!stat.isFile()||identity(stat)!==row.identity||Number(stat.size)!==row.received)fail('changed','The staged upload changed. Drop the same file again to check its saved offset.',{received:row.received});
         let written=0;while(written<body.length){const result=await handle.write(body,written,body.length-written,row.received+written);if(!result.bytesWritten)fail('no-space','The disk could not accept more upload data.');written+=result.bytesWritten;}
-        await handle.sync();row.received+=written;row.at=now();await persist(row);return {ok:true,received:row.received};
+        await handle.sync();row.received+=written;release(row,written);row.at=now();await persist(row);return {ok:true,received:row.received};
       }finally{await handle.close();}
     });
   });
@@ -113,7 +130,7 @@ export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.
     const choice=input.onConflict||'ask';if(!['ask','replace','keep-both','skip'].includes(choice))fail('invalid','Choose Replace, Keep both or Skip.');
     const existing=await maybeStat(row.target),current=await conflict(row);
     if(existing&&choice==='ask')fail('conflicts','This name is already here. Choose what to keep.',{conflicts:[{name:path.basename(row.target),...current}],received:row.received});
-    if(existing&&choice==='skip'){await safeUnlink(row);row.result={skipped:true,path:row.target};row.finalRevision=statRevision(existing);await persist(row);return {ok:true,...row.result};}
+    if(existing&&choice==='skip'){await safeUnlink(row);release(row);row.result={skipped:true,path:row.target};row.finalRevision=statRevision(existing);await persist(row);return {ok:true,...row.result};}
     const dest=existing&&choice==='keep-both'?path.join(row.parent,await uniqueName(row.parent,path.basename(row.target))):row.target;
     const result=await guard.run(input,[{path:dest,mode:existing&&choice==='replace'?'remove':'write',missing:true}],async([target],verify)=>{
       if(identity(target.pin.stat)!==row.parentIdentity)fail('changed','The upload folder changed.');
@@ -126,13 +143,13 @@ export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.
       if(target.stat)replaced=await trash.stash(target,{reason:'replaced'});
       try{await renameExclusive(temp,target.pin.pinned);}catch(error){if(replaced)await trash.rollback(replaced,target.pin.pinned).catch(()=>{});throw error;}return {path:target.path,...(replaced?{replaced:replaced.id}:{})};
     });
-    row.result=result;row.at=now();row.finalRevision=statRevision(await fs.lstat(result.path,{bigint:true}));await persist(row);void Promise.resolve(onFinish(result)).catch(()=>{});return {ok:true,...result};
+    row.result=result;release(row);row.at=now();row.finalRevision=statRevision(await fs.lstat(result.path,{bigint:true}));await persist(row);void Promise.resolve(onFinish(result)).catch(()=>{});return {ok:true,...result};
   });
   const cancel=async input=>{
     if(!Array.isArray(input.ids)||input.ids.length>500)fail('invalid','Choose the uploads to cancel.');
-    await ready();for(const id of input.ids)await lock(id,async()=>{const row=await get(id);if(!row.result)await safeUnlink(row);await forget(id);});return {ok:true};
+    await ready();for(const id of input.ids)await lock(id,async()=>{const row=await get(id);if(!row.result){release(row);await safeUnlink(row);}await forget(id);});return {ok:true};
   };
-  const prune=async()=>{await ready();for(const [id,row]of sessions)if(now()-row.at>DAY)await lock(id,async()=>{if(!row.result)await safeUnlink(row);await forget(id);});await trim();};
+  const prune=async()=>{await ready();for(const [id,row]of sessions)if(now()-row.at>DAY)await lock(id,async()=>{if(!row.result){release(row);await safeUnlink(row);}await forget(id);});await trim();};
   const jobs=async()=>{await ready();return [...sessions.values()].sort((a,b)=>Number(!!a.result)-Number(!!b.result)||b.at-a.at).slice(0,100).map(row=>({id:row.id,kind:'upload',label:row.relative,relative:row.relative,dest:row.dest,path:row.target,received:row.received,done:row.received,total:row.size,unit:'bytes',state:row.result?'done':'waiting',at:row.at,...(row.result?{result:row.result,finishedAt:new Date(row.at).toISOString()}:{} )}));};
   return {start,chunk,finish,cancel,prune,ready,jobs,list:()=>[...sessions.values()].map(publicSession)};
 }

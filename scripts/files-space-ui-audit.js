@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const { runCases } = require('./lib/browser-audit-cases.cjs');
 // Real Files controls; isolated mutable data and delayed/failing HTTP replies.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 let chromium;try{({chromium}=require('playwright'));}catch{({chromium}=require('playwright-core'));}
@@ -7,10 +8,13 @@ const {createFilesFixtures}=require('./lib/files-fixtures.cjs');
 const {createDownloadFixture,ZIP_BYTES}=require('./lib/console-download-fixture.cjs');
 const sourceBase=process.argv[2]||'http://127.0.0.1:23836/__setup/',key=process.argv[3]||'dev',out=process.env.T3_FILES_UI_OUTPUT||'/tmp/t3-files-space-ui';fs.mkdirSync(out,{recursive:true});
 const variants=[['desktop',1440,900],['compact',1280,800],['tablet',834,1112],['phone',390,844],['narrow',320,740],['embedded',1198,878],['embedded-phone',390,844]],subset=process.env.T3_FILES_UI_VARIANTS?.split(',');
-(async()=>{const transport=await createDownloadFixture({base:sourceBase,key}),base=transport.base;let browser,checks=0;
+(async()=>{let browser,checks=0;
  try{browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
- try{for(const theme of(process.env.T3_FILES_UI_THEMES?.split(',')||['light','dark']))for(const[variant,width,height]of variants){if(subset&&!subset.includes(variant))continue;
-  const context=await browser.newContext({viewport:{width,height},colorScheme:theme,reducedMotion:'reduce',acceptDownloads:true}),page=await context.newPage(),fixture=createFilesFixtures(),errors=[],writes=new Map();let hold=null,lowSpace=false,nearFull=false,activeFixture=fixture,preparedDownloadToken=null;
+ const cases=(process.env.T3_FILES_UI_THEMES?.split(',')||['light','dark']).flatMap(theme=>variants.filter(([variant])=>!subset||subset.includes(variant)).map(variant=>[theme,...variant]));
+ await runCases(cases,async([theme,variant,width,height],scope)=>{
+  const transport=await createDownloadFixture({base:sourceBase,key}),base=transport.base;
+  scope.cleanup(()=>transport.close());
+  const context=await scope.context(browser, {viewport:{width,height},colorScheme:theme,reducedMotion:'reduce',acceptDownloads:true}),page=await context.newPage(),fixture=createFilesFixtures(),errors=[],writes=new Map();let hold=null,lowSpace=false,nearFull=false,activeFixture=fixture,preparedDownloadToken=null;
   page.setDefaultTimeout(10000);page.on('pageerror',error=>errors.push(error.stack));await routeConsole(page,{status:()=>statusFor('skills'),ports:()=>portsFor('ready'),downloadHTTP:true});
   await page.route(url=>!url.pathname.endsWith('/files/zip'),async route=>{const req=route.request(),url=new URL(req.url());if(!url.pathname.includes('/files/'))return route.fallback();const input=req.method()==='POST'?(url.pathname.endsWith('/chunk')?req.postDataBuffer():req.postDataJSON()):{};
    const gate=hold&&url.pathname.endsWith(hold.route)?hold:null;
@@ -130,6 +134,6 @@ const variants=[['desktop',1440,900],['compact',1280,800],['tablet',834,1112],['
     await visit('files/home');await item('/srv/home/hello.txt').waitFor();await visit('files');await item('/srv/projects').waitFor();await target.locator('[data-cmd="files.new-folder"]').click();await target.locator('#files-rename-name').waitFor();await target.locator('#files-rename-name').fill('Workspace folder');await page.keyboard.press('Enter');await item('/srv/projects/Workspace folder').waitFor();await fits();checks++;
    }
    assert.deepEqual(errors,[]);
-  }catch(error){await shot('failure');console.error(variant,theme,{downloads:transport.stats()},await target.evaluate(()=>({hash:location.hash,text:document.body.innerText.slice(-3500)})),errors);throw error;}finally{if(hold)hold=null;await context.close();}console.log(variant+' '+theme+': passed');
- }}finally{await browser?.close();}}finally{await transport.close();}console.log('Files Space and archives audit passed ('+checks+' checks). Screens: '+out);
+  }catch(error){await shot('failure');console.error(variant,theme,{downloads:transport.stats()},await target.evaluate(()=>({hash:location.hash,text:document.body.innerText.slice(-3500)})),errors);throw error;}finally{if(hold)hold=null;}console.log(variant+' '+theme+': passed');
+ },{name:'Files archives',output:out});}finally{await browser?.close();}console.log('Files Space and archives audit passed ('+checks+' checks). Screens: '+out);
 })().catch(error=>{console.error(error);process.exitCode=1;});

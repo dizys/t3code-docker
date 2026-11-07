@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const { runCases } = require('./lib/browser-audit-cases.cjs');
 // The actual MCP interface against isolated, synthetic settings. All POSTs
 // are intercepted; no real agent configuration or MCP server is touched.
 const assert = require('node:assert/strict');
@@ -15,9 +16,11 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 (async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
   try {
-    for (const theme of ['light', 'dark']) for (const variant of (TAB ? [480,639,640,704,1040].map(w=>'tab-'+w) : ['desktop', 'phone', 'embedded', 'embedded-phone'])) {
+    const variants = (TAB ? [480,639,640,704,1040].map(w=>'tab-'+w) : ['desktop', 'phone', 'embedded', 'embedded-phone']);
+    const cases = ['light', 'dark'].flatMap(theme => variants.map(variant => [theme, variant]));
+    await runCases(cases, async ([theme, variant], scope) => {
       const embedded = TAB || variant.startsWith('embedded'), phone = TAB ? Number(variant.slice(4))<640 : variant === 'phone' || variant === 'embedded-phone', viewport = TAB ? {width:Number(variant.slice(4)),height:900} : phone ? { width: 390, height: 844 } : variant === 'embedded' ? { width: 1198, height: 878 } : { width: 1440, height: 900 };
-      const context = await browser.newContext({ viewport, colorScheme: theme, reducedMotion: 'reduce' });
+      const context = await scope.context(browser, { viewport, colorScheme: theme, reducedMotion: 'reduce' });
       const page = await context.newPage(), mcp = createMcpFixtures(), errors = [], calls = [];
       let failRead = false, failRemoval = false, linkGate = null, readGate = null, parseGate = null, createGate = null, conflictLink = false, conflictSave = false, unreadableStore = false, installedOverride = null;
       page.on('pageerror', error => errors.push(error.message));
@@ -318,7 +321,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
       }
       await noOverflow(); assert.deepEqual(errors, [], 'No browser exceptions');
       console.log(`${variant} ${theme}: matrix, secrets, per-agent off, draft/poll guards, snippet, consent, partial removal, failed/late reads passed`);
-      await context.close();
-    }
+
+    }, { name: 'MCP', output: out });
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

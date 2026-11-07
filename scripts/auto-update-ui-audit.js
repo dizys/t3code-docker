@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const { runCases } = require('./lib/browser-audit-cases.cjs');
 // The Updates page against a running console: automatic-update switches and
 // schedules, the T3 Code risk confirmation, update checks and their failures.
 // Policy saves and checks are intercepted: this audit cannot change a real
@@ -67,9 +68,10 @@ const geometry = () => {
   try {
     const runs = [[320, 740, false], [360, 800, false], [390, 844, false], [1100, 1000, false], [390, 844, true], [1198, 878, true]];
     const widths = process.env.T3_AUTO_UPDATE_UI_WIDTHS?.split(',').map(Number);
-    for (const [width, height, embedded] of runs.filter(([width]) => !widths || widths.includes(width))) for (const theme of ['light', 'dark']) {
+    const cases = runs.filter(([width]) => !widths || widths.includes(width)).flatMap(variant => ['light', 'dark'].map(theme => [theme, ...variant]));
+    await runCases(cases, async ([theme, width, height, embedded], scope) => {
       const fixture = structuredClone(fixtureStatus);
-      const context = await browser.newContext({ viewport: { width, height }, colorScheme: theme, reducedMotion: 'reduce' });
+      const context = await scope.context(browser, { viewport: { width, height }, colorScheme: theme, reducedMotion: 'reduce' });
       const host = await context.newPage(), errors = [], saved = [];
       let page = host;
       host.on('pageerror', (error) => errors.push(error.message));
@@ -611,8 +613,8 @@ const geometry = () => {
       await check('Rust recovered');
       await host.screenshot({ path: path.join(output, `${tag}-rust-recovered.png`) });
 
-      assert.deepEqual(errors, []); await context.close();
+      assert.deepEqual(errors, []);
       console.log(`PASS ${tag}: startup failures, switches, release checks, Rust failure deduplication and delayed retry recovery`);
-    }
+    }, { name: 'Updates', output });
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

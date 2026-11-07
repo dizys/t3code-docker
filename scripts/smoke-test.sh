@@ -53,7 +53,14 @@ pass=0
 fail=0
 ok()   { printf '  \033[32mPASS\033[0m %s\n' "$1"; pass=$((pass+1)); }
 no()   { printf '  \033[31mFAIL\033[0m %s\n' "$1"; fail=$((fail+1)); }
-check() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else no "$1"; fi; }
+check() {
+  local check_started=$SECONDS
+  if eval "$2" >/dev/null 2>&1; then
+    ok "$1 ($((SECONDS - check_started))s)"
+  else
+    no "$1 ($((SECONDS - check_started))s)"
+  fi
+}
 # The setup service runs under a restart loop, so a single probe can land in the
 # gap and fail a release build for no reason. Retry the ones that only talk to
 # it; a genuine outage is caught separately by the crash-loop assertion below.
@@ -775,14 +782,17 @@ skills_editor_works() {
   docker cp scripts/lib/chip-focus.cjs "$NAME:/tmp/lib/chip-focus.cjs" >/dev/null 2>&1 || return 1
   docker cp scripts/lib/skills-fixtures.cjs "$NAME:/tmp/lib/skills-fixtures.cjs" >/dev/null 2>&1 || return 1
   docker cp scripts/lib/skill-audit.cjs "$NAME:/tmp/lib/skill-audit.cjs" >/dev/null 2>&1 || return 1
+  docker cp scripts/lib/browser-audit-cases.cjs "$NAME:/tmp/lib/browser-audit-cases.cjs" >/dev/null 2>&1 || return 1
   docker cp scripts/fixtures/console "$NAME:/tmp/fixtures/" >/dev/null 2>&1 || return 1
-  docker exec -e CHROME_PATH=/usr/bin/chromium \
+  docker exec -e T3_UI_AUDIT_WORKERS=2 -e CHROME_PATH=/usr/bin/chromium \
     -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
     "$NAME" node /tmp/skills-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
-  docker exec -e CHROME_PATH=/usr/bin/chromium \
+  docker exec -e T3_UI_AUDIT_WORKERS=2 -e CHROME_PATH=/usr/bin/chromium \
     -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
     "$NAME" node /tmp/skills-hooks-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
-  docker exec -e CHROME_PATH=/usr/bin/chromium \
+  # The phone review's native keyboard-scroll check has failed with concurrent
+  # scenarios on amd64. Retain its prior serial schedule and every assertion.
+  docker exec -e T3_UI_AUDIT_WORKERS=1 -e CHROME_PATH=/usr/bin/chromium \
     -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
     "$NAME" node /tmp/skills-update-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
 }
@@ -791,7 +801,9 @@ check "the Skills editor handles native policies, shared locations and file chan
 auto_update_settings_work() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0
   docker cp scripts/auto-update-ui-audit.js "$NAME:/tmp/auto-update-ui-audit.js" >/dev/null 2>&1 || return 1
-  docker exec -e CHROME_PATH=/usr/bin/chromium \
+  docker exec "$NAME" mkdir -p /tmp/lib || return 1
+  docker cp scripts/lib/browser-audit-cases.cjs "$NAME:/tmp/lib/browser-audit-cases.cjs" >/dev/null 2>&1 || return 1
+  docker exec -e T3_UI_AUDIT_WORKERS=2 -e CHROME_PATH=/usr/bin/chromium \
     -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
     "$NAME" node /tmp/auto-update-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
 }
@@ -840,13 +852,14 @@ mcp_editor_works() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0
   docker exec "$NAME" mkdir -p /tmp/t3-mcp-audit/lib /tmp/t3-mcp-audit/fixtures || return 1
   docker cp scripts/lib/mcp-fixtures.cjs "$NAME:/tmp/t3-mcp-audit/lib/mcp-fixtures.cjs" >/dev/null 2>&1 || return 1
+  docker cp scripts/lib/browser-audit-cases.cjs "$NAME:/tmp/t3-mcp-audit/lib/browser-audit-cases.cjs" >/dev/null 2>&1 || return 1
   docker cp scripts/mcp-ui-audit.js "$NAME:/tmp/t3-mcp-audit/mcp-ui-audit.js" >/dev/null 2>&1 || return 1
   docker cp scripts/lib/files-fixtures.cjs "$NAME:/tmp/t3-mcp-audit/lib/files-fixtures.cjs" >/dev/null 2>&1 || return 1
   docker cp scripts/lib/console-fixtures.cjs "$NAME:/tmp/t3-mcp-audit/lib/console-fixtures.cjs" >/dev/null 2>&1 || return 1
   docker cp scripts/lib/chip-focus.cjs "$NAME:/tmp/t3-mcp-audit/lib/chip-focus.cjs" >/dev/null 2>&1 || return 1
   docker cp scripts/lib/skills-fixtures.cjs "$NAME:/tmp/t3-mcp-audit/lib/skills-fixtures.cjs" >/dev/null 2>&1 || return 1
   docker cp scripts/fixtures/console "$NAME:/tmp/t3-mcp-audit/fixtures/console" >/dev/null 2>&1 || return 1
-  docker exec -e T3_SETUP_MODULE=/opt/t3-setup/mcp.mjs -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3/node_modules \
+  docker exec -e T3_UI_AUDIT_WORKERS=2 -e T3_SETUP_MODULE=/opt/t3-setup/mcp.mjs -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3/node_modules \
     "$NAME" node /tmp/t3-mcp-audit/mcp-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
 }
 check "MCP controls refresh immediately and preserve editor revisions and values" mcp_editor_works
@@ -856,11 +869,11 @@ gateways_page_works() {
   local audit=/tmp/t3-gateways-audit helper
   docker exec "$NAME" mkdir -p "$audit/lib" "$audit/fixtures" || return 1
   docker cp scripts/gateways-ui-audit.js "$NAME:$audit/gateways-ui-audit.js" >/dev/null 2>&1 || return 1
-  for helper in gateways-fixtures console-fixtures skills-fixtures mcp-fixtures files-fixtures; do
+  for helper in gateways-fixtures console-fixtures skills-fixtures mcp-fixtures files-fixtures browser-audit-cases; do
     docker cp "scripts/lib/$helper.cjs" "$NAME:$audit/lib/$helper.cjs" >/dev/null 2>&1 || return 1
   done
   docker cp scripts/fixtures/console "$NAME:$audit/fixtures/console" >/dev/null 2>&1 || return 1
-  docker exec -e T3_GATEWAYS_MODULE=/opt/t3-setup/gateways.mjs -e T3_SETUP_MODULE=/opt/t3-setup/mcp.mjs \
+  docker exec -e T3_UI_AUDIT_WORKERS=2 -e T3_GATEWAYS_MODULE=/opt/t3-setup/gateways.mjs -e T3_SETUP_MODULE=/opt/t3-setup/mcp.mjs \
     -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3/node_modules -e T3_GATEWAYS_UI_OUTPUT="$audit/screens" \
     "$NAME" node "$audit/gateways-ui-audit.js" "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
 }
@@ -882,6 +895,10 @@ credentials_browser_works() {
 }
 check "Vault drafts, host trust, conflicts and recovery work on desktop, phone and Settings" credentials_browser_works
 
+files_audit() {
+  docker exec -e T3_UI_AUDIT_WORKERS=2 -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    "$NAME" node "/tmp/t3-files-audit/$1" "http://127.0.0.1:3774/" "$SETUP_KEY"
+}
 files_browser_works() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0
   docker exec "$NAME" mkdir -p /tmp/t3-files-audit/lib /tmp/t3-files-audit/fixtures || return 1
@@ -889,18 +906,17 @@ files_browser_works() {
   docker cp scripts/console-editor-ui-audit.js "$NAME:/tmp/t3-files-audit/console-editor-ui-audit.js" >/dev/null 2>&1 || return 1
   docker cp scripts/files-change-ui-audit.js "$NAME:/tmp/t3-files-audit/files-change-ui-audit.js" >/dev/null 2>&1 || return 1
   docker cp scripts/files-space-ui-audit.js "$NAME:/tmp/t3-files-audit/files-space-ui-audit.js" >/dev/null 2>&1 || return 1
-  for helper in console-fixtures.cjs files-fixtures.cjs skills-fixtures.cjs mcp-fixtures.cjs console-download-fixture.cjs; do
+  for helper in console-fixtures.cjs files-fixtures.cjs skills-fixtures.cjs mcp-fixtures.cjs console-download-fixture.cjs browser-audit-cases.cjs; do
     docker cp "scripts/lib/$helper" "$NAME:/tmp/t3-files-audit/lib/$helper" >/dev/null 2>&1 || return 1
   done
   docker cp scripts/fixtures/console "$NAME:/tmp/t3-files-audit/fixtures/console" >/dev/null 2>&1 || return 1
-  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
-    "$NAME" node /tmp/t3-files-audit/files-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
-  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
-    "$NAME" node /tmp/t3-files-audit/files-change-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
-  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
-    "$NAME" node /tmp/t3-files-audit/files-space-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
-  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
-    "$NAME" node /tmp/t3-files-audit/console-editor-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
+  # Each script runs two isolated scenarios at a time. Keep scripts sequential
+  # so nesting worker pools never doubles the runner's browser concurrency.
+  local result=0 script
+  for script in files-ui-audit.js files-change-ui-audit.js files-space-ui-audit.js console-editor-ui-audit.js; do
+    files_audit "$script" >>"$UI_AUDIT_LOG" 2>&1 || result=1
+  done
+  return "$result"
 }
 check "Files browsing, selection, previews, Sizes and recovery work in every layout" files_browser_works
 
@@ -2105,6 +2121,10 @@ check "and a helper run as root under it steps down and works" \
   "output_has 'docker exec ${NAME}-boot t3-harness list' '^claude'"
 docker rm -f "${NAME}-boot" >/dev/null 2>&1 || true
 
+if [ "$HAS_BROWSER" -eq 1 ] && [ -s "$UI_AUDIT_LOG" ]; then
+  printf '\nBrowser scenario timings\n'
+  awk '/^(PASS|FAIL) .* [0-9]+\/[0-9]+ .* \([0-9.]+s\)$/ { print }' "$UI_AUDIT_LOG"
+fi
 printf '\n%d passed, %d failed\n\n' "$pass" "$fail"
 if [ "$fail" -gt 0 ] && [ -s "$UI_AUDIT_LOG" ]; then
   printf 'Smoke test diagnostics:\n'

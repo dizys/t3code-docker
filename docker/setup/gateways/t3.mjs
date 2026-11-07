@@ -22,6 +22,7 @@ export function createGatewayT3(api) {
     remove: instanceId => mutate({ operation: 'remove', instanceId }),
     /** Have T3 check an instance again, for when nothing about it needs changing. */
     refresh: instanceId => api.call('server.refreshProviders', instanceId ? { instanceId } : {}),
+    refreshLimits: () => api.call('server.refreshProviders', {}, { timeoutMs: 90_000 }),
     /** A hub for Usage → Limits, or null to remove it. A redacted key sent back keeps the saved one. */
     setHub: (id, source) => api.call('server.updateSettings', { patch: { usageLimitSources: { [id]: source } } }),
     /**

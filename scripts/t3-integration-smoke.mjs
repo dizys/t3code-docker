@@ -15,6 +15,7 @@ import { releaseForVersion, unpackRelease, archiveStem } from "../docker/runtime
 import { runtimePaths, readJson, readSelection, selectedRuntime, writeJson } from "../docker/runtime/state.mjs";
 import { PATCH_REVISION, distributionBlob } from "../docker/runtime/distribution-spec.mjs";
 import { nativeRegistry } from "../tests/fixtures/native-registry.mjs";
+import { verifyGatewayQuota } from "./lib/gateway-quota-smoke.mjs";
 
 const execute = promisify(execFile), binary = path.resolve(process.argv[2]);
 const manifest = JSON.parse(await fs.readFile(path.join(path.dirname(binary), "package.json"), "utf8"));
@@ -112,6 +113,7 @@ try {
   assert.equal((await readSelection(paths)).patchRevision, PATCH_REVISION);
   api.reset();
   const after = await until(() => api.call("server.getConfig", {}));
+  await verifyGatewayQuota({ api, gatewayT3, until });
   assert.equal(after.newProjectsRoot, workspace);
   // The new capability contract belongs to the patched server, not upstream.
   assert.equal((await gatewayT3.read()).customModelCapabilityOverrides, true, "the selected patched runtime advertises capability overrides");

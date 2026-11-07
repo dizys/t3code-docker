@@ -62,16 +62,19 @@ const T3GatewayInspector = (() => {
       </dl></section>`;
 
       // ---- limits ------------------------------------------------------------------
-      const account = entry => html`<li class="tc-gw-account" data-key="gw-account-${entry.id}">${agentTile(entry.driver === 'codex' ? 'codex' : 'claude')}<span class="tc-row-main"><span class="tc-avail-name" title="${entry.email || ''}">${entry.email || entry.id}</span><span class="tc-avail-note">${S.windowsLine(entry) || entry.plan || ''}</span></span></li>`;
+      const account = entry => html`<li class="tc-gw-account" data-key="gw-account-${entry.id}">${entry.driver === 'codex' || entry.driver === 'claudeAgent' ? agentTile(entry.driver === 'codex' ? 'codex' : 'claude') : html`<span class="tc-tile tc-tile--icon tc-tile--xs" aria-hidden="true">${icon('gauge')}</span>`}<div class="tc-row-main"><span class="tc-avail-name" title="${entry.email || entry.id}">${entry.email || entry.id}</span><span class="tc-avail-note">${[S.quotaProvider(entry.driver), entry.plan].filter(Boolean).join(' · ')}</span>
+        ${entry.unavailable || !entry.windows.length ? html`<p class="tc-gw-quota-message">${entry.unavailable?.message || 'Quota is unavailable for this account.'}</p>` : html`<ul class="tc-gw-windows">${entry.windows.map(window => html`<li data-key="gw-window-${window.id}"><span>${window.label}</span><strong>${S.quotaLeft(window)}</strong><span class="tc-muted">${window.resetsAt ? html`<time datetime="${window.resetsAt}" title="${new Date(window.resetsAt).toLocaleString()}">${S.resetLine(window)}</time>` : S.resetLine(window)}</span></li>`)}</ul>`}
+      </div></li>`;
       const limits = gateway => {
         const held = gateway.limits;
         if (!held?.supported) return '';
-        const state = S.limitsState(held), off = held.state === 'off', busy = ctx.isBusy(gateway.id + ':limits');
+        const state = S.limitsState(held), off = held.state === 'off', busy = ctx.isBusy(gateway.id + ':limits') || view.busy === 'quota';
         return html`<section class="tc-insp-section" data-key="gw-limits"><h3 class="tc-insp-label">Usage limits<span class="tc-spacer"></span>${held.checkedAt ? html`<span class="tc-hint">Read ${M.relTime(held.checkedAt, Date.now())}</span>` : ''}${!off && held.owned ? action('replace-limits', 'Replace key…', { ghost: true }) : ''}</h3>
-          ${off ? html`<div class="tc-group tc-gw-limits-empty"><span class="tc-tile tc-tile--icon tc-tile--xs" aria-hidden="true">${icon('gauge')}</span><span class="tc-row-main"><span class="tc-avail-name">See what’s left on each account</span><span class="tc-avail-note">Shows this gateway’s Claude and Codex quota under Usage → Limits in T3 Code. Needs its management key.</span></span>${action('setup-limits', 'Set up…')}</div>`
+          ${off ? html`<div class="tc-group tc-gw-limits-empty"><span class="tc-tile tc-tile--icon tc-tile--xs" aria-hidden="true">${icon('gauge')}</span><span class="tc-row-main"><span class="tc-avail-name">See what’s left on each account</span><span class="tc-avail-note">Shows account quota and reset times under Usage → Limits in T3 Code. Needs its management key.</span></span>${action('setup-limits', 'Set up…')}</div>`
             : html`<div class="tc-group tc-gw-limits">
+              ${held.accounts.length && ['error', 'partial', 'unavailable', 'paused'].includes(held.state) ? html`<p class="tc-gw-limits-note" role="status">${state.label}${held.detail ? ': ' + held.detail : ''}</p>` : ''}
               ${held.accounts.length ? html`<ul class="tc-gw-accounts">${held.accounts.map(account)}</ul>` : html`<p class="tc-gw-limits-note">${state.busy ? html`<span class="tc-spinner" aria-hidden="true"></span>` : ''}${state.desc || state.label}</p>`}
-              <div class="tc-card-foot">${held.owned ? html`<span>Shown in T3 Code under Usage → Limits.</span><span class="tc-spacer"></span><button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-key="gw-insp-remove-limits" data-gw-inspect="remove-limits"${disabled(busy)}>Stop showing</button>` : html`<span>Set up in T3 Code’s settings, so that’s where it changes.</span>`}</div>
+              <div class="tc-card-foot"><span>${held.owned ? 'Shown under Usage → Limits.' : 'Managed in T3 Code’s settings.'}</span><span class="tc-spacer"></span>${held.state !== 'paused' ? action('quota', view.busy === 'quota' ? 'Refreshing…' : 'Refresh limits', { ghost: true, disabled: busy }) : ''}${held.owned ? html`<button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-key="gw-insp-remove-limits" data-gw-inspect="remove-limits"${disabled(busy)}>Stop showing</button>` : ''}</div>
             </div>`}
         </section>`;
       };
@@ -135,6 +138,7 @@ const T3GatewayInspector = (() => {
         if (name === 'replace-key' || name === 'replace-key-row') { close('edit'); return void ctx.replaceKey(id); }
         if (name === 'setup-limits' || name === 'replace-limits') { close('edit'); return void ctx.edit(id, { limits: true }); }
         if (name === 'remove-limits') return void ctx.removeLimits(id);
+        if (name === 'quota') return void withBusy('quota', () => ctx.change(id + ':quota', '/gateways/limits/refresh', { id }));
         // Toasts stay hidden behind this panel, so what goes wrong here is said here.
         if (name === 'toggle') return void withBusy('toggle', () => ctx.toggle(id, button.dataset.agent, button.getAttribute('aria-checked') !== 'true'));
         if (name === 'scope') { if (button.getAttribute('aria-pressed') !== 'true') void withBusy('scope', () => ctx.scope(id, button.dataset.agent, button.dataset.scope)); return; }

@@ -11,6 +11,12 @@ on:
   schedule:
     - cron: "0 6 * * 1"
 
+# A newer PR head replaces its old verification. Main and release runs have
+# distinct groups, so publishing and verification of tags are never cancelled.
+concurrency:
+  group: build-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   REGISTRY: ghcr.io
   IMAGE: ${{ github.repository }}
@@ -18,13 +24,21 @@ env:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
     # Two minutes of work. A test file that never exits would otherwise hold up every job for six hours.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - name: Classify the complete change range
+        id: scope
+        run: node scripts/ci-scope.mjs
       - name: Shell scripts parse and pass shellcheck
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck zip unzip
@@ -53,6 +67,9 @@ jobs:
 
   native-runtime:
     needs: lint
+    # Keep the workflow and lint check present on every PR. A skipped whole
+    # workflow can leave required checks pending indefinitely.
+    if: needs.lint.outputs.full == 'true'
     permissions:
       contents: read
       packages: write

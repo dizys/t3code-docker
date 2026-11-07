@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const { runCases } = require('./lib/browser-audit-cases.cjs');
 // Exercises the real UI against isolated, mutable in-memory Files routes.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 let chromium;try{({chromium}=require('playwright'));}catch{({chromium}=require('playwright-core'));}
@@ -7,8 +8,9 @@ const {createFilesFixtures}=require('./lib/files-fixtures.cjs');
 const base=process.argv[2]||'http://127.0.0.1:23832/__setup/',key=process.argv[3]||'dev',out=process.env.T3_FILES_UI_OUTPUT||'/tmp/t3-files-change-ui';fs.mkdirSync(out,{recursive:true});
 const variants=[['desktop',1440,1000],['compact',1280,800],['small-desktop',1100,1000],['tablet',834,1112],['phone',390,844],['narrow',320,740],['embedded',1198,878],['embedded-phone',390,844]],subset=process.env.T3_FILES_UI_VARIANTS?.split(',');
 (async()=>{const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/chromium',args:['--no-sandbox']});let checks=0;
- try{for(const theme of (process.env.T3_FILES_UI_THEMES?.split(',')||['light','dark']))for(const [variant,width,height]of variants){if(subset&&!subset.includes(variant))continue;
-  const context=await browser.newContext({viewport:{width,height},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),fixture=createFilesFixtures(),errors=[],mutations=[];let hold=null,lostFinish=false,extraJobs=[];
+ try{const cases=(process.env.T3_FILES_UI_THEMES?.split(',')||['light','dark']).flatMap(theme=>variants.filter(([variant])=>!subset||subset.includes(variant)).map(variant=>[theme,...variant]));
+ await runCases(cases,async([theme,variant,width,height],scope)=>{
+  const context=await scope.context(browser, {viewport:{width,height},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),fixture=createFilesFixtures(),errors=[],mutations=[];let hold=null,lostFinish=false,extraJobs=[];
   await context.addInitScript(()=>{
    const moved=event=>{const el=event.target===document?window:event.target;window.__fileMenuMove={type:event.type,target:el===window?'window':el.id||el.className||el.tagName,offset:el===window?[scrollX,scrollY]:[el.scrollLeft,el.scrollTop]};};
    addEventListener('scroll',moved,true);addEventListener('resize',moved);
@@ -202,6 +204,6 @@ const variants=[['desktop',1440,1000],['compact',1280,800],['small-desktop',1100
   assert.equal(await show.getAttribute('title'),dest,'the full destination remains available');
   assert.deepEqual(await target.locator('.tc-files-transfer-list').evaluate(el=>[...el.querySelectorAll('*')].filter(item=>{const r=item.getBoundingClientRect(),style=getComputedStyle(item);return r.width>0&&r.height>0&&['visible','clip'].includes(style.overflowX)&&item.scrollWidth>item.clientWidth+1;}).map(item=>({tag:item.tagName,text:item.textContent.slice(0,50),width:item.clientWidth,content:item.scrollWidth}))),[],'transfer content must stay inside its column');
   await fits();if(width<640){await target.evaluate(()=>Kit.toast('Transfer notice',{duration:1000}));assert.equal(await target.locator('.tc-toaster').evaluate(el=>getComputedStyle(el).visibility),'hidden','notifications stay behind the modal transfer sheet');}await show.scrollIntoViewIfNeeded();await target.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));await shot('transfer-long-destination');await show.click();await target.locator('[data-files-row]').filter({hasText:longFile}).waitFor();
-  assert.deepEqual(errors,[]);}catch(error){await shot('failure');console.error(variant,theme,await target.evaluate(()=>({menus:window.__fileMenuCloses,hash:location.hash,route:document.body.dataset.consoleRoute,toaster:document.querySelector('.tc-toaster')&&getComputedStyle(document.querySelector('.tc-toaster')).visibility,layerClasses:[...document.querySelectorAll('.tc-layer')].map(el=>el.className),top:Kit.top()?.panel?.outerHTML?.slice(0,900),text:document.body.innerText.slice(-4000)})),errors);throw error;}await context.close();console.log(variant+' '+theme+': passed');
- }}finally{await browser.close();}console.log('Files Change audit passed ('+checks+' layout checks). Screens: '+out);
+  assert.deepEqual(errors,[]);}catch(error){await shot('failure');console.error(variant,theme,await target.evaluate(()=>({menus:window.__fileMenuCloses,hash:location.hash,route:document.body.dataset.consoleRoute,toaster:document.querySelector('.tc-toaster')&&getComputedStyle(document.querySelector('.tc-toaster')).visibility,layerClasses:[...document.querySelectorAll('.tc-layer')].map(el=>el.className),top:Kit.top()?.panel?.outerHTML?.slice(0,900),text:document.body.innerText.slice(-4000)})),errors);throw error;}console.log(variant+' '+theme+': passed');
+ },{name:'Files changes',output:out});}finally{await browser.close();}console.log('Files Change audit passed ('+checks+' layout checks). Screens: '+out);
 })().catch(error=>{console.error(error);process.exitCode=1;});

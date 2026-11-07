@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const { runCases } = require('./lib/browser-audit-cases.cjs');
 // Shared source editing and selection geometry, using only in-memory APIs.
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
@@ -65,8 +66,9 @@ assert(selected.length,'Select at least one editor audit layout.');
     await field.evaluate(input=>{input.style.scrollbarWidth='';input.scrollTop=0;input.scrollLeft=0;input.dispatchEvent(new Event('scroll'));});
   };
   try {
-    for (const theme of ['light','dark']) for (const [name,width,height,embedded] of selected) {
-      const context = await browser.newContext({viewport:{width,height},colorScheme:theme,reducedMotion:process.env.T3_EDITOR_UI_MOTION || 'reduce'}), page = await context.newPage(), errors = [];
+    const cases=['light','dark'].flatMap(theme=>selected.map(variant=>[theme,...variant]));
+    await runCases(cases,async([theme,name,width,height,embedded],scope)=>{
+      const context = await scope.context(browser, {viewport:{width,height},colorScheme:theme,reducedMotion:process.env.T3_EDITOR_UI_MOTION || 'reduce'}), page = await context.newPage(), errors = [];
       const files = createFilesFixtures(), skills = createSkillsFixtures();
       page.on('pageerror', error => errors.push(error.message));
       await page.addInitScript(theme=>localStorage.setItem('t3-console-theme',theme),theme);
@@ -147,8 +149,8 @@ assert(selected.length,'Select at least one editor audit layout.');
       await alignment(target.locator('#skill-content'),name+' '+theme+' Skills');
       await page.screenshot({path:path.join(output,`${name}-${theme}-skill.png`),fullPage:false});
       assert.deepEqual(errors,[],name+' '+theme+' has no browser errors');checks++;
-      await context.close();console.log(name+' '+theme+': editor and selection passed');
-    }
+      console.log(name+' '+theme+': editor and selection passed');
+    },{name:'Shared editor',output});
     console.log(checks+' shared editor and selection checks passed');
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

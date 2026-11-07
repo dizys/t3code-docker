@@ -28,13 +28,14 @@ if (args[0] === 'cp') {
   if (fs.existsSync(to) && fs.statSync(to).isDirectory()) to = path.join(to, path.basename(from));
   fs.cpSync(from, to, { recursive: true });
 } else if (args[0] === 'exec') {
-  let index = 1;
-  while (args[index] === '-e') index += 2;
+  let index = 1; const environment = [];
+  while (args[index] === '-e') { environment.push(args[index + 1]); index += 2; }
   const [command, ...rest] = args.slice(index + 1);
   if (command === 'mkdir') {
     for (const directory of rest.filter(value => value !== '-p')) fs.mkdirSync(inside(directory), { recursive: true });
   } else if (command === 'node') {
     const audit = inside(rest[0]), seen = new Set();
+    if (!environment.includes('T3_UI_AUDIT_WORKERS=2')) throw new Error('Image audits must use the bounded scenario queue');
     const inspect = file => {
       if (seen.has(file)) return;
       seen.add(file);
@@ -42,7 +43,8 @@ if (args[0] === 'cp') {
       for (const match of text.matchAll(/require\\(['"](\\.[^'"]+)['"]\\)/g)) inspect(createRequire(file).resolve(match[1]));
     };
     inspect(audit);
-    require(path.join(path.dirname(audit),'lib/skills-fixtures.cjs')).createSkillsFixtures();
+    const skills = path.join(path.dirname(audit),'lib/skills-fixtures.cjs');
+    if (fs.existsSync(skills)) require(skills).createSkillsFixtures();
     fs.appendFileSync(process.env.SMOKE_AUDITS, JSON.stringify(path.basename(audit)) + '\\n');
     if (path.basename(audit) === process.env.SMOKE_FAIL_AUDIT) process.exit(7);
   } else process.exit(9);
@@ -55,11 +57,11 @@ if (args[0] === 'cp') {
     await fs.rm(path.join(root, 'output.log'), { force: true });
     await fs.mkdir(path.join(container, 'tmp'), { recursive: true });
     const helpers = name === 'files_browser_works'
-      ? ['files_audit', 'files_layout_audit', 'files_changes_audit', 'files_space_audit', 'files_editor_audit'].map(body).join('\n')
+      ? body('files_audit')
       : '';
-    return spawnSync('bash', ['-c', `set -euo pipefail\nsource "$PARALLEL_HELPER"\ntrap t3_parallel_cleanup EXIT\nHAS_BROWSER=1\nNAME=fixture\nSETUP_KEY=fixture\nUI_AUDIT_LOG='${path.join(root, 'output.log')}'\n${helpers}\n${body(name)}\n${name}`], {
+    return spawnSync('bash', ['-c', `set -euo pipefail\nHAS_BROWSER=1\nNAME=fixture\nSETUP_KEY=fixture\nUI_AUDIT_LOG='${path.join(root, 'output.log')}'\n${helpers}\n${body(name)}\n${name}`], {
       cwd: new URL('..', import.meta.url), encoding: 'utf8',
-      env: { ...process.env, PATH: `${root}:${process.env.PATH}`, PARALLEL_HELPER: new URL('../scripts/lib/parallel-checks.sh', import.meta.url).pathname, SMOKE_CONTAINER: container, SMOKE_AUDITS: log, SMOKE_DROP_FILE: drop, SMOKE_FAIL_AUDIT: failAudit },
+      env: { ...process.env, PATH: `${root}:${process.env.PATH}`, SMOKE_CONTAINER: container, SMOKE_AUDITS: log, SMOKE_DROP_FILE: drop, SMOKE_FAIL_AUDIT: failAudit },
     });
   };
   const result = await run();
@@ -67,6 +69,7 @@ if (args[0] === 'cp') {
   assert.deepEqual((await fs.readFile(log, 'utf8')).trim().split('\n').map(JSON.parse), [
     'skills-ui-audit.js', 'skills-hooks-ui-audit.js', 'skills-update-ui-audit.js',
   ]);
+  assert.notEqual((await run('browser-audit-cases.cjs')).status, 0, 'the scenario runner must be staged');
   assert.notEqual((await run('skill-audit.cjs')).status, 0, 'a missing helper must fail the smoke audit');
   assert.notEqual((await run('skills-fixtures.cjs')).status, 0, 'a missing fixture module must fail the smoke audit');
   assert.notEqual((await run('files-fixtures.cjs')).status, 0, 'the shared Files fixture must be staged too');
@@ -77,6 +80,11 @@ if (args[0] === 'cp') {
   ].sort();
   assert.deepEqual((await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse).sort(), expectedFiles);
   assert.notEqual((await run('console-download-fixture.cjs','files_browser_works')).status,0,'native download transport must be staged');
+  for (const name of ['auto_update_settings_work', 'mcp_editor_works', 'gateways_page_works']) {
+    const result = await run('', name);
+    assert.equal(result.status, 0, await fs.readFile(path.join(root, 'output.log'), 'utf8'));
+    assert.notEqual((await run('browser-audit-cases.cjs', name)).status, 0, name + ' requires the scenario runner');
+  }
   for (const audit of expectedFiles) {
     assert.notEqual((await run('', 'files_browser_works', audit)).status, 0, `${audit} failing must fail the smoke check`);
     assert.deepEqual((await fs.readFile(log, 'utf8')).trim().split('\n').map(JSON.parse).sort(), expectedFiles, 'all four audits still finish after a failure');

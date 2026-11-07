@@ -1,3 +1,4 @@
+const { runCases } = require('./browser-audit-cases.cjs');
 // Shared fixture boundary for the update/hook browser audits. Every request is
 // served from memory; a failed assertion cannot mutate an installed agent.
 const assert = require('node:assert/strict');
@@ -14,11 +15,11 @@ const run = async (name, work) => {
   const output = process.env[prefix + '_OUTPUT'] || '/tmp/t3-skills-' + name + '-ui'; fs.mkdirSync(output, { recursive: true });
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
   try {
-    for (const theme of ['light', 'dark']) for (const [width, height, embedded] of [[1440, 900], [1024, 900], [390, 844], [360, 640], [1198, 878, true]]) {
-      if (process.env[prefix + '_THEMES'] && !process.env[prefix + '_THEMES'].split(',').includes(theme)) continue;
-      if (process.env[prefix + '_WIDTHS'] && !process.env[prefix + '_WIDTHS'].split(',').includes(String(width))) continue;
+    const variants = [[1440, 900], [1024, 900], [390, 844], [360, 640], [1198, 878, true]];
+    const cases = ['light', 'dark'].filter(theme => !process.env[prefix + '_THEMES'] || process.env[prefix + '_THEMES'].split(',').includes(theme)).flatMap(theme => variants.filter(([width]) => !process.env[prefix + '_WIDTHS'] || process.env[prefix + '_WIDTHS'].split(',').includes(String(width))).map(variant => [theme, ...variant]));
+    await runCases(cases, async ([theme, width, height, embedded], scope) => {
       console.log('Starting', name, theme, width, embedded ? 'embedded' : 'standalone');
-      const page = await browser.newPage({ viewport: { width, height: name === 'hooks' && width === 1440 ? 1100 : height }, colorScheme: theme, reducedMotion: 'reduce', deviceScaleFactor: 2 });
+      const page = await scope.page(browser, { viewport: { width, height: name === 'hooks' && width === 1440 ? 1100 : height }, colorScheme: theme, reducedMotion: 'reduce', deviceScaleFactor: 2 });
       page.setDefaultTimeout(8000);
       await page.addInitScript(mode => { localStorage.setItem('t3-console-theme', mode); }, theme);
       const api = createSkillsFixtures(), errors = [], requests = [], control = {};
@@ -44,8 +45,8 @@ const run = async (name, work) => {
       assert.deepEqual(errors, []);
       assert(await target.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'the page does not overflow horizontally');
       console.log('Passed', name, theme, width, embedded ? 'embedded' : 'standalone');
-      await page.close();
-    }
+
+    }, { name: 'Skills ' + name, output });
   } finally { await browser.close(); }
 };
 const fits = async locator => locator.evaluate(element => { const box = element.getBoundingClientRect(); return box.top >= -1 && box.bottom <= innerHeight + 1 && box.left >= -1 && box.right <= innerWidth + 1 && element.scrollWidth <= element.clientWidth + 1; });

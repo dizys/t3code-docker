@@ -191,7 +191,7 @@ test("cleanup mode consent cannot be reused even when the removable set is ident
   assert.deepEqual(f.removed, []);
 });
 
-test("applying several retained versions runs one prunable-driven plan, not one per item", async (t) => {
+test("each removal refreshes project requirements", async (t) => {
   const f = await fixture(t);
   const prunable = [];
   const original = f.ctx.run;
@@ -203,7 +203,7 @@ test("applying several retained versions runs one prunable-driven plan, not one 
   assert.ok(plan.removableCount >= 3, `expected 3+ retained items, got ${plan.removableCount}`);
   prunable.length = 0;
   const result = await applyRetention(f.ctx, plan);
-  assert.equal(prunable.length, 1, `expected exactly 1 prunable plan, got ${prunable.length}`);
+  assert.equal(prunable.length, plan.removableCount);
   assert.equal(result.failed.length, 0);
   assert.equal(result.removed.length, plan.removableCount);
 });
@@ -229,4 +229,18 @@ test("a process starting on the next candidate after the first uninstall protect
   assert.equal(f.removed.includes(next.version), false, `${next.version} gained a process mid-pass and must be kept`);
   assert.ok(result.removed.some((item) => item.version === first.version));
   assert.equal(result.removed.some((item) => item.version === next.version), false);
+});
+
+test("a project pin added after the first uninstall protects the next version", async (t) => {
+  const f = await fixture(t), plan = await planRetention(f.ctx);
+  const original = f.ctx.run;
+  f.ctx.run = async (args, options) => {
+    const out = await original(args, options);
+    if (args.includes("uninstall") && f.removed.length === 1) {
+      f.setPrunable(f.installs.filter(item => item.version !== "1.21.0"));
+    }
+    return out;
+  };
+  await applyRetention(f.ctx, plan);
+  assert.equal(f.removed.includes("1.21.0"), false);
 });

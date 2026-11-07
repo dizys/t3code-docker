@@ -26,8 +26,7 @@ function providerPaths(value, result = []) {
 }
 
 /** Processes and provider selections change under cleanup (a tool starts, a
- * setup choice lands), so these are re-read before every deletion. mise's
- * prunable set is the expensive capture and is shared with the plan. */
+ * setup choice lands), so these are re-read before every deletion. */
 async function liveReferences(ctx) {
   const processes = await (ctx.retentionProcesses || processSnapshot)();
   if (!processes.complete) throw new Error("Running tools could not be checked. Older versions were kept.");
@@ -133,18 +132,11 @@ export async function applyRetention(ctx, plan, { signal, onProgress } = {}) {
   const removed = [], failed = [];
   const eligible = plan.items.filter((candidate) => candidate.eligible);
   if (!eligible.length) return { removed, failed, warning: plan.warning };
-  // mise's prunable set is captured once for the pass: while the caller holds
-  // the harness lock only our own removals below change it, and each targets
-  // a different version. Processes and provider selections change under us,
-  // so those are re-read before every deletion instead of once up front.
-  // shortcut: project requirements added mid-pass are unseen until the next plan; re-query prunable per item if that window matters.
-  let prunable;
-  try { prunable = await mise.listPrunable(ctx); }
-  catch (error) { return { removed, failed, warning: error.message }; }
+  // Project pins, processes and provider selections can change during cleanup.
   for (const item of eligible) {
     if (signal?.aborted) break;
     let refs;
-    try { refs = { prunable, ...(await liveReferences(ctx)) }; }
+    try { refs = await references(ctx); }
     catch (error) { return { removed, failed, warning: error.message }; }
     if (!(await stillRemovable(ctx, refs, item))) continue;
     try {

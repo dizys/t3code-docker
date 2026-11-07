@@ -116,7 +116,12 @@ export function createHarnessManager(options = {}) {
       saved = await state.readState(ctx);
     }
     const degraded = listing.error ? [{ what: "mise", error: listing.error }] : [];
-    return { tools: listing.tools ?? {}, saved, live, degraded };
+    const snap = { tools: listing.tools ?? {}, saved, live, degraded };
+    // Which added tools stand in for a source control CLI, read once per
+    // snapshot: every status row shares it instead of re-statting every tool
+    // once per row on every poll.
+    snap.providers = await buildProviders(snap);
+    return snap;
   }
 
   /** The version the user's global mise config selects for a tool, or null. */
@@ -1167,19 +1172,64 @@ export function createHarnessManager(options = {}) {
   }
 
   /**
+   * The added tools that already provide a source control CLI's command, by
+   * binary name: `{ tool, version, executable }` in snapshot order. Two
+   * directory listings per tool name the binaries each install holds, so the
+   * rows share one scan instead of statting every tool once per row. Only a
+   * binary actually found is checked for its execute bit, which keeps the
+   * common case (nothing provides it) free of stats.
+   */
+  async function buildProviders(snap) {
+    const needed = new Set();
+    for (const entry of SOURCE_CONTROL) if (!entry.inImage) needed.add(entry.bin);
+    const candidates = [];
+    for (const [tool, entries] of Object.entries(snap.tools ?? {})) {
+      if (isReservedTool(tool)) continue;
+      const global = (entries ?? []).filter((candidate) => isGlobal(candidate) && candidate.installed);
+      const selected = global.find((candidate) => candidate.active) ?? global[0];
+      if (selected?.install_path) candidates.push({ tool, version: selected.version ?? null, installPath: selected.install_path });
+    }
+    const byBin = new Map();
+    const found = (bin, info) => {
+      if (!byBin.has(bin)) byBin.set(bin, []);
+      byBin.get(bin).push(info);
+    };
+    if (typeof ctx.fs.readdir !== "function") {
+      // An injected filesystem without directory listings: check each needed
+      // binary directly. Still once per snapshot, shared by every row.
+      for (const { tool, version, installPath } of candidates) {
+        for (const bin of needed) {
+          const executable = await binIn(installPath, bin);
+          if (executable) found(bin, { tool, version, executable });
+        }
+      }
+      return byBin;
+    }
+    const listed = await Promise.all(candidates.map(async ({ tool, version, installPath }) => {
+      const names = await Promise.all([
+        ctx.fs.readdir(path.join(installPath, "bin")).catch(() => null),
+        ctx.fs.readdir(installPath).catch(() => null),
+      ]);
+      return { tool, version, installPath, bins: new Set(names[0] ?? []), root: new Set(names[1] ?? []) };
+    }));
+    for (const { tool, version, installPath, bins, root } of listed) {
+      for (const bin of needed) {
+        if (!bins.has(bin) && !root.has(bin)) continue;
+        const executable = await binIn(installPath, bin);
+        if (executable) found(bin, { tool, version, executable });
+      }
+    }
+    return byBin;
+  }
+
+  /**
    * The added tool that already provides a source control CLI's command, when
    * the CLI itself is not installed: `{ tool, version, executable }`, or null.
-   * Read from the snapshot's install paths; no process is started.
+   * A lookup in the snapshot's index; no process is started.
    */
-  async function providerOf(entry, snap) {
-    for (const [tool, entries] of Object.entries(snap.tools)) {
-      if (tool === entry.miseTool || isReservedTool(tool)) continue;
-      const global = entries.filter((candidate) => isGlobal(candidate) && candidate.installed);
-      const selected = global.find((candidate) => candidate.active) ?? global[0];
-      const executable = await binIn(selected?.install_path, entry.bin);
-      if (executable) return { tool, version: selected.version ?? null, executable };
-    }
-    return null;
+  function providerOf(entry, snap) {
+    const found = (snap.providers?.get(entry.bin) ?? []).find((candidate) => candidate.tool !== entry.miseTool);
+    return found ? { tool: found.tool, version: found.version, executable: found.executable } : null;
   }
 
   /** The credential files' modification times: a sign-in that writes them changes the key. */

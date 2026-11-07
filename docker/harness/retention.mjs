@@ -25,7 +25,9 @@ function providerPaths(value, result = []) {
   return result;
 }
 
-async function references(ctx) {
+/** Processes and provider selections change under cleanup (a tool starts, a
+ * setup choice lands), so these are re-read before every deletion. */
+async function liveReferences(ctx) {
   const processes = await (ctx.retentionProcesses || processSnapshot)();
   if (!processes.complete) throw new Error("Running tools could not be checked. Older versions were kept.");
   const settings = path.join(ctx.env.T3CODE_HOME || path.join(ctx.home, ".t3"), "userdata/settings.json");
@@ -40,7 +42,11 @@ async function references(ctx) {
     try { providers.push(await ctx.fs.realpath(selected)); }
     catch (error) { if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw new Error("Provider paths could not be checked. Older versions were kept."); }
   }
-  return { prunable: await mise.listPrunable(ctx), providers, processes: processes.processes };
+  return { providers, processes: processes.processes };
+}
+
+async function references(ctx) {
+  return { prunable: await mise.listPrunable(ctx), ...(await liveReferences(ctx)) };
 }
 
 /** Verify both the path mise reported and its ancestors. Symlinked installs
@@ -105,15 +111,34 @@ export async function planRetention(ctx, { saved, only, includePrevious = false 
     removableCount: items.filter((item) => item.eligible).length, retainedCount: items.filter((item) => !item.eligible).length };
 }
 
+/** Whether one planned removal is still safe under the current references:
+ * the version is still prunable at the same path, and that path is still an
+ * ordinary install no provider selection or running process points at. */
+async function stillRemovable(ctx, refs, item) {
+  const candidate = refs.prunable?.[item.tool]?.find((entry) => entry.version === item.version && entry.installed);
+  const target = candidate?.install_path || null;
+  if (!target || target !== item.path) return false;
+  if (refs.providers.some((binary) => inside(target, binary))) return false;
+  if (refs.processes.some((process_) => [process_.executable, process_.cwd, ...process_.args].filter(Boolean).some((arg) => {
+    const value = arg.startsWith("--") && arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : arg;
+    return path.isAbsolute(value) && inside(target, path.resolve(value));
+  }))) return false;
+  return ordinaryInstall(ctx, target);
+}
+
 /** Caller holds the harness lock. Cleanup failures never undo a verified
  * installation; failed removals remain recorded for a later retry. */
 export async function applyRetention(ctx, plan, { signal, onProgress } = {}) {
   const removed = [], failed = [];
-  for (const item of plan.items.filter((candidate) => candidate.eligible)) {
+  const eligible = plan.items.filter((candidate) => candidate.eligible);
+  if (!eligible.length) return { removed, failed, warning: plan.warning };
+  // Project pins, processes and provider selections can change during cleanup.
+  for (const item of eligible) {
     if (signal?.aborted) break;
-    // References and symlink checks are repeated immediately before removal.
-    const current = await planRetention(ctx, { includePrevious: plan.includePrevious ?? false });
-    if (!current.items.some((candidate) => candidate.section === item.section && candidate.id === item.id && candidate.version === item.version && candidate.eligible)) continue;
+    let refs;
+    try { refs = await references(ctx); }
+    catch (error) { return { removed, failed, warning: error.message }; }
+    if (!(await stillRemovable(ctx, refs, item))) continue;
     try {
       onProgress?.({ phase: "retaining", tool: item.name, version: item.version });
       await mise.uninstall(ctx, item.tool, item.version);

@@ -96,5 +96,57 @@ status=0
 wait "$sup" || status=$?
 is "a stale request does not turn an exit into a restart" "1 0" "$(starts) $status"
 
+# Without T3_RUN_DIR the pid and request live under T3CODE_HOME/run.
+env -u T3_RUN_DIR T3CODE_HOME="$WORK/home/.t3" HOME="$WORK/home" \
+  bash "$RUN_T3" "$FAKE" "$WORK/log" "$WORK" &
+sup=$!
+wait_for 5 '[ -f "$WORK/home/.t3/run/t3.pid" ]' \
+  && ok "the default run dir is under T3CODE_HOME" \
+  || no "the default run dir is under T3CODE_HOME"
+kill -TERM "$sup" 2>/dev/null || true
+wait "$sup" 2>/dev/null || true
+
+# An explicit run dir outside /tmp is still honored (covered above), but /
+# and /tmp are refused instead of being created or chmodded. Dot segments
+# must not sneak past the check: /tmp/., /tmp/../tmp, /. and /tmp/.. are
+# /tmp or / once normalized.
+tmp_mode_before="$(stat -c %a /tmp)"
+for bad in / /tmp /tmp/ //. /./ /tmp/. /tmp/.. /tmp/../tmp /tmp// //tmp /../ relative/path; do
+  out="$(T3_RUN_DIR="$bad" bash "$RUN_T3" "$FAKE" "$WORK/log" "$WORK" 2>&1)" && status=0 || status=$?
+  [ "$status" -ne 0 ] \
+    && ok "T3_RUN_DIR=$bad is refused (exit $status)" \
+    || no "T3_RUN_DIR=$bad is refused"
+  case "$out" in
+    *T3_RUN_DIR*) ok "T3_RUN_DIR=$bad says why" ;;
+    *) no "T3_RUN_DIR=$bad says why" ;;
+  esac
+done
+is "/tmp keeps its mode" "$tmp_mode_before" "$(stat -c %a /tmp)"
+
+# The entrypoint runs the same check before anything else: a bypass value
+# must fail there too, without creating or chmodding anything.
+for bad in /tmp/. /tmp/../tmp /. /tmp/..; do
+  out="$(T3_RUN_DIR="$bad" bash "$ROOT/docker/entrypoint.sh" "$FAKE" "$WORK/log" "$WORK" 2>&1)" && status=0 || status=$?
+  [ "$status" -ne 0 ] \
+    && ok "entrypoint refuses T3_RUN_DIR=$bad (exit $status)" \
+    || no "entrypoint refuses T3_RUN_DIR=$bad"
+  case "$out" in
+    *T3_RUN_DIR*) ok "entrypoint T3_RUN_DIR=$bad says why" ;;
+    *) no "entrypoint T3_RUN_DIR=$bad says why" ;;
+  esac
+done
+is "/tmp still keeps its mode" "$tmp_mode_before" "$(stat -c %a /tmp)"
+
+# A /tmp subdirectory override is still honored.
+TMP_SUBDIR="$(mktemp -d /tmp/t3-run-t3-test-XXXXXX)"
+T3_RUN_DIR="$TMP_SUBDIR" bash "$RUN_T3" "$FAKE" "$WORK/log" "$WORK" &
+sup=$!
+wait_for 5 '[ -f "$TMP_SUBDIR/t3.pid" ]' \
+  && ok "a /tmp subdirectory override is still honored" \
+  || no "a /tmp subdirectory override is still honored"
+kill -TERM "$sup" 2>/dev/null || true
+wait "$sup" 2>/dev/null || true
+rm -rf "$TMP_SUBDIR"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

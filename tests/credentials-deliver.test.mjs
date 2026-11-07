@@ -110,7 +110,7 @@ test('a registry gives its token and optional username', () => {
 test('an SSH password goes through askpass, and an SSH key through nothing a command can see', () => {
   const password = { id: 'box', type: 'ssh', fields: { host: 'example.test', username: 'deploy', auth: 'password' }, secrets: { password: 'fixture-pass' } };
   const askpass = '/synthetic/askpass.sh';
-  assert.deepEqual(given(password, { askpass }), { env: { SSH_ASKPASS: askpass, SSH_ASKPASS_REQUIRE: 'force', DISPLAY: 't3-vault', T3_CREDENTIAL_PASSWORD: 'fixture-pass' }, files: [], masks: ['fixture-pass'] });
+  assert.deepEqual(given(password, { askpass }), { env: { SSH_ASKPASS: askpass, SSH_ASKPASS_REQUIRE: 'force', DISPLAY: 't3-vault' }, files: [{ env: 'T3_CREDENTIAL_PASSWORD_FILE', name: 'ssh-password', content: 'fixture-pass' }], masks: ['fixture-pass'] });
   assert.equal(given(password, { askpass, base: { DISPLAY: ':1' } }).env.DISPLAY, ':1', 'a real display is left alone');
   assert.deepEqual(deliveredNames(normalize(password)), [], 'the plumbing isn\'t something to tell an agent about');
   const key = { id: 'box', type: 'ssh', fields: { host: 'example.test', username: 'deploy', auth: 'key' }, secrets: { privateKey: 'fixture-key-text\n' } };

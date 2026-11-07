@@ -458,3 +458,25 @@ test("cleanup refreshes disk space without a full home traversal and replays cac
   assert.equal(status.categories.find(row=>row.id==='go').bytes,0);
   assert.equal(status.categories.find(row=>row.id==='npm').bytes,0);
 });
+
+test("one preview sizes every selected cache with a single measurement", async (t) => {
+  const f = await fixture(t);
+  const uv = path.join(f.home, ".cache/uv");
+  await fs.mkdir(uv, { recursive: true });
+  await fs.writeFile(path.join(uv, "blob"), Buffer.alloc(8192, 7));
+  let measures = 0;
+  const seen = [];
+  const manager = createStorageManager({ ...f.base,
+    detectCaches: async () => ({ ...(await f.base.detectCaches()), uv: { path: uv, executable: "/bin/uv" } }),
+    measure: async (roots) => {
+      measures++;
+      seen.push([...roots]);
+      return { sizes: Object.fromEntries(roots.map((root) => [root, 8192])), partial: false };
+    } });
+  t.after(() => manager.stop());
+  const preview = await manager.previewClean(["go", "npm", "uv"]);
+  assert.equal(measures, 1, `expected 1 measurement, got ${measures}`);
+  assert.deepEqual(seen[0].sort(), [f.go, path.join(f.npm, "_cacache"), uv].sort());
+  assert.ok(preview.caches.every((row) => row.eligible));
+  assert.equal(preview.estimatedBytes, 3 * 8192);
+});

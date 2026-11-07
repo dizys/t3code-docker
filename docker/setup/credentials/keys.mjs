@@ -8,8 +8,9 @@ import { CredentialError } from './errors.mjs';
 import { execute } from './hostkeys.mjs';
 
 const KEYGEN = '/usr/bin/ssh-keygen';
-// ssh-keygen's -P would put the passphrase in the process list.
-const askpassEnv = passphrase => ({ ...process.env, SSH_ASKPASS: fileURLToPath(new URL('./askpass.sh', import.meta.url)), SSH_ASKPASS_REQUIRE: 'force', DISPLAY: process.env.DISPLAY || 't3-vault', T3_CREDENTIAL_PASSWORD: passphrase });
+// ssh-keygen's -P would put the passphrase in the process list, and its
+// environment would put it in /proc, so only the file's path travels in env.
+const askpassEnv = file => ({ ...process.env, SSH_ASKPASS: fileURLToPath(new URL('./askpass.sh', import.meta.url)), SSH_ASKPASS_REQUIRE: 'force', DISPLAY: process.env.DISPLAY || 't3-vault', T3_CREDENTIAL_PASSWORD_FILE: file });
 
 /**
  * A key in its normal form, or null if this isn't one. T3's secret card has a
@@ -54,12 +55,17 @@ export const openPrivateKey = (input, { passphrase, comment, run = execute } = {
   if (!text) throw new CredentialError('That doesn’t look like a private key. Paste the whole file, including its BEGIN and END lines.', 400, 'key-invalid', { field: 'privateKey' });
   const file = path.join(directory, 'key');
   await fs.writeFile(file, text, { mode: 0o600, flag: 'wx' });
-  let open = await run(KEYGEN, passphrase ? ['-y', '-f', file] : ['-y', '-P', '', '-f', file], { timeout: 10000, ...(passphrase ? { env: askpassEnv(passphrase) } : {}) });
+  let passphraseFile = null;
+  if (passphrase) {
+    passphraseFile = path.join(directory, 'passphrase');
+    await fs.writeFile(passphraseFile, passphrase, { mode: 0o600, flag: 'wx' });
+  }
+  let open = await run(KEYGEN, passphrase ? ['-y', '-f', file] : ['-y', '-P', '', '-f', file], { timeout: 10000, ...(passphrase ? { env: askpassEnv(passphraseFile) } : {}) });
   if (open.code !== 0 && !passphrase) throw new CredentialError('This key needs its passphrase, or it isn’t a valid private key.', 400, 'key-passphrase', { field: 'passphrase' });
   if (open.code !== 0) throw new CredentialError('That passphrase didn’t open this key.', 400, 'key-passphrase', { field: 'passphrase' });
   const publicKey = open.stdout.trim().split(/\s+/).slice(0, 2).join(' ') + (comment ? ' ' + comment : '');
   if (passphrase) {
-    open = await run(KEYGEN, ['-q', '-p', '-N', '', '-f', file], { timeout: 10000, env: askpassEnv(passphrase) });
+    open = await run(KEYGEN, ['-q', '-p', '-N', '', '-f', file], { timeout: 10000, env: askpassEnv(passphraseFile) });
     if (open.code !== 0) throw new CredentialError('This key’s passphrase could not be removed.', 400, 'key-passphrase', { field: 'passphrase' });
     return { privateKey: await fs.readFile(file, 'utf8'), publicKey };
   }
@@ -67,4 +73,4 @@ export const openPrivateKey = (input, { passphrase, comment, run = execute } = {
 });
 
 /** The line to run on a server so this key can sign in. */
-export const installCommand = publicKey => `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '${publicKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`;
+export const installCommand = publicKey => `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '${String(publicKey).replace(/'/g, `'\\''`)}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`;

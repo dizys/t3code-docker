@@ -190,3 +190,57 @@ test("cleanup mode consent cannot be reused even when the removable set is ident
   assert.equal((await manager.retention.prune({ token: all.token, includePrevious: "true" })).code, "invalid-options");
   assert.deepEqual(f.removed, []);
 });
+
+test("each removal refreshes project requirements", async (t) => {
+  const f = await fixture(t);
+  const prunable = [];
+  const original = f.ctx.run;
+  f.ctx.run = (args, options) => {
+    if (args.includes("ls") && args.includes("--prunable")) prunable.push(args);
+    return original(args, options);
+  };
+  const plan = await planRetention(f.ctx);
+  assert.ok(plan.removableCount >= 3, `expected 3+ retained items, got ${plan.removableCount}`);
+  prunable.length = 0;
+  const result = await applyRetention(f.ctx, plan);
+  assert.equal(prunable.length, plan.removableCount);
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.removed.length, plan.removableCount);
+});
+
+test("a process starting on the next candidate after the first uninstall protects it", async (t) => {
+  const f = await fixture(t);
+  const plan = await planRetention(f.ctx);
+  const eligible = plan.items.filter((item) => item.eligible);
+  assert.ok(eligible.length >= 2, `expected 2+ retained items, got ${eligible.length}`);
+  const [first, next] = eligible;
+  const original = f.ctx.run;
+  let uninstalls = 0;
+  f.ctx.run = (args, options) => {
+    const out = original(args, options);
+    if (args.includes("uninstall") && ++uninstalls === 1) {
+      // A tool starts on the next candidate only after the first removal.
+      f.setProcesses({ complete: true, processes: [{ args: ["node", path.join(next.path, "bin/tool")] }] });
+    }
+    return out;
+  };
+  const result = await applyRetention(f.ctx, plan);
+  assert.ok(f.removed.includes(first.version), `expected ${first.version} removed, got ${f.removed}`);
+  assert.equal(f.removed.includes(next.version), false, `${next.version} gained a process mid-pass and must be kept`);
+  assert.ok(result.removed.some((item) => item.version === first.version));
+  assert.equal(result.removed.some((item) => item.version === next.version), false);
+});
+
+test("a project pin added after the first uninstall protects the next version", async (t) => {
+  const f = await fixture(t), plan = await planRetention(f.ctx);
+  const original = f.ctx.run;
+  f.ctx.run = async (args, options) => {
+    const out = await original(args, options);
+    if (args.includes("uninstall") && f.removed.length === 1) {
+      f.setPrunable(f.installs.filter(item => item.version !== "1.21.0"));
+    }
+    return out;
+  };
+  await applyRetention(f.ctx, plan);
+  assert.equal(f.removed.includes("1.21.0"), false);
+});

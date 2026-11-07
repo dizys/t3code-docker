@@ -175,3 +175,39 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   const stalled = await f.put("stalled", "#!/usr/bin/env node\nsetInterval(()=>{},1000);\n"); await fs.chmod(stalled, 0o700);
   await assert.rejects(listCodexSkills({ executable: stalled, home: f.home, timeoutMs: 100 }), /timed out/);
 });
+
+test("Codex metadata settles only after the provider has stopped writing its home", async (t) => {
+  const f = await fixture(t);
+  const executable = await f.put("slow-close-codex", `#!/usr/bin/env node
+const fs = require('node:fs'), readline = require('node:readline');
+setInterval(() => {}, 1000);
+process.on('SIGTERM', () => setTimeout(() => { fs.writeFileSync('closed', 'shutdown finished'); process.exit(0); }, 75));
+readline.createInterface({input:process.stdin}).on('line',line=>{
+ const message=JSON.parse(line);
+ if(message.method==='initialize') process.stdout.write(JSON.stringify({id:1,result:{}})+'\\n');
+ else if(message.method==='skills/list') process.stdout.write(JSON.stringify({id:2,result:{data:[{cwd:process.cwd(),skills:[],errors:[]}]}})+'\\n');
+});
+`);
+  await fs.chmod(executable, 0o700);
+  await listCodexSkills({ executable, home: f.home });
+  assert.equal(await fs.readFile(path.join(f.home, "closed"), "utf8"), "shutdown finished");
+});
+
+test("Codex shutdown escalates a provider that ignores SIGTERM and waits for it to exit", { timeout: 10000 }, async (t) => {
+  const f = await fixture(t);
+  const executable = await f.put("stubborn-codex", `#!/usr/bin/env node
+const fs = require('node:fs'), readline = require('node:readline');
+fs.writeFileSync('provider.pid', String(process.pid));
+setInterval(() => {}, 1000);
+process.on('SIGTERM', () => {});
+readline.createInterface({input:process.stdin}).on('line',line=>{
+ const message=JSON.parse(line);
+ if(message.method==='initialize') process.stdout.write(JSON.stringify({id:1,result:{}})+'\\n');
+ else if(message.method==='skills/list') process.stdout.write(JSON.stringify({id:2,result:{data:[{cwd:process.cwd(),skills:[],errors:[]}]}})+'\\n');
+});
+`);
+  await fs.chmod(executable, 0o700);
+  await listCodexSkills({ executable, home: f.home });
+  const pid = Number(await fs.readFile(path.join(f.home, "provider.pid"), "utf8"));
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+});

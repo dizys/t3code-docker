@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const { runCases } = require('./lib/browser-audit-cases.cjs');
 // Real console + in-memory API. No mutations reach a running agent or server.
 // See CONTRIBUTING.md for the documented Playwright browser-audit workflow.
 let chromium;
@@ -53,11 +54,11 @@ const checkSelect = async (page, select, theme) => {
 (async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
   try {
-    for (const theme of ['light', 'dark']) for (const [width, height, embedded] of (TAB ? [480,639,640,704,1040].map(w=>[w,900,true]) : [[1440, 900], [1024, 900], [390, 844], [360, 720], [820, 900], [1198, 878, true]])) {
-      if (process.env.T3_SKILLS_UI_THEMES && !process.env.T3_SKILLS_UI_THEMES.split(',').includes(theme)) continue;
-      if (process.env.T3_SKILLS_UI_WIDTHS && !process.env.T3_SKILLS_UI_WIDTHS.split(',').includes(String(width))) continue;
+    const variants = TAB ? [480,639,640,704,1040].map(w=>[w,900,true]) : [[1440, 900], [1024, 900], [390, 844], [360, 720], [820, 900], [1198, 878, true]];
+    const cases = ['light', 'dark'].filter(theme => !process.env.T3_SKILLS_UI_THEMES || process.env.T3_SKILLS_UI_THEMES.split(',').includes(theme)).flatMap(theme => variants.filter(([width]) => !process.env.T3_SKILLS_UI_WIDTHS || process.env.T3_SKILLS_UI_WIDTHS.split(',').includes(String(width))).map(variant => [theme, ...variant]));
+    await runCases(cases, async ([theme, width, height, embedded], scope) => {
       console.log('Starting', theme, width);
-      const page = await browser.newPage({ viewport: { width, height }, colorScheme: theme, reducedMotion: 'reduce' });
+      const page = await scope.page(browser, { viewport: { width, height }, colorScheme: theme, reducedMotion: 'reduce' });
       await page.addInitScript(mode => localStorage.setItem('t3-console-theme', mode), theme);
       const api = createSkillsFixtures(), status = statusFor('skills'), errors = [], writes = [], gets = {};
       // Keep the longstanding draft/reinstall cases about a local skill. The
@@ -167,9 +168,9 @@ const checkSelect = async (page, select, theme) => {
       if (process.env.T3_SKILLS_UI_UNIFIED_ONLY === '1') {
         await checkUnifiedLocations();
         assert.deepEqual(errors, []);
-        await page.close();
+
         console.log(`${theme} ${width}${embedded ? ' embedded' : ''}: unified locations, draft protection, exact save target and failed/late reads passed`);
-        continue;
+        return;
       }
       await navigate('instructions/skills');
       await target.locator('.tc-mx-row').first().waitFor({ state: 'attached' });
@@ -587,7 +588,7 @@ const checkSelect = async (page, select, theme) => {
       const overflow = await target.evaluate(() => document.documentElement.scrollWidth > innerWidth);
       assert.equal(overflow, false, 'the page never scrolls sideways');
       assert.deepEqual(errors, []);
-      await page.close();
+
       console.log(`${theme} ${width}${embedded ? ' embedded' : ''}: library, policies, safe inspector, draft conflicts, placement, consent, results and instructions passed`);
       async function checkUnifiedLocations() {
         // Same-named files retain their own availability, reads and write target.
@@ -664,6 +665,6 @@ const checkSelect = async (page, select, theme) => {
         const overflow = await target.evaluate(() => document.documentElement.scrollWidth > innerWidth);
         assert.equal(overflow, false, 'the page never scrolls sideways');
       }
-    }
+    }, { name: 'Skills', output });
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

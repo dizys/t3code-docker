@@ -3,20 +3,21 @@ import { spawn } from "node:child_process";
 
 function codexRequest({ executable, home, env = process.env, timeoutMs = 6000, maxBytes = 2 * 1024 * 1024, spawnImpl = spawn, experimentalApi = false }, method, params) {
   return new Promise((resolve, reject) => {
-    let child, timer, settled = false, buffer = "", bytes = 0, stage = "initialize";
+    let child, timer, settled = false, closed = false, buffer = "", bytes = 0, stage = "initialize";
     const finish = (error, result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      child?.stdin.destroy();
-      if (child) {
-        child.kill();
+      const publish = () => { if (error) reject(error); else resolve(result); };
+      if (child && !closed) {
+        // Codex can still write logs/state after returning metadata. Do not
+        // hand the home back to a caller until the process and pipes close.
         const force = setTimeout(() => child.kill("SIGKILL"), 1000);
         force.unref();
-        child.once("close", () => clearTimeout(force));
-      }
-      if (error) reject(error);
-      else resolve(result);
+        child.once("close", () => { clearTimeout(force); publish(); });
+        child.stdin?.destroy();
+        child.kill();
+      } else publish();
     };
     const fail = (message) => finish(new Error(message));
     const send = (message) => child.stdin.write(JSON.stringify(message) + "\n");
@@ -25,7 +26,7 @@ function codexRequest({ executable, home, env = process.env, timeoutMs = 6000, m
       timer = setTimeout(() => fail("Codex skill request timed out. Refresh to check its current state."), timeoutMs);
       child.on("error", () => fail("Could not start Codex skill discovery."));
       child.stdin.on("error", () => fail("Codex closed its discovery connection."));
-      child.on("close", () => { if (!settled) fail("Codex exited before returning its skill response. Refresh to check its current state."); });
+      child.on("close", () => { closed = true; if (!settled) fail("Codex exited before returning its skill response. Refresh to check its current state."); });
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk) => {
         if (settled) return;

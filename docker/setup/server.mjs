@@ -14,7 +14,7 @@ import { execFile } from "node:child_process";
 import { timingSafeEqual, randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 import { gzip as gzipCallback } from "node:zlib";
-import { readFileSync, writeFileSync, existsSync, rmSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, rmSync, statSync, openSync, closeSync, fstatSync, constants } from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import {
@@ -145,7 +145,7 @@ const runtimeModule = await import(process.env.T3_RUNTIME_MODULE || (existsSync(
 const runtimeManager = runtimeModule.createRuntimeManager({
   supervised: () => {
     try {
-      const supervisor = JSON.parse(readFileSync(`${process.env.T3_RUN_DIR || "/tmp/t3code"}/supervisor.json`, "utf8"));
+      const supervisor = JSON.parse(readFileSync(`${process.env.T3_RUN_DIR || `${process.env.T3CODE_HOME || `${process.env.HOME || "/home/t3"}/.t3`}/run`}/supervisor.json`, "utf8"));
       if (supervisor.protocol !== 3 || !Number.isInteger(supervisor.pid) || supervisor.pid < 2 || !t3Pid()) return false;
       process.kill(supervisor.pid, 0);
       return true;
@@ -1111,14 +1111,33 @@ const setPublicUrl = async (value, { check: shouldCheck = true } = {}) => {
 // request file, then SIGTERM, so it shuts down exactly as for `docker stop`.
 // Anything T3 Code only reads on a start (T3 Connect's link) then applies
 // without anyone restarting the container.
-const RUN_DIR = process.env.T3_RUN_DIR || "/tmp/t3code";
+const resolveRunDir = () => {
+  const explicit = process.env.T3_RUN_DIR;
+  if (!explicit) return `${process.env.T3CODE_HOME || `${process.env.HOME || "/home/t3"}/.t3`}/run`;
+  if (!explicit.startsWith("/")) {
+    console.error(`[setup] T3_RUN_DIR must be an absolute path (got '${explicit}'); refusing to start`);
+    process.exit(1);
+  }
+  const normalized = path.normalize(explicit).replace(/\/+$/, "") || "/";
+  if (normalized === "/" || normalized === "/tmp") {
+    console.error(`[setup] T3_RUN_DIR must not be '${normalized}'; refusing to start`);
+    process.exit(1);
+  }
+  return explicit;
+};
+const RUN_DIR = resolveRunDir();
 
 const t3Pid = () => {
+  let fd = null;
   try {
-    const pid = Number(readFileSync(`${RUN_DIR}/t3.pid`, "utf8").trim());
+    fd = openSync(`${RUN_DIR}/t3.pid`, constants.O_RDONLY | constants.O_NOFOLLOW);
+    if (!fstatSync(fd).isFile()) return null;
+    const pid = Number(readFileSync(fd, "utf8").trim());
     return Number.isInteger(pid) && pid > 1 ? pid : null;
   } catch {
     return null;
+  } finally {
+    if (fd !== null) try { closeSync(fd); } catch {}
   }
 };
 
@@ -1137,11 +1156,17 @@ const restartT3 = (why = null) => {
     return { http: 409, body: { ok: false, code: "unsupervised", error: "T3 Code is not running under the image's supervisor, so this page cannot restart it. Restart the container instead." } };
   }
   const request = `${RUN_DIR}/restart`;
+  let fd = null;
   try {
-    writeFileSync(request, `${new Date().toISOString()}\n`);
+    rmSync(request, { force: true });
+    fd = openSync(request, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+    writeFileSync(fd, `${new Date().toISOString()}\n`);
+    closeSync(fd);
+    fd = null;
     process.kill(pid, "SIGTERM");
   } catch (error) {
-    rmSync(request, { force: true });
+    if (fd !== null) try { closeSync(fd); } catch {}
+    try { rmSync(request, { force: true }); } catch {}
     return { http: 500, body: { ok: false, error: `Could not restart T3 Code (${error.code ?? error.message}).` } };
   }
   forgetConnect();

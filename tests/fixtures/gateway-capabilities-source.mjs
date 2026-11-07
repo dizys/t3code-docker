@@ -208,3 +208,16 @@ function auxiliary(codexConfig, model, modelSelection, fellBack) {
 }
 `,
 };
+
+// Stable v0.1.7 has no auxiliary fallback or custom-entry import yet.
+export const stableSource = {
+  ...source,
+  'apps/server/src/textGeneration/CodexTextGeneration.ts': source['apps/server/src/textGeneration/CodexTextGeneration.ts']
+    .replace(`import {
+  getModelSelectionStringOptionValue,
+  readCustomModelEntries,
+} from "@t3tools/shared/model";`, 'import { codexModelFamily, getModelSelectionStringOptionValue } from "@t3tools/shared/model";')
+    .replace(`        (fellBack
+          ? undefined
+          : getModelSelectionStringOptionValue(modelSelection, "reasoningEffort")) ??`, '        getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??'),
+};

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
-import { source } from './fixtures/gateway-capabilities-source.mjs';
+import { source, stableSource } from './fixtures/gateway-capabilities-source.mjs';
 import { files, patchGatewayCapabilities } from '../docker/runtime/patches/gateway-capabilities.mjs';
 import { patches } from '../docker/runtime/patches/index.mjs';
 
@@ -107,6 +107,12 @@ test('Codex forwards exact effort into both native turn fields and suppresses na
   const selection = { model: 'gpt-6-astra', options: [{ id: 'reasoningEffort', value: 'ultra' }] };
   assert.deepEqual(auxiliary(config, 'gpt-6-astra', selection, false), ['--config', 'model_reasoning_effort="ultra"']);
   assert.deepEqual(auxiliary(config, 'gpt-6-astra', selection, true), [], 'fallback models do not inherit choices for the requested model');
+  const stableText = patchGatewayCapabilities(stableSource)[files[5]].replace(/import \{[\s\S]*?from "@t3tools\/shared\/model";\n/, '');
+  const { auxiliary: stableAuxiliary } = load(stableText, ['auxiliary'], { ...dependencies, DEFAULT_TEXT_GENERATION_REASONING_EFFORT: 'low' });
+  assert.doesNotMatch(stableText, /fellBack \?/);
+  assert.deepEqual(stableAuxiliary({ customModels: [] }, 'gpt-6-astra', base.modelSelection, false), ['--config', 'model_reasoning_effort="low"']);
+  assert.deepEqual(stableAuxiliary({ customModels }, 'gpt-6-astra', selection, false), []);
+  assert.deepEqual(stableAuxiliary(config, 'gpt-6-astra', selection, false), ['--config', 'model_reasoning_effort="ultra"']);
 });
 
 test('runtime advertises the complete override contract and fails closed on source drift', () => {
@@ -115,11 +121,14 @@ test('runtime advertises the complete override contract and fails closed on sour
   assert.match(patched[files[3]], /customModelCapabilityOverrides: Schema\.optionalKey\(Schema.Boolean\)/);
   assert.match(patched[files[4]], /customModelCapabilityOverrides: true/);
   assert.deepEqual(source, before);
-  for (const file of files) for (const repeated of [false, true]) {
-    const input = { ...source, [file]: repeated ? source[file] + source[file] : 'changed' };
+  for (const fixture of [source, stableSource]) for (const file of files) for (const repeated of [false, true]) {
+    const input = { ...fixture, [file]: repeated ? fixture[file] + fixture[file] : 'changed' };
     const original = structuredClone(input);
     assert.throws(() => patchGatewayCapabilities(input), /no longer matches/);
     assert.deepEqual(input, original);
   }
   assert.throws(() => patchGatewayCapabilities(patched), /no longer matches/);
+  const file = files[5];
+  const mixed = { ...stableSource, [file]: stableSource[file].replace('        getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??', '        (fellBack ? undefined : getModelSelectionStringOptionValue(modelSelection, "reasoningEffort")) ??') };
+  assert.throws(() => patchGatewayCapabilities(mixed), /no longer matches/);
 });

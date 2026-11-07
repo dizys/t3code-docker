@@ -102,10 +102,23 @@ test('limits read as a count, or as what to do', () => {
   const account = driver => ({ driver });
   assert.equal(S.limitsState({ state: 'on', accounts: [account('claudeAgent'), account('codex'), account('codex')] }).label, '3 accounts');
   assert.equal(S.limitsState({ state: 'on', accounts: [account('claudeAgent'), account('codex'), account('codex')] }).desc, '1 Claude · 2 Codex');
-  assert.match(S.limitsState({ state: 'on', accounts: [] }).desc, /no Claude or Codex accounts/);
+  assert.match(S.limitsState({ state: 'on', accounts: [] }).desc, /no enabled accounts/);
   assert.equal(S.limitsState({ state: 'reading', accounts: [] }).busy, true);
   assert.equal(S.limitsState({ state: 'error', accounts: [], detail: 'Refused' }).desc, 'Refused');
   assert.equal(S.limitsState({ state: 'unknown', accounts: [] }).label, 'Limits unknown');
+});
+
+test('quota summaries distinguish missing data from exhausted quota across every provider', () => {
+  const available = { driver: 'antigravity', windows: [{ left: 0 }] }, missing = { driver: 'opencode-go', windows: [], unavailable: { reason: 'probeFailed' } };
+  assert.equal(S.limitsState({ state: 'partial', accounts: [available, missing] }).label, '1 of 2 reporting');
+  assert.equal(S.limitsState({ state: 'unavailable', accounts: [missing] }).label, 'Quota unavailable');
+  assert.equal(S.accountsLine([{ driver: 'claudeAgent' }, { driver: 'codex' }, available, { driver: 'muse' }, missing]), '1 Claude · 1 Codex · 1 Antigravity · 1 Muse Code · 1 OpenCode Go');
+  assert.equal(S.resetLine({ resetsAt: '2026-11-08T05:00:00Z' }, Date.parse('2026-11-08T03:30:00Z')), 'Resets in 1h 30m');
+  assert.equal(S.resetLine({ resetsAt: '2026-11-08T05:00:00Z' }, Date.parse('2026-11-08T06:00:00Z')), 'Reset due; refresh Limits');
+  assert.equal(S.resetLine({ resetsAt: null }), 'Reset time unavailable');
+  assert.equal(S.quotaLeft({ left: 0 }), '0% left');
+  assert.equal(S.quotaLeft({ left: 0.2 }), '<1% left');
+  assert.equal(S.quotaLeft({ left: 74.6 }), '75% left');
 });
 
 test('search finds a gateway by what someone remembers about it', () => {

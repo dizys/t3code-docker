@@ -123,10 +123,28 @@ tokens would cost at public API prices, not what your gateway charges, and turns
 through a gateway are added to the same agent and model as direct ones.
 
 **Limits** come from CLIProxyAPI's management API. Add its management key, and the
-quota of each Claude and Codex account it pools appears under **Usage → Limits** in
+quota of its Claude, Codex, Antigravity, Muse/Meta and supported plugin accounts
+(including OpenCode Go) appears under **Usage → Limits** in
 T3 Code. Use the key you chose as `secret-key`, not the API key. CLIProxyAPI hashes
 that value on startup, so what its config file shows now won't work. It also needs
 `allow-remote` on unless the gateway runs in this container.
+
+Antigravity reports each model group's quota windows. Muse needs an OAuth account
+with its DCA token saved in CLIProxyAPI; an inference API key alone cannot read its
+subscription quota. Plugin accounts use CLIProxyAPI's normalized quota interface,
+so their quota plugin must be installed and enabled there. These readers ship in
+this image's patched Stable and Nightly T3 runtime.
+
+Meta can return an active subscription and plan without its `subs_usage` windows.
+In that case the account stays visible with its plan and an explicit unknown-quota
+message. Muse's SDK only exposes previously observed usage, so it cannot supply a
+fresh quota reading for each account behind a gateway.
+
+Gateway details show remaining percentages and reset times for each account.
+Missing quota is shown as unavailable, with an account-specific explanation;
+zero remaining is shown only when the provider reports exhaustion. One account's
+failure leaves the others visible, and native Limits includes failure notices.
+Request counts and success rates are never used to estimate remaining quota.
 
 You can add it when you add the gateway, or later with **Set up…** in its details.
 The page checks the key once, and only when you ask, because CLIProxyAPI locks an

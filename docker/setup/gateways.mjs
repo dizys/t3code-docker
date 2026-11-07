@@ -34,7 +34,7 @@ export const gatewayFailure = error => {
   return { status, body: { ok: false, code: error?.code ?? 'failed', error: String(error?.message ?? 'The gateway change did not finish.').slice(0, 300) } };
 };
 
-export const GATEWAY_ROUTES = Object.freeze(['/gateways', '/gateways/test', '/gateways/create', '/gateways/save', '/gateways/agent', '/gateways/limits', '/gateways/apply', '/gateways/models', '/gateways/remove', '/gateways/conflict']);
+export const GATEWAY_ROUTES = Object.freeze(['/gateways', '/gateways/test', '/gateways/create', '/gateways/save', '/gateways/agent', '/gateways/limits', '/gateways/limits/refresh', '/gateways/apply', '/gateways/models', '/gateways/remove', '/gateways/conflict']);
 
 const MAX_NAME = 40;
 const COSMETIC = new Set(['name', 'accent']);
@@ -392,11 +392,16 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     if (!supported || !source) return { supported, state: 'off', owned: false, sourceId: null, accounts: [] };
     const report = reports.find(entry => entry.id === sourceId);
     const accounts = (report?.accounts ?? []).map(({ id, driver, email, plan, usageLimits }) => ({ id, driver, email: email ?? null, plan: plan ?? null,
-      windows: (usageLimits?.windows ?? []).map(({ id: window, label, usedPercent }) => ({ id: window, label, left: Math.round(100 - usedPercent) })) }));
+      checkedAt: usageLimits?.checkedAt ?? report?.checkedAt ?? null,
+      unavailable: usageLimits?.unavailable ? { reason: usageLimits.unavailable.reason, message: usageLimits.unavailable.message ?? null } : null,
+      windows: (usageLimits?.windows ?? []).filter(window => Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && window.usedPercent <= 100)
+        .map(({ id: window, label, usedPercent, resetsAt }) => ({ id: window, label, left: 100 - usedPercent, resetsAt: Number.isFinite(Date.parse(resetsAt)) ? resetsAt : null })) }));
     const base = { supported, owned: Boolean(owned), sourceId, enabled: source.enabled !== false, accounts, checkedAt: report?.checkedAt ?? null };
     if (source.enabled === false) return { ...base, state: 'paused' };
     if (!report) return { ...base, state: 'reading' };
     if (report.error) return { ...base, state: 'error', detail: String(report.error).slice(0, 240) };
+    const missing = accounts.filter(account => account.unavailable || !account.windows.length).length;
+    if (missing) return { ...base, state: missing === accounts.length ? 'unavailable' : 'partial' };
     return { ...base, state: 'on' };
   };
 
@@ -558,6 +563,21 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     return { ok: true, ...await status() };
   });
 
+  // The native API refreshes every hub. Share concurrent requests and never
+  // rewrite settings, a key or an agent to refresh quota.
+  let quotaRefresh = null;
+  const refreshLimits = async input => {
+    const state = await requireT3(), { gateways } = await current(input?.revision), gateway = find(gateways, input.id);
+    const sourceId = gateway.limits?.sourceId ?? hubAt(gateway.url, state.hubSources);
+    if (!sourceId || !state.hubSources?.[sourceId]) throw new GatewayError('Set up Limits for this gateway first.', 409, 'limits-off');
+    if (state.hubSources[sourceId].enabled === false) throw new GatewayError('Limits are paused in T3 Code’s settings.', 409, 'limits-paused');
+    if (!quotaRefresh) quotaRefresh = t3.refreshLimits().finally(() => { quotaRefresh = null; });
+    try { await quotaRefresh; }
+    catch { throw new GatewayError('T3 Code could not refresh Limits. Check Usage → Limits and try again.', 502, 'quota-refresh-failed'); }
+    invalidate();
+    return { ok: true, ...await status() };
+  };
+
   /** Restore what was changed in T3 Code, and bring a stale key up to date. */
   const reapply = input => serial(async () => {
     const state = await requireT3(), { gateways } = await current(input?.revision), gateway = find(gateways, input.id);
@@ -609,8 +629,8 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     return { ok: true, ...await status() };
   });
 
-  const actions = { '/gateways/test': test, '/gateways/create': create, '/gateways/save': save, '/gateways/agent': setAgent, '/gateways/limits': setLimits, '/gateways/apply': reapply, '/gateways/models': refreshModels, '/gateways/remove': remove, '/gateways/conflict': clearConflict };
-  return { status, summary, test, create, save, setAgent, setLimits, reapply, refreshModels, remove, clearConflict,
+  const actions = { '/gateways/test': test, '/gateways/create': create, '/gateways/save': save, '/gateways/agent': setAgent, '/gateways/limits': setLimits, '/gateways/limits/refresh': refreshLimits, '/gateways/apply': reapply, '/gateways/models': refreshModels, '/gateways/remove': remove, '/gateways/conflict': clearConflict };
+  return { status, summary, test, create, save, setAgent, setLimits, refreshLimits, reapply, refreshModels, remove, clearConflict,
     /** One entry point for the server. `route` is one of GATEWAY_ROUTES. */
     handle: (route, input) => route === '/gateways' ? status() : actions[route]?.(input) ?? Promise.reject(new GatewayError('Gateway action not found.', 404, 'not-found')) };
 }

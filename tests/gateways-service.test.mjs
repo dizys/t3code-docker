@@ -25,6 +25,7 @@ function fakeT3({ instances = {}, models = {}, customModelCapabilityOverrides = 
         providers: Object.entries(state.instances).filter(([id]) => id.includes('_gw_')).map(([instanceId, instance]) => ({ instanceId, status: t3.status, installed: true, checkedAt: checked.get(instanceId), models: (models[instance.driver] ?? []).map(slug => ({ slug })) })) };
     },
     refresh: async id => { t3.refreshed.push(id); },
+    refreshLimits: async () => { t3.refreshed.push('limits'); },
     // As on a real server, reports are only on the config stream, and a read never carries them.
     hubReports: async () => { t3.reportReads++; if (t3.hubStreamFails) throw new Error('no stream'); return t3.reports; },
     setHub: async (id, source) => {
@@ -84,7 +85,7 @@ async function harness(t, options = {}) {
   const home = path.join(root, 'home'), t3 = fakeT3(options), vault = fakeVault();
   await fs.mkdir(path.join(home, '.claude'), { recursive: true });
   const stopped = [], processes = { stop: async (agent, instanceId) => { stopped.push(instanceId); return 1; } };
-  const service = createGatewayService({ baseDir: path.join(root, 'state'), home, env: {}, io: fs, t3, vault, processes, wait: options.wait ?? (() => Promise.resolve()), ...(options.now ? { now: options.now } : {}), ...(options.getHarness ? { getHarness: options.getHarness } : {}) });
+  const service = createGatewayService({ baseDir: path.join(root, 'state'), home, env: {}, io: options.io ?? fs, t3, vault, processes, wait: options.wait ?? (() => Promise.resolve()), ...(options.now ? { now: options.now } : {}), ...(options.getHarness ? { getHarness: options.getHarness } : {}) });
   return { service, t3, vault, home, root, stopped, processes, gateway: await gatewayServer(t, options.gatewayModels) };
 }
 const add = (h, agents = ['claude', 'codex', 'opencode'], over = {}) => h.service.create({ gateway: { name: 'My Proxy', preset: 'cliproxyapi', url: h.gateway.url, agents, ...over }, key: 'sk-one' });
@@ -1101,7 +1102,7 @@ test('a hub added in T3 Code’s settings is shown, and is never ours to remove'
   h.t3.hubs['cliproxy-theirs'] = { kind: 'cliproxy', url: hub.url, managementKey: 'theirs', enabled: true };
   h.t3.reports = [{ id: 'cliproxy-theirs', kind: 'cliproxy', label: 'Theirs', checkedAt: '2026-11-06T00:00:00Z', accounts: [{ id: 'a', driver: 'codex', email: 'a@b.c', plan: 'Pro', usageLimits: {} }] }];
   const { id, gateways } = await h.service.create(createInput(hub));
-  assert.deepEqual({ state: gateways[0].limits.state, owned: gateways[0].limits.owned, count: gateways[0].limits.accounts.length }, { state: 'on', owned: false, count: 1 });
+  assert.deepEqual({ state: gateways[0].limits.state, owned: gateways[0].limits.owned, count: gateways[0].limits.accounts.length }, { state: 'unavailable', owned: false, count: 1 });
   await h.service.remove({ id, revision: (await h.service.status()).revision });
   assert.ok(h.t3.hubs['cliproxy-theirs'], 'Removing the gateway leaves it');
 });
@@ -1140,10 +1141,59 @@ test('limits report what T3 sees, and only for a gateway that can have them', as
   h.t3.reports = [{ id: sourceId, kind: 'cliproxy', label: 'Hub', checkedAt: '2026-11-06T00:00:00Z', accounts: [{ id: 'a', driver: 'claudeAgent', email: 'a@b.c', usageLimits: { credentialFingerprint: 'not-for-the-page', windows: [{ id: 'five-hour', kind: 'session', label: 'Session', usedPercent: 25.4 }] } }] }];
   await h.service.setLimits({ id, revision: (await h.service.status()).revision, managementKey: 'the-management-key' });
   const on = (await h.service.status()).gateways[0].limits;
-  assert.equal(on.state, 'on'); assert.deepEqual(on.accounts, [{ id: 'a', driver: 'claudeAgent', email: 'a@b.c', plan: null, windows: [{ id: 'five-hour', label: 'Session', left: 75 }] }], 'What’s left, and only what the page shows');
+  assert.equal(on.state, 'on'); assert.deepEqual(on.accounts, [{ id: 'a', driver: 'claudeAgent', email: 'a@b.c', plan: null, checkedAt: '2026-11-06T00:00:00Z', unavailable: null, windows: [{ id: 'five-hour', label: 'Session', left: 74.6, resetsAt: null }] }], 'What’s left, and only what the page shows');
   h.t3.reports = [{ id: sourceId, kind: 'cliproxy', label: 'Hub', checkedAt: '2026-11-06T00:00:00Z', accounts: [], error: 'The hub rejected the key.' }];
   await h.service.setLimits({ id, revision: (await h.service.status()).revision, managementKey: 'the-management-key' });
   assert.equal((await h.service.status()).gateways[0].limits.state, 'error');
   const litellm = await h.service.create({ gateway: { name: 'Other', preset: 'litellm', url: hub.url, agents: [] }, key: 'sk-api' });
   assert.equal(litellm.gateways.find(row => row.id !== id).limits.supported, false);
+});
+
+test('account quota failures keep healthy windows, resets and provider identity without leaking extra response fields', async t => {
+  const h = await harness(t), hub = await hubServer(t);
+  const { id, gateways: [created] } = await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
+  const sourceId = created.limits.sourceId, checkedAt = '2026-11-07T00:00:00Z', resetsAt = '2026-11-08T00:00:00Z';
+  h.t3.reports = [{ id: sourceId, checkedAt, accounts: [
+    { id: 'ag', driver: 'antigravity', usageLimits: { checkedAt, windows: [{ id: 'claude:weekly', label: 'Claude · Weekly', usedPercent: 100, resetsAt }], api_key: 'do-not-copy' } },
+    { id: 'muse', driver: 'muse', usageLimits: { checkedAt, windows: [], unavailable: { reason: 'probeFailed', message: 'The provider returned HTTP 429.', raw: 'do-not-copy' } } },
+    { id: 'go', driver: 'opencode-go', usageLimits: { checkedAt, windows: [{ id: 'weekly', label: 'Weekly', usedPercent: NaN }, { id: 'session', label: 'Session', usedPercent: -1 }] } },
+  ] }];
+  await h.service.setLimits({ id, revision: (await h.service.status()).revision, managementKey: 'the-management-key' });
+  const limits = (await h.service.status()).gateways[0].limits;
+  assert.equal(limits.state, 'partial');
+  assert.equal(limits.accounts.length, 3);
+  assert.deepEqual(limits.accounts[0].windows[0], { id: 'claude:weekly', label: 'Claude · Weekly', left: 0, resetsAt });
+  assert.deepEqual(limits.accounts[1].unavailable, { reason: 'probeFailed', message: 'The provider returned HTTP 429.' });
+  assert.deepEqual(limits.accounts[2].windows, []);
+  assert.ok(!JSON.stringify(limits).includes('do-not-copy'));
+  h.t3.reports[0].accounts.shift();
+  await h.service.setLimits({ id, revision: (await h.service.status()).revision, managementKey: 'the-management-key' });
+  assert.equal((await h.service.status()).gateways[0].limits.state, 'unavailable');
+});
+
+test('quota refresh shares in-flight probes, preserves configuration, and sanitizes a failed refresh', async t => {
+  // Freeze just the store read so concurrency does not depend on disk timing.
+  let cachedFile, cachedText;
+  const io = { ...fs, readFile: (file, ...args) => file === cachedFile ? Promise.resolve(cachedText) : fs.readFile(file, ...args) };
+  const h = await harness(t, { io }), hub = await hubServer(t);
+  const created = await h.service.create(createInput(hub, { managementKey: 'the-management-key' })), id = created.id;
+  cachedFile = path.join(h.root, 'state/setup/gateways/gateways.json');
+  cachedText = await fs.readFile(cachedFile, 'utf8');
+  const snapshot = { revision: created.revision, agents: structuredClone(h.t3.writes), hubs: structuredClone(h.t3.hubWrites), keyReads: h.vault.reads };
+  let finish, calls = 0;
+  const pending = new Promise(resolve => { finish = resolve; });
+  h.t3.refreshLimits = () => { calls++; return pending; };
+  const first = h.service.refreshLimits({ id, revision: created.revision }), second = h.service.refreshLimits({ id, revision: created.revision });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 1, 'Concurrent callers share the native refresh');
+  finish();
+  const results = await Promise.all([first, second]);
+  assert.ok(results.every(result => result.ok && result.revision === snapshot.revision));
+  assert.deepEqual(h.t3.writes, snapshot.agents);
+  assert.deepEqual(h.t3.hubWrites, snapshot.hubs);
+  assert.equal(h.vault.reads, snapshot.keyReads);
+  h.t3.refreshLimits = async () => { throw new Error('secret-or-raw-upstream-body'); };
+  await assert.rejects(h.service.refreshLimits({ id, revision: created.revision }), error => error.code === 'quota-refresh-failed' && !error.message.includes('secret-or-raw'));
+  h.t3.refreshLimits = async () => { calls++; };
+  assert.equal((await h.service.refreshLimits({ id, revision: created.revision })).ok, true, 'A failed refresh can be retried');
 });

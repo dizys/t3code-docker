@@ -86,7 +86,9 @@ const T3GatewayModel = (() => {
   /** A gateway's Limits, as the page words them. */
   const limitsState = limits => {
     const count = limits?.accounts?.length || 0;
-    if (limits?.state === 'on') return { tone: count ? 'ok' : '', label: count ? plural(count, 'account') : 'No accounts', desc: count ? accountsLine(limits.accounts) : 'This gateway has no Claude or Codex accounts for Limits to show.' };
+    if (limits?.state === 'on') return { tone: count ? 'ok' : '', label: count ? plural(count, 'account') : 'No accounts', desc: count ? accountsLine(limits.accounts) : 'This gateway has no enabled accounts for Limits to show.' };
+    if (limits?.state === 'partial') return { tone: 'warn', label: limits.accounts.filter(account => !account.unavailable && account.windows.length).length + ' of ' + count + ' reporting', desc: 'Some accounts could not report quota. Open this gateway for details.' };
+    if (limits?.state === 'unavailable') return { tone: 'warn', label: 'Quota unavailable', desc: plural(count, 'account') + ' connected, but no quota is available. Open this gateway for details.' };
     if (limits?.state === 'reading') return { tone: 'info', label: 'Reading accounts…', busy: true, desc: 'T3 Code is reading this gateway for the first time.' };
     if (limits?.state === 'error') return { tone: 'warn', label: 'Can’t read accounts', desc: limits.detail || '' };
     if (limits?.state === 'unknown') return { tone: '', label: 'Limits unknown', desc: 'T3 Code isn’t answering.' };
@@ -94,9 +96,18 @@ const T3GatewayModel = (() => {
     return { tone: '', label: 'Not set up', desc: '' };
   };
   /** What's left on an account, the way Usage → Limits says it. */
-  const windowsLine = account => (account.windows || []).map(window => window.label + ' ' + window.left + '% left').join(' · ');
-  const accountsLine = accounts => ['claudeAgent', 'codex'].map(driver => [driver, accounts.filter(account => account.driver === driver).length]).filter(([, count]) => count)
-    .map(([driver, count]) => count + ' ' + (driver === 'codex' ? 'Codex' : 'Claude')).join(' · ');
+  const quotaLeft = window => window.left > 0 && window.left < 1 ? '<1% left' : Math.round(window.left) + '% left';
+  const windowsLine = account => (account.windows || []).map(window => window.label + ' ' + quotaLeft(window)).join(' · ');
+  const quotaProvider = driver => ({ claudeAgent: 'Claude', codex: 'Codex', antigravity: 'Antigravity', muse: 'Muse Code', 'opencode-go': 'OpenCode Go' })[driver] || String(driver || 'Gateway').replace(/[-_]/g, ' ');
+  const accountsLine = accounts => [...new Set(accounts.map(account => account.driver))]
+    .map(driver => accounts.filter(account => account.driver === driver).length + ' ' + quotaProvider(driver)).join(' · ');
+  const resetLine = (window, now = Date.now()) => {
+    const at = Date.parse(window.resetsAt);
+    if (!Number.isFinite(at)) return 'Reset time unavailable';
+    if (at <= now) return 'Reset due; refresh Limits';
+    const minutes = Math.ceil((at - now) / 60000), hours = Math.floor(minutes / 60), days = Math.floor(hours / 24);
+    return 'Resets in ' + (days ? days + 'd ' + hours % 24 + 'h' : hours ? hours + 'h ' + minutes % 60 + 'm' : minutes + 'm');
+  };
 
   const FAMILIES = Object.freeze([['Anthropic', /claude/i], ['OpenAI', /(?:^|\/)(?:chatgpt|codex|dall-e|gpt|o\d|omni|text-embedding|tts|whisper)/i], ['Google', /gemini|imagen|veo/i], ['Meta', /llama|muse/i], ['xAI', /grok/i], ['DeepSeek', /deepseek/i], ['Mistral', /codestral|mistral/i], ['Qwen', /qwen/i]]);
   /** Model ids under the company that makes them, in the order someone looks for them. */
@@ -197,5 +208,5 @@ const T3GatewayModel = (() => {
   /** The names a new gateway's agents will have in T3 Code's model picker. */
   const instanceNames = (ids, name) => ids.map(id => (agentOf(id)?.short || id) + ' · ' + name);
 
-  return { setCatalog, presets, agents, unsupported, presetOf, agentOf, protocolName, protocolShort, models, plural, listOf, agentState, agentLine, needsAttention, cellState, attention, matches, limitsState, accountsLine, windowsLine, modelGroups, gatewayState, newModels, checkLines, availability, canContinueAnyway, conflictSentence, problemLabel, instanceNames };
+  return { setCatalog, presets, agents, unsupported, presetOf, agentOf, protocolName, protocolShort, models, plural, listOf, agentState, agentLine, needsAttention, cellState, attention, matches, limitsState, accountsLine, windowsLine, quotaProvider, quotaLeft, resetLine, modelGroups, gatewayState, newModels, checkLines, availability, canContinueAnyway, conflictSentence, problemLabel, instanceNames };
 })();

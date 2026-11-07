@@ -7,8 +7,11 @@ const { pathToFileURL } = require('node:url');
 
 const setup = pathToFileURL(process.env.T3_GATEWAYS_MODULE || path.join(__dirname, '../../docker/setup/gateways.mjs')).href;
 const MODELS = ['claude-fable-5-1', 'claude-haiku-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5', 'gemini-2.5-pro', 'gemini-3-flash', 'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.1-terra'];
-const windows = (session, weekly) => ({ windows: [{ id: 'session', kind: 'session', label: 'Session', usedPercent: session }, { id: 'weekly', kind: 'weekly', label: 'Weekly', usedPercent: weekly }] });
-const ACCOUNTS = [{ id: 'a', driver: 'claudeAgent', email: 'claude@example.com', plan: 'Max', usageLimits: windows(25, 40) }, { id: 'b', driver: 'codex', email: 'codex-one@example.com', plan: 'Pro', usageLimits: windows(30, 55) }, { id: 'c', driver: 'codex', email: 'codex-two@example.com', plan: 'Plus', usageLimits: windows(10, 20) }];
+const windows = (session, weekly) => ({ windows: [{ id: 'session', kind: 'session', label: 'Session', usedPercent: session, resetsAt: '2099-01-01T00:00:00Z' }, { id: 'weekly', kind: 'weekly', label: 'Weekly', usedPercent: weekly, resetsAt: '2099-01-02T00:00:00Z' }] });
+const ACCOUNTS = [{ id: 'a', driver: 'claudeAgent', email: 'claude@example.com', plan: 'Max', usageLimits: windows(25, 40) }, { id: 'b', driver: 'codex', email: 'codex-one@example.com', plan: 'Pro', usageLimits: windows(30, 55) }, { id: 'c', driver: 'codex', email: 'codex-two@example.com', plan: 'Plus', usageLimits: windows(10, 20) },
+  { id: 'antigravity', driver: 'antigravity', email: 'antigravity@example.com', usageLimits: windows(100, 50) },
+  { id: 'muse', driver: 'muse', email: 'muse@example.com', plan: 'Everyday', usageLimits: windows(2, 0) },
+  { id: 'go', driver: 'opencode-go', email: 'go@example.com', plan: 'Go', usageLimits: windows(60, 25) }];
 const BUILT_IN = { claudeAgent: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'], codex: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.5'] };
 
 const memoryFiles = () => {
@@ -71,11 +74,12 @@ const memoryT3 = () => {
       if (source === null) { delete state.hubs[id]; state.reports = state.reports.filter(report => report.id !== id); return; }
       state.hubs[id] = { ...source, managementKey: source.managementKey === '__redacted__' ? state.hubs[id]?.managementKey : source.managementKey };
       state.reports = state.reports.filter(report => report.id !== id);
-      setTimeout(() => { if (state.hubs[id]) state.reports.push({ id, kind: 'cliproxy', label: source.label, checkedAt: new Date().toISOString(), accounts: ACCOUNTS }); }, 1200);
+      setTimeout(() => { if (state.hubs[id]) state.reports.push({ id, kind: 'cliproxy', label: source.label, checkedAt: new Date().toISOString(), accounts: structuredClone(ACCOUNTS) }); }, 1200);
     },
     // Like T3: reports only come from the stream, never from a read.
     hubReports: async () => state.reports,
     refresh: async () => {},
+    refreshLimits: async () => {},
     remove: async id => { delete state.instances[id]; },
     setModelsHidden: async changes => { for (const { provider, model, hidden } of changes) { const list = state.preferences[provider]?.hiddenModels ?? []; state.preferences[provider] = { hiddenModels: hidden ? [...list, model] : list.filter(entry => entry !== model) }; } },
   };

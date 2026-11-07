@@ -13,9 +13,7 @@ const RESERVE=1024**3,DAY=86400_000;
 // run under per-id locks, so uploads with different ids would otherwise each
 // see the full reserve and jointly spend past it.
 let reservedBytes=0;
-// Remaining bytes promised to unfinished uploads, by upload id. The first live
-// instance to load an id owns its global share; later duplicates track their
-// own copy without promising the same bytes twice.
+// One remaining-byte claim per upload id, shared by duplicate live instances.
 const reservedIds=new Map();
 const validId=id=>typeof id==='string'&&/^u_[0-9a-f-]{36}$/.test(id);
 const relative=value=>{
@@ -32,10 +30,14 @@ const digest=async(file,expected)=>{
 };
 export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.statfs(value),onFinish=()=>{}}) {
   const sessions=new Map(),locks=new Map(),metadata=createLimiter(1),starts=createLimiter(1);
-  // This instance's share of reservedBytes, so its own rows are not counted twice.
-  let counted=0;
-  const reserve=row=>{row.reserved=(row.reserved??0)+row.size;counted+=row.size;reservedBytes+=row.size;if(row.size>0)reservedIds.set(row.id,(reservedIds.get(row.id)??0)+row.size);};
-  const release=(row,n=row.reserved??0)=>{n=Math.min(n,row.reserved??0);if(n>0){row.reserved-=n;counted-=n;const pending=reservedIds.get(row.id)??0,take=Math.min(n,pending);if(take>0){reservedBytes-=take;if(pending>take)reservedIds.set(row.id,pending-take);else reservedIds.delete(row.id);}}};
+  const reserve=row=>{row.reserved=row.size;reservedBytes+=row.size;if(row.size>0)reservedIds.set(row.id,row.size);};
+  // Reconcile an absolute remainder: duplicate instances must not release the same chunk twice.
+  const release=(row,n=row.reserved??0)=>{
+    row.reserved=Math.max(0,(row.reserved??0)-n);
+    const pending=reservedIds.get(row.id)??0,remaining=Math.min(pending,row.reserved);
+    reservedBytes-=pending-remaining;
+    if(remaining)reservedIds.set(row.id,remaining);else reservedIds.delete(row.id);
+  };
   const directory=path.join(policy.stateDir,'files','uploads');
   let loading;
   const lock=(id,work)=>{if(!locks.has(id))locks.set(id,createLimiter(1));return locks.get(id)(work);};
@@ -59,7 +61,7 @@ export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.
         if(row.result){normalizePath(row.result.path);row.reserved=0;sessions.set(row.id,row);continue;}
         const parent=await maybeStat(row.parent),temp=await maybeStat(row.temp);
         if(!parent?.isDirectory()||parent.isSymbolicLink()||identity(parent)!==row.parentIdentity||!temp?.isFile()||temp.isSymbolicLink()||identity(temp)!==row.identity||Number(temp.size)>row.size)continue;
-        row.received=Number(temp.size);row.reserved=row.size-row.received;counted+=row.reserved;
+        row.received=Number(temp.size);row.reserved=row.size-row.received;
         if(row.reserved>0&&!reservedIds.has(row.id)){reservedIds.set(row.id,row.reserved);reservedBytes+=row.reserved;}
         sessions.set(row.id,row);
       }catch{/* Foreign or incomplete metadata cannot authorize staging cleanup. */}
@@ -84,8 +86,7 @@ export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.
     const results=[],created=[];
     const pending=items.filter(item=>!item.directory&&![...sessions.values()].some(row=>!row.result&&row.dest===dest&&row.relative===item.path&&row.size===item.size&&row.lastModified===item.lastModified));
     const required=pending.reduce((sum,row)=>sum+row.size,0);if(!Number.isSafeInteger(required))fail('too-large','This upload is too large. Upload a smaller selection.');
-    const device=String((await fs.lstat(dest,{bigint:true})).dev),reserved=[...sessions.values()].filter(row=>!row.result&&row.parentIdentity.split(':')[0]===device).reduce((sum,row)=>sum+row.size-row.received,0);
-    const freeBytes=await enough(dest,required+reserved+(reservedBytes-counted));
+    const freeBytes=await enough(dest,required+reservedBytes);
     if([...sessions.values()].filter(row=>!row.result).length+pending.length>2048)fail('busy','There are too many unfinished uploads. Cancel old uploads before starting more.');
     try{
       for(const item of items){
@@ -111,7 +112,7 @@ export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.
     if(!Buffer.isBuffer(body)||body.length>CHUNK_BYTES)fail('too-large','Each upload chunk can contain up to 8 MiB.');
     if(input.offset===null||input.offset===undefined)fail('invalid','Each upload chunk needs its offset.');const offset=Number(input.offset);if(!Number.isSafeInteger(offset)||offset<0||offset!==row.received)fail('changed','Continue this upload from the saved offset.',{received:row.received});
     if(row.received+body.length>row.size)fail('invalid','This chunk exceeds the declared file size.');
-    await enough(row.parent,body.length+reservedBytes-(row.reserved??0));
+    await enough(row.parent,body.length+reservedBytes-(reservedIds.get(row.id)??0));
     return guard.run(input,[{path:row.target,mode:'write',missing:true,inUse:false}],async([target])=>{
       if(identity(target.pin.stat)!==row.parentIdentity||target.pin.parent!==row.parent)fail('changed','The upload folder changed. Cancel this upload and choose the folder again.');
       const temp=path.join(`/proc/self/fd/${target.pin.handle.fd}`,path.basename(row.temp)),handle=await fs.open(temp,constants.O_RDWR|constants.O_NOFOLLOW|constants.O_NONBLOCK);

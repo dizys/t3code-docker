@@ -114,3 +114,24 @@ test('pruning recovered uploads releases their reservations',async t=>{
   const second=await c.start({dest:f.workspace,items:[item('new.bin',10*1024*1024)]});await c.cancel({ids:second.uploads.map(row=>row.id)});
   await a.cancel({ids:[id]});
 });
+
+test('stale instances cannot subtract released reservations from other uploads',async t=>{
+  const f=await filesFixture(t),statfs=async()=>({bavail:1024**3+10*1024*1024,bsize:1});
+  const a=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs});
+  const first=await a.start({dest:f.workspace,items:[item('old.bin',8*1024*1024)]}),id=first.uploads[0].id;
+  const b=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs});await b.jobs();
+  await b.chunk({id,offset:0},Buffer.alloc(8*1024*1024));await b.finish({id});
+  const next=await b.start({dest:f.workspace,items:[item('pending.bin',8*1024*1024)]});
+  await assert.rejects(a.start({dest:f.workspace,items:[item('extra.bin',4*1024*1024)]}),{code:'no-space'});
+  await b.cancel({ids:next.uploads.map(row=>row.id)});await a.cancel({ids:[id]});
+});
+
+test('fresh module recovery reserves all unfinished uploads before accepting chunks',async t=>{
+  const f=await filesFixture(t);
+  const started=await f.uploads.start({dest:f.workspace,items:[item('recover-a.bin',8*1024*1024),item('recover-b.bin',8*1024*1024)]});
+  const {createUploads:restarted}=await import('../docker/setup/files/uploads.mjs?restart-reserve-test');
+  const recovered=restarted({policy:f.policy,guard:f.guard,trash:f.trash,statfs:async()=>({bavail:1024**3+10*1024*1024,bsize:1})});
+  const results=await Promise.allSettled(started.uploads.map(({id})=>recovered.chunk({id,offset:0},Buffer.alloc(8*1024*1024))));
+  assert.ok(results.every(row=>row.status==='rejected'&&row.reason.code==='no-space'));
+  const ids=started.uploads.map(row=>row.id);await recovered.cancel({ids});await f.uploads.cancel({ids});
+});

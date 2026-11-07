@@ -32,7 +32,7 @@ const T3Routes = (() => {
       palette: { meta: 'Setup · shared definitions and provider configuration', terms: ['mcp tools servers'] } },
     { route: 'gateways', title: 'Gateways', icon: 'waypoints', key: 'w', group: 'agents',
       summary: 'Route agents through your own AI gateway. Your direct sign-ins stay as they are.', doc: 'gateways.md',
-      palette: { meta: 'Setup · custom endpoints for Claude Code, Codex and OpenCode', terms: ['ai gateway', 'proxy', 'router', 'custom endpoint', 'base url', 'cliproxyapi', 'litellm', 'openrouter'] } },
+      palette: { meta: 'Setup · custom endpoints for Claude Code, Codex, OpenCode, Pi and Grok', terms: ['ai gateway', 'proxy', 'router', 'custom endpoint', 'base url', 'cliproxyapi', 'litellm', 'openrouter'] } },
     { route: 'vault', title: 'Vault', icon: 'key-round', key: 'c', group: 'agents',
       summary: 'Credentials your agents use by name. Agents can add them from chat too. Secrets stay out of chats and skills.', doc: 'vault.md', palette: { meta: 'Setup · credentials agents use by name', terms: ['credentials', 'ssh', 'ssh key', 'api key', 'token', 'password', 'secret', 'database', 'aws', 'kubeconfig'] } },
     { route: 'files', title: 'Files', icon: 'folder', key: 'f', group: 'tools',

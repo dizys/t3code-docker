@@ -1099,14 +1099,14 @@ check "native MCP local and HTTP settings work in Claude, Codex, OpenCode and Cu
 native_gateways_work() {
   local id executable
   docker cp scripts/gateways-native-smoke.mjs "$NAME:/tmp/gateways-native-smoke.mjs" >/dev/null 2>&1 || return 1
-  for id in claude codex opencode; do
+  for id in claude codex opencode pi grok; do
     executable="$(status_json | jq -r --arg id "$id" '.harnesses[] | select(.id == $id) | .executable')"
     [ -n "$executable" ] && [ "$executable" != null ] || return 1
     docker exec -u t3 -e T3_SETUP_DIR=file:///opt/t3-setup/ -e T3_NATIVE_PROCESS_MODULE=file:///opt/t3-harness/native-process.mjs \
       "$NAME" node /tmp/gateways-native-smoke.mjs "$id" "$executable" || return 1
   done
 }
-check "gateway settings work through the real Claude, Codex and OpenCode" "native_gateways_work >>\"$UI_AUDIT_LOG\" 2>&1"
+check "gateway settings work through the real Claude, Codex, OpenCode, Pi and Grok" "native_gateways_work >>\"$UI_AUDIT_LOG\" 2>&1"
 
 # T3 learns about each agent through its settings file, as soon as the agent
 # lands. Read it the way T3 does: each points at the agent's launcher, which

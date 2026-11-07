@@ -608,6 +608,7 @@ const credentials = createCredentialsService({ store: credentialStore, usage: cr
 }), environmentId: async () => (await readFile(path.join(STATE_DIR, 'userdata/environment-id'), 'utf8')).trim() });
 const gateways = createGatewayService({ baseDir: STATE_DIR, home: CONTEXT_HOME, env: process.env, io: await contextFs(),
   t3: createGatewayT3(t3Api), vault: createGatewayVault(credentialStore), processes: createGatewayProcesses(),
+  getHarness: async (provider) => (await harnessCache.snapshotCheap()).harnesses?.find((row) => row.id === provider),
   onEvent: (text) => recordEvent("gateway.saved", text),
 });
 let filesPromise, filesInstance, filesPayloads = 0;

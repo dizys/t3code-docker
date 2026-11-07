@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const { runCases } = require('./lib/browser-audit-cases.cjs');
 // Real Files components, isolated API fixtures. Every filesystem call stays in
 // memory; this audit cannot touch projects, credentials or production APIs.
 // T3_FILES_UI_LAYOUT_ONLY=1 selects the focused responsive cases. The default
@@ -19,10 +20,10 @@ const delayGate=()=>{let resolve;const promise=new Promise(r=>{resolve=r;});retu
 (async()=>{
  const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/chromium',args:['--no-sandbox']});let checks=0;
  try{
-  for(const theme of (process.env.T3_FILES_UI_THEMES?.split(',')||['light','dark']))for(const [variant,width,height,frameWidth,frameHeight]of variants){
-   if(subset&&!subset.includes(variant))continue;
+  const cases=(process.env.T3_FILES_UI_THEMES?.split(',')||['light','dark']).flatMap(theme=>variants.filter(([variant])=>!subset||subset.includes(variant)).map(variant=>[theme,...variant]));
+  await runCases(cases,async([theme,variant,width,height,frameWidth,frameHeight],scope)=>{
    const phone=(frameWidth||width)<640,small=(frameWidth||width)<(TAB?640:1024),embedded=TAB||variant.startsWith('embedded');
-   const context=await browser.newContext({viewport:{width,height},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),api=createFilesFixtures();
+   const context=await scope.context(browser, {viewport:{width,height},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),api=createFilesFixtures();
    const errors=[],requests=[];let gate=null,readError=false;
    page.on('pageerror',error=>{errors.push(error.message);console.error(variant,theme,'PAGE ERROR',error.stack);});
    await routeConsole(page,{status:()=>statusFor('skills'),ports:()=>portsFor('ready')});
@@ -124,7 +125,7 @@ const delayGate=()=>{let resolve;const promise=new Promise(r=>{resolve=r;});retu
    }
    if(process.env.T3_FILES_UI_LAYOUT_ONLY==='1'){
     await auditSizes();await visit('files/home/.t3');await target.getByText('Managed by T3 Code and Setup',{exact:true}).waitFor();await fits();await shot('managed');
-    assert.deepEqual(errors,[],'No page exceptions');await context.close();console.log(`${variant} ${theme}: layout passed`);continue;
+    assert.deepEqual(errors,[],'No page exceptions');console.log(`${variant} ${theme}: layout passed`);return;
    }
    // Go to folder has keyboard input, suggestions, failure recovery and real navigation.
    await page.keyboard.press('Control+l');await target.locator('#files-goto-input').waitFor();
@@ -181,8 +182,8 @@ const delayGate=()=>{let resolve;const promise=new Promise(r=>{resolve=r;});retu
    assert.equal(await target.evaluate(()=>location.hash),'#files');assert.match(await target.locator('#files-browser').innerText(),/ml-experiments/);
    // Leaving the page stops the Files poller.
    await target.evaluate(()=>{location.hash='overview';});await target.locator('#page-overview:not([hidden])').waitFor();const before=requests.length;await page.waitForTimeout(5200);assert.equal(requests.length,before);
-   assert.deepEqual(errors,[],'No page exceptions');await context.close();console.log(`${variant} ${theme}: passed`);
-  }
+   assert.deepEqual(errors,[],'No page exceptions');console.log(`${variant} ${theme}: passed`);
+  },{name:'Files',output:out});
  }finally{await browser.close();}
  console.log(`Files browser audit passed (${checks} layout checks). Screens: ${out}`);
 })().catch(error=>{console.error(error);process.exit(1);});

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const { runCases } = require('./lib/browser-audit-cases.cjs');
 // The Gateways page through its real service, over stand-ins for T3, the Vault
 // and the network (scripts/lib/gateways-fixtures.cjs). Every request is
 // intercepted here, so nothing reaches a real gateway, agent or credential.
@@ -21,11 +22,12 @@ const SECRET = 'sk-audit-secret-value', MANAGEMENT = 'management-audit-value';
 (async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
   try {
-    for (const theme of ['light', 'dark']) for (const variant of (TAB ? [480, 639, 640, 704, 1040].map(width => 'tab-' + width) : ['desktop', 'phone', 'embedded', 'embedded-phone'])) {
-      if (only.length && !only.includes(variant)) continue;
+    const variants = (TAB ? [480, 639, 640, 704, 1040].map(width => 'tab-' + width) : ['desktop', 'phone', 'embedded', 'embedded-phone']).filter(variant => !only.length || only.includes(variant));
+    const cases = ['light', 'dark'].flatMap(theme => variants.map(variant => [theme, variant]));
+    await runCases(cases, async ([theme, variant], scope) => {
       const embedded = TAB || variant.startsWith('embedded'), phone = TAB ? Number(variant.slice(4)) < 640 : variant === 'phone' || variant === 'embedded-phone';
       const viewport = TAB ? { width: Number(variant.slice(4)), height: 820 } : phone ? { width: 390, height: 844 } : { width: 1280, height: 900 };
-      const context = await browser.newContext({ viewport, colorScheme: theme, reducedMotion: 'reduce', hasTouch: phone });
+      const context = await scope.context(browser, { viewport, colorScheme: theme, reducedMotion: 'reduce', hasTouch: phone });
       const page = await context.newPage(), errors = [], calls = [];
       let fixture = createGatewaysFixtures({ scenario: 'empty' }), gate = null, gateRoute = null, conflict = false, installed = ['claude', 'codex', 'opencode'];
       page.on('pageerror', error => errors.push(error.message));
@@ -393,7 +395,7 @@ const SECRET = 'sk-audit-secret-value', MANAGEMENT = 'management-audit-value';
         throw error;
       }
       console.log(`${variant} ${theme}: presets, drafts, failures, detection, management key, one add, no key left behind, MCP parity, cells, edit, inspector, conflicts, T3 away, removal passed`);
-      await context.close();
-    }
+
+    }, { name: 'Gateways', output: out });
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

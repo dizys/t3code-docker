@@ -37,12 +37,22 @@ const NOT_LISTENING = new Set(["ECONNREFUSED", "ENOENT", "EADDRNOTAVAIL"]);
 /** A peer address as a person would write it: no IPv4-mapped IPv6 prefix. */
 export const plainAddress = (address) => String(address ?? "").replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, "");
 
-/** The path of a request-target, whatever form it arrived in. */
+/** Percent-decoding for routing only: one pass, so double-encoding stays encoded. */
+const decodeOnce = (path) => {
+  if (!path.includes("%")) return path;
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+};
+
+/** The path of a request-target, whatever form it arrived in, percent-decoded once for routing. */
 export const pathOf = (target) => {
   const raw = String(target ?? "");
-  if (raw.startsWith("/")) return raw.split(/[?#]/, 1)[0];
+  if (raw.startsWith("/")) return decodeOnce(raw.split(/[?#]/, 1)[0]);
   try {
-    return new URL(raw).pathname;
+    return decodeOnce(new URL(raw).pathname);
   } catch {
     return raw;
   }
@@ -69,7 +79,9 @@ export const normalizePrefix = (value) => {
   const trimmed = String(value ?? "").trim().replace(/\/+$/, "");
   if (!trimmed) return DEFAULT_SETUP_PREFIX;
   const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return /^(\/[\w\-.~]+)+$/.test(prefixed) ? prefixed : null;
+  if (!/^(\/[\w\-.~]+)+$/.test(prefixed)) return null;
+  if (prefixed.split("/").some((segment) => segment === "." || segment === "..")) return null;
+  return prefixed;
 };
 
 /** Which service a request is for: "setup" for the prefix and below, else "t3". */
@@ -91,42 +103,61 @@ const connectionTokens = (raw) => {
   return tokens;
 };
 
+/** The claimed scheme from an X-Forwarded-Proto a proxy set: the leftmost
+ * entry that names http or https, otherwise null. */
+const firstScheme = (value) => String(value ?? "").split(",")
+  .map((part) => part.trim().toLowerCase())
+  .find((part) => part === "http" || part === "https") ?? null;
+
 /**
  * Request headers for the next hop, from the client's raw headers (so repeated
  * headers stay repeated, in order, with their original case).
  *
  * Hop-by-hop headers stay here, as does anything Connection names. For an
  * upgrade, Connection and Upgrade are what the request is for, so they go on.
- * X-Forwarded-For gains the address this hop saw. X-Forwarded-Proto and
- * X-Forwarded-Host are kept when a proxy in front set them (a platform's TLS
- * terminator knows the scheme; this hop does not) and filled in otherwise.
+ * By default no proxy in front is trusted, so any X-Forwarded-* the client
+ * sent is dropped as spoofable: X-Forwarded-For is this hop's peer alone,
+ * X-Forwarded-Proto is how this hop was reached, and X-Forwarded-Host is the
+ * Host the client sent here. With trustedProxy (only when the port is
+ * reachable solely through your TLS-terminating proxy, via
+ * T3_TRUST_PROXY_HEADERS), the proxy's Proto and Host are kept and its
+ * For chain is extended with this hop's peer, so the setup page sees https
+ * and keeps the Secure flag on its cookies.
  */
-export const forwardHeaders = (raw, { peer, encrypted = false, upgrade = null } = {}) => {
+export const forwardHeaders = (raw, { peer, encrypted = false, upgrade = null, trustedProxy = false } = {}) => {
   const listed = connectionTokens(raw);
   const out = [];
   const forwardedFor = [];
   let host = null;
-  let proto = false;
-  let forwardedHost = false;
+  let proto = null;
+  let forwardedHost = null;
   for (let i = 0; i < raw.length; i += 2) {
     const name = raw[i];
     const value = raw[i + 1];
     const lower = name.toLowerCase();
-    if (lower === "x-forwarded-for") {
-      forwardedFor.push(value);
+    if (lower.startsWith("x-forwarded-")) {
+      if (trustedProxy) {
+        if (lower === "x-forwarded-for") forwardedFor.push(value);
+        else if (lower === "x-forwarded-proto" && proto === null) proto = firstScheme(value);
+        else if (lower === "x-forwarded-host" && forwardedHost === null && String(value).trim()) forwardedHost = String(value).trim();
+      }
       continue;
     }
     if (HOP_BY_HOP.has(lower) || listed.has(lower)) continue;
     if (lower === "host") host = value;
-    else if (lower === "x-forwarded-proto") proto = true;
-    else if (lower === "x-forwarded-host") forwardedHost = true;
     out.push(name, value);
   }
   const address = plainAddress(peer);
-  if (address) forwardedFor.push(address);
-  if (forwardedFor.length) out.push("X-Forwarded-For", forwardedFor.join(", "));
-  if (!proto) out.push("X-Forwarded-Proto", encrypted ? "https" : "http");
-  if (!forwardedHost && host) out.push("X-Forwarded-Host", host);
+  if (trustedProxy) {
+    if (address) forwardedFor.push(address);
+    if (forwardedFor.length) out.push("X-Forwarded-For", forwardedFor.join(", "));
+    out.push("X-Forwarded-Proto", proto ?? (encrypted ? "https" : "http"));
+    if (forwardedHost ?? host) out.push("X-Forwarded-Host", forwardedHost ?? host);
+  } else {
+    if (address) out.push("X-Forwarded-For", address);
+    out.push("X-Forwarded-Proto", encrypted ? "https" : "http");
+    if (host) out.push("X-Forwarded-Host", host);
+  }
   if (upgrade) out.push("Connection", "Upgrade", "Upgrade", upgrade);
   return out;
 };
@@ -266,12 +297,13 @@ const rawResponse = (status, reason, headers, body) => {
  *   t3           { host, port }            T3 Code
  *   setup        { host, port } | null     the setup page; null sends everything to T3
  *   setupPrefix  "/__setup"                the path the setup page answers under
+ *   trustedProxy false                     keep the proxy's X-Forwarded-Proto/Host (T3_TRUST_PROXY_HEADERS)
  *   log          (line) => void            state changes only, never per request
  *
  * Returns { handleRequest, handleUpgrade, close }, for an http.Server's
  * "request" and "upgrade" events. createRouterServer wires them up.
  */
-export function createRouter({ t3, setup = null, setupPrefix = DEFAULT_SETUP_PREFIX, log = () => {} }) {
+export function createRouter({ t3, setup = null, setupPrefix = DEFAULT_SETUP_PREFIX, trustedProxy = false, log = () => {} }) {
   const prefix = setup ? setupPrefix : null;
   const upstreams = { t3, setup };
   // Kept alive: a browser loading T3 Code fetches dozens of assets, and a new
@@ -310,7 +342,7 @@ export function createRouter({ t3, setup = null, setupPrefix = DEFAULT_SETUP_PRE
   const handleRequest = (req, res) => {
     const service = serviceOf(req.url);
     const { host, port } = upstreams[service];
-    const headers = forwardHeaders(req.rawHeaders, { peer: req.socket.remoteAddress, encrypted: Boolean(req.socket.encrypted) });
+    const headers = forwardHeaders(req.rawHeaders, { peer: req.socket.remoteAddress, encrypted: Boolean(req.socket.encrypted), trustedProxy });
     if (!req.headers.host) headers.push("Host", `${host}:${port}`);
     const body = hasBody(req);
     let current = null;
@@ -413,6 +445,7 @@ export function createRouter({ t3, setup = null, setupPrefix = DEFAULT_SETUP_PRE
       headers: forwardHeaders(req.rawHeaders, {
         peer: req.socket.remoteAddress,
         encrypted: Boolean(req.socket.encrypted),
+        trustedProxy,
         upgrade: req.headers.upgrade,
       }),
     });
@@ -527,11 +560,15 @@ export function readConfig(env = process.env) {
   if (prefix === null) {
     throw new Error(`T3_SETUP_BASE_PATH=${env.T3_SETUP_BASE_PATH} is not a path the router can serve the setup page under. Use something like /__setup.`);
   }
+  // Only when the port is reachable solely through your TLS-terminating
+  // proxy: anyone who can reach the router directly could claim any scheme.
+  const trustedProxy = /^(1|true)$/i.test(String(env.T3_TRUST_PROXY_HEADERS ?? "").trim());
   return {
     port,
     t3: { host: "127.0.0.1", port: t3Port },
     setup: setupOn ? { host: "127.0.0.1", port: setupPort } : null,
     setupPrefix: prefix,
+    trustedProxy,
   };
 }
 

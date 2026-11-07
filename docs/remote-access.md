@@ -172,6 +172,12 @@ With Cloudflare Tunnel that is one public hostname entry, `t3.example.com` to
 any configuration. Opened there, the setup page also offers
 `https://t3.example.com` as the [public URL](#the-public-url).
 
+For this HTTPS tunnel, set `T3_TRUST_PROXY_HEADERS=1` in `.env` when using
+the repository's Compose file. In your own Compose file, add
+`T3_TRUST_PROXY_HEADERS: "1"` under `environment`. Enable it only when
+the listener is reachable solely through your proxy or tunnel. This lets
+the setup page see the external HTTPS scheme and set secure cookies.
+
 What to expect from it:
 
 - WebSockets, streamed responses and large uploads pass straight through.
@@ -179,8 +185,13 @@ What to expect from it:
 - While T3 Code starts or restarts, a browser gets a short page that says so
   and opens T3 Code once it answers. Anything else gets a `503` with
   `Retry-After`.
-- It adds the visitor's address to `X-Forwarded-For`, and keeps the
-  `X-Forwarded-Proto` and `X-Forwarded-Host` that a proxy in front of it set.
+- It sets `X-Forwarded-For` to the visitor's address as actually seen, and
+  `X-Forwarded-Proto`/`X-Forwarded-Host` from the actual connection. Headers
+  a client claims are dropped, so a directly reached router cannot be fed a
+  spoofed scheme or host. When the port is reachable solely through your
+  TLS-terminating proxy or tunnel, set `T3_TRUST_PROXY_HEADERS=1` to keep the
+  proxy's proto and host instead, so the setup page sees `https` and keeps
+  the `Secure` flag on its cookies.
   The setup page counts wrong keys per visitor from that address.
 - Ports 3773 and 3774 still answer inside the container, so `t3-pair`,
   `t3-expose` and anything else that talks to them keep working.

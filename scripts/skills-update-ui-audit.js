@@ -2,6 +2,7 @@
 const { run, visible, deferred, fits, assert } = require('./lib/skill-audit.cjs');
 run('updates', async ({ page, target, api, requests, control, width, shot }) => {
   let gate, began, checkGate, checkBegan, saveGate, saveBegan, previewError = false, conflict = false, lost = false, expiry = false, omitted = false, noLocal = false, huge = false, manyFiles = false, long = false;
+  let captureLatePreview = false, latePreviewId = null;
   control.before = async ({ route, url }) => {
     if (url.pathname.endsWith('/check-update') && checkGate) { const hold = checkGate; checkGate = null; checkBegan.resolve(); await hold.promise; }
     if (url.pathname.endsWith('/update/preview')) {
@@ -15,6 +16,7 @@ run('updates', async ({ page, target, api, requests, control, width, shot }) => 
   };
   control.after = async ({ route, url, response }) => {
     if (response && url.pathname.endsWith('/update/preview')) {
+      if (captureLatePreview) latePreviewId = response.body.previewId;
       if (expiry) response.body.expiresAt = Date.now() + 100;
       if (noLocal) response.body.localChanges = false;
       if (long) { response.body.target.directory += '/a-very-long-folder'.repeat(40); response.body.changes[0].name = 'references/' + 'a-long-directory/'.repeat(6) + 'notes.md'; }
@@ -68,10 +70,13 @@ run('updates', async ({ page, target, api, requests, control, width, shot }) => 
   assert.equal(requests.filter(row => row.path.endsWith('/check-update')).at(-1).input.skills.length, 1);
   await target.getByRole('button', { name: 'Close skill inspector', exact: true }).click();
   // Closing a slow preview discards its eventual snapshot, without reopening it.
-  const slow = deferred(); gate = slow; began = deferred(); await open(); await began.promise;
+  const slow = deferred(); gate = slow; began = deferred(); captureLatePreview = true; await open(); await began.promise;
   await dialog.getByText('Comparing its files with this installation…').waitFor();
-  await close(); slow.resolve();
-  await page.waitForResponse(response => response.url().endsWith('/skills/discard'));
+  // Arm before releasing the reply, and exclude any earlier preview's discard.
+  const discarded = page.waitForResponse(response => response.url().endsWith('/skills/discard')
+    && Boolean(latePreviewId) && response.request().postDataJSON()?.previewId === latePreviewId);
+  await Promise.all([discarded, (async () => { await close(); slow.resolve(); })()]);
+  captureLatePreview = false;
   assert.equal(await dialog.count(), 0);
   await open(); await ready();
   assert(await dialog.locator('[data-update-save]').isDisabled());

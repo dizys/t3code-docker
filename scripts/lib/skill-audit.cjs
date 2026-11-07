@@ -38,10 +38,16 @@ const run = async (name, work) => {
       if (await target.locator('input[type=password]').count()) { await target.locator('input[type=password]').fill(key); await target.locator('button[type=submit]').click(); }
       await target.waitForSelector('#app');
       await target.evaluate(() => document.fonts.ready);
-      const shot = async state => { await page.screenshot({ path: path.join(output, `${theme}-${width}${embedded ? '-embedded' : ''}-${state}.png`) }); };
+      let last = 'initial setup';
+      const shot = async state => { last = state; await page.screenshot({ path: path.join(output, `${theme}-${width}${embedded ? '-embedded' : ''}-${state}.png`) }); };
       await target.evaluate(() => { location.hash = 'instructions/skills'; });
       await target.waitForFunction(() => document.querySelectorAll('.tc-mx-row').length >= 20);
-      await work({ page, target, api, errors, requests, control, theme, width, height, embedded, shot });
+      try {
+        await work({ page, target, api, errors, requests, control, theme, width, height, embedded, shot });
+      } catch (error) {
+        console.error(`${name} ${theme} ${width}: failed after ${last}`);
+        throw error;
+      }
       assert.deepEqual(errors, []);
       assert(await target.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'the page does not overflow horizontally');
       console.log('Passed', name, theme, width, embedded ? 'embedded' : 'standalone');

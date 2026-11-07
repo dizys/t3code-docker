@@ -2,6 +2,7 @@
 // contexts and fixture servers; a failure never prevents the remaining cases.
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { inspect } = require('node:util');
 
 async function runCases(cases, work, { name = 'Browser audit', output, workers = process.env.T3_UI_AUDIT_WORKERS ?? '1', log = console.log } = {}) {
   workers = Number(workers);
@@ -46,7 +47,10 @@ async function runCases(cases, work, { name = 'Browser audit', output, workers =
       }
       results[index] = { ok: !errors.length, milliseconds: performance.now() - started };
       log(`${errors.length ? 'FAIL' : 'PASS'} ${label} (${(results[index].milliseconds / 1000).toFixed(1)}s)`);
-      if (errors.length) failures.push(new AggregateError(errors, label));
+      if (errors.length) {
+        for (const error of errors) log(inspect(error, { depth: null, colors: false }));
+        failures.push(new AggregateError(errors, label));
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(workers, cases.length) }, worker));

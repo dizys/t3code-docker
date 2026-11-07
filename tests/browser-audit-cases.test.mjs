@@ -85,3 +85,11 @@ test('unwritable diagnostics cannot strand cleanup or the remaining cases', asyn
   assert.deepEqual(visited.sort(), [1, 2]);
   assert.deepEqual(closed.sort(), [1, 2]);
 });
+
+test('failure logs expose the original assertion beneath the scenario summaries', async () => {
+  const messages = [];
+  await assert.rejects(runCases(['phone'], async () => {
+    throw new Error('Original locator failure with its call log');
+  }, { workers: 1, log: message => messages.push(message) }));
+  assert.ok(messages.some(message => message.includes('Original locator failure with its call log')));
+});

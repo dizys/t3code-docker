@@ -38,7 +38,7 @@ export function createActivityService({ env=process.env, snapshot=async()=>({com
     const [processes,ports,pid]=await Promise.all([
       snapshot({includeOpenFiles:true}),
       listeners?listeners():run('ss',['-H','-l','-t','-n','-p']).then(row=>parseListeners(row.stdout,{ephemeral:[0,0]}),()=>[]),
-      fs.readFile(path.join(env.T3_RUN_DIR||'/tmp/t3code','t3.pid'),'utf8').then(Number,()=>null),
+      fs.readFile(path.join(env.T3_RUN_DIR||`${env.T3CODE_HOME||`${env.HOME||"/home/t3"}/.t3`}/run`,'t3.pid'),'utf8').then(Number,()=>null),
     ]);
     return {complete:processes.complete, processes:processes.processes.filter(row=>row.uid===process.getuid?.()).map(row=>({
       pid:row.pid,label:row.pid===pid?'T3 Code':String(processLabel(row.args,'Process')).slice(0,100),cwd:row.cwd,

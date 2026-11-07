@@ -30,7 +30,17 @@ fi
 
 log() { printf '[t3code] %s\n' "$*" >&2; }
 
-: "${T3_RUN_DIR:=/tmp/t3code}"
+: "${T3CODE_HOME:=${HOME:-/home/t3}/.t3}"
+: "${T3_RUN_DIR:=${T3CODE_HOME}/run}"
+case "$T3_RUN_DIR" in
+  /*) ;;
+  *) log "ERROR: T3_RUN_DIR must be an absolute path (got '${T3_RUN_DIR}')"; exit 1 ;;
+esac
+t3_run_normalized="$(realpath -ms -- "$T3_RUN_DIR")"
+case "$t3_run_normalized" in
+  "/"|"/tmp") log "ERROR: T3_RUN_DIR must not be '${t3_run_normalized}'"; exit 1 ;;
+esac
+unset t3_run_normalized
 PID_FILE="${T3_RUN_DIR}/t3.pid"
 REQUEST="${T3_RUN_DIR}/restart"
 

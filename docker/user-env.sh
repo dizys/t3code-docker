@@ -77,8 +77,8 @@ if [ "$(id -u)" != "0" ]; then
   # The entrypoint selects OpenCode's real persisted config directory, or keeps
   # a host-mounted native one. docker exec does not inherit its exports. Read
   # the chosen path as data so terminals and login helpers use the same config.
-  if [ -z "${OPENCODE_CONFIG_DIR:-}" ] && [ -r "${T3_RUN_DIR:-/tmp/t3code}/opencode-config-dir" ]; then
-    IFS= read -r OPENCODE_CONFIG_DIR < "${T3_RUN_DIR:-/tmp/t3code}/opencode-config-dir" || true
+  if [ -z "${OPENCODE_CONFIG_DIR:-}" ] && [ -r "${T3_RUN_DIR:-${T3CODE_HOME:-${HOME:-/home/t3}/.t3}/run}/opencode-config-dir" ]; then
+    IFS= read -r OPENCODE_CONFIG_DIR < "${T3_RUN_DIR:-${T3CODE_HOME:-${HOME:-/home/t3}/.t3}/run}/opencode-config-dir" || true
     export OPENCODE_CONFIG_DIR
   fi
 

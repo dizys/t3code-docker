@@ -191,25 +191,33 @@ export function createStorageManager(options = {}) {
     try {
       const detected = await detect({ env, userHome, run });
       const activity = await processes();
-      const rows = [], approved = new Map();
+      // Guards and targets resolve first without measuring. One traversal
+      // below then sizes every selected cache at once, instead of one `du`
+      // per cache on every preview.
+      const pending = [];
       for (const id of ids) {
         const busy = buildsOrInstallsRunning(activity, [id]);
         const definition = CACHES.find((cache) => cache.id === id), guard = await cacheSafety(id, detected, safetyContext);
-        const target = cacheTarget(id, detected);
-        let bytes = facts.categories.find((row) => row.id === id)?.bytes || 0;
-        let status = guard.safe ? "ready" : "protected", reason = guard.reason || null, detail = guard.detail || null;
-        if (guard.safe) {
-          const measured = await measure([target]);
-          bytes = measured.sizes[target] ?? 0;
+        pending.push({ id, busy, definition, guard, target: cacheTarget(id, detected),
+          bytes: facts.categories.find((row) => row.id === id)?.bytes || 0,
+          status: guard.safe ? "ready" : "protected", reason: guard.reason || null, detail: guard.detail || null });
+      }
+      const measurable = pending.filter((entry) => entry.guard.safe);
+      const measured = measurable.length ? await measure(measurable.map((entry) => entry.target)) : { sizes: {}, partial: false };
+      const rows = [], approved = new Map();
+      for (const entry of pending) {
+        let { bytes, status, reason, detail } = entry;
+        if (entry.guard.safe) {
+          bytes = measured.sizes[entry.target] ?? 0;
           if (measured.partial) { status = "unavailable"; reason = "Measurement incomplete"; detail = "Refresh and review this cache again before cleaning it."; }
           else if (!bytes) { status = "empty"; reason = "Already empty"; detail = "There is no cached data to clear."; }
-          else if (busy) { status = "busy"; reason = activity.complete ? "Tools are in use" : "Activity unavailable"; detail = activity.complete
+          else if (entry.busy) { status = "busy"; reason = activity.complete ? "Tools are in use" : "Activity unavailable"; detail = activity.complete
             ? "Finish running builds or tool commands, then check again. No files have been changed." : "Running tools could not be checked. Try again in a moment."; }
         }
         const eligible = status === "ready";
-        if (eligible) approved.set(id, cacheFingerprint(id, detected, guard));
-        rows.push({ id, label: definition.label, icon: definition.icon, effect: definition.effect, cleanupHint: definition.cleanupHint, path: target,
-          bytes, eligible, status, reason, detail, method: id === "uv" ? "prune" : "clear" });
+        if (eligible) approved.set(entry.id, cacheFingerprint(entry.id, detected, entry.guard));
+        rows.push({ id: entry.id, label: entry.definition.label, icon: entry.definition.icon, effect: entry.definition.effect, cleanupHint: entry.definition.cleanupHint, path: entry.target,
+          bytes, eligible, status, reason, detail, method: entry.id === "uv" ? "prune" : "clear" });
       }
       const token = randomBytes(32).toString("hex"), expiresAt = now() + 5 * 60 * 1000;
       while (previews.size >= 16) previews.delete(previews.keys().next().value);
@@ -266,10 +274,12 @@ export function createStorageManager(options = {}) {
         await report({});
         try { onStarted?.(structuredClone(operation)); } catch { /* listener */ }
       }
-      for (const cache of selected) {
-        const measured = await measure([cache.target]);
+      // One traversal sizes every selected cache at once, instead of one `du`
+      // per cache before each cleanup.
+      {
+        const measured = await measure(selected.map((entry) => entry.target));
         if (measured.partial) throw new Error("This cache could not be fully checked. Clean it from a terminal.");
-        cache.bytes = measured.sizes[cache.target] ?? 0;
+        for (const entry of selected) entry.bytes = measured.sizes[entry.target] ?? 0;
       }
       const estimatedBytes = selected.reduce((sum, item) => sum + item.bytes, 0);
       await report({ estimatedBytes });

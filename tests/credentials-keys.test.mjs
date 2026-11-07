@@ -142,3 +142,14 @@ test('the install line appends the key with owner-only permissions', () => {
   const line = installCommand('ssh-ed25519 AAAAfixture t3-vault:fixture');
   assert.equal(line, "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo 'ssh-ed25519 AAAAfixture t3-vault:fixture' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys");
 });
+
+test('a quote in the key stays inside the echo instead of breaking out of it', async t => {
+  const key = `ssh-ed25519 AAAAfixture'$(touch pwned)' t3-vault:fixture`;
+  const line = installCommand(key);
+  assert.equal(line, "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo 'ssh-ed25519 AAAAfixture'\\''$(touch pwned)'\\'' t3-vault:fixture' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys");
+  const root = await folder(t), echoed = path.join(root, 'authorized_keys');
+  const quoted = line.slice(line.indexOf("echo '") + 6, line.indexOf("' >>"));
+  await run('/bin/sh', ['-c', `echo '${quoted}' > ${JSON.stringify(echoed)}`]);
+  assert.equal(await fs.readFile(echoed, 'utf8'), key + '\n', 'the shell writes the key back exactly');
+  assert.equal((await fs.readdir(root)).includes('pwned'), false, 'nothing extra ran');
+});

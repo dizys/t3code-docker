@@ -59,6 +59,27 @@ class MemoryFs {
     return entry.content;
   }
 
+  async readdir(dirPath) {
+    const prefix = dirPath.endsWith("/") ? dirPath : `${dirPath}/`;
+    const names = new Set();
+    for (const key of this.files.keys()) {
+      if (key.startsWith(prefix)) {
+        const rest = key.slice(prefix.length);
+        if (rest && !rest.includes("/")) names.add(rest);
+      }
+    }
+    for (const dir of this.dirs) {
+      if (dir.startsWith(prefix)) {
+        const rest = dir.slice(prefix.length);
+        if (rest && !rest.includes("/")) names.add(rest);
+      }
+    }
+    if (!names.size && !this.dirs.has(dirPath)) {
+      throw Object.assign(new Error(`ENOENT: ${dirPath}`), { code: "ENOENT" });
+    }
+    return [...names];
+  }
+
   async mkdir(dirPath) {
     this.dirs.add(dirPath);
   }
@@ -2442,4 +2463,33 @@ for (const arch of ["x64", "arm64"]) test(`Pi lifecycle uses its npm distributio
   assert.equal((await manager.uninstall("pi")).ok, true);
   assert.equal((await manager.resolve("pi")).installed, false);
   assert.match(await fs.readFile(auth), /test/);
+});
+
+test("source control provider lookup scans tools once per snapshot, not once per row", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const manager = managerFor(world);
+  const tools = ["jq", "ripgrep", "python", "yq", "terraform", "npm:prettier"];
+  for (const tool of tools) {
+    const install = path.join(DATA_DIR, "installs", tool, "1.0.0");
+    fs.seedFile(path.join(install, "bin", path.basename(tool)), "", 0o755);
+    world.tools[tool] = [{
+      version: "1.0.0", requested_version: "1.0.0", install_path: install,
+      installed: true, active: true,
+      source: { type: "mise.toml", path: path.join(HOME, ".config/mise/config.toml") },
+    }];
+  }
+  let stats = 0;
+  const originalStat = fs.stat.bind(fs);
+  fs.stat = async (target) => { stats++; return originalStat(target); };
+  const { sourceControl } = await manager.toolchains.status();
+  assert.deepEqual(sourceControl.map((row) => row.providedBy), [null, null, null, null, null]);
+  // Four uninstalled CLIs share one scan of six tools: a stat per row per
+  // tool would be near fifty, so a bound of one per tool proves the sharing.
+  assert.ok(stats <= tools.length, `expected at most ${tools.length} stats, got ${stats}`);
+  // A provided binary is still found through the shared index.
+  const install = path.join(DATA_DIR, "installs", "ripgrep", "1.0.0");
+  fs.seedFile(path.join(install, "bin", "glab"), "", 0o755);
+  const glab = await manager.sourceControl.resolve("glab");
+  assert.deepEqual(glab.providedBy, { tool: "ripgrep", version: "1.0.0" });
 });

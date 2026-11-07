@@ -56,13 +56,19 @@ export async function sshRequest(credential, command, { stdout = process.stdout,
     throw new CredentialError(`The host key for ${credential.id} isn't trusted yet. Run t3-vault trust ${credential.id}, or review it in Setup → Vault.`, 409, 'host-key-untrusted');
   }
   const secrets = secretValues(credential), keyAuth = credential.fields.auth === 'key';
-  let folder = null, keyFile = null;
+  let folder = null, keyFile = null, passwordFile = null;
   if (keyAuth) {
     folder = await privateFolder('t3-vault-ssh-');
     keyFile = path.join(folder, 'key');
     await fs.writeFile(keyFile, credential.secrets.privateKey, { mode: 0o600, flag: 'wx' });
+  } else {
+    // The password itself never enters the environment (/proc/<pid>/environ
+    // shows it to every same-user process); only this private file's path does.
+    folder = await privateFolder('t3-vault-ssh-');
+    passwordFile = path.join(folder, 'password');
+    await fs.writeFile(passwordFile, credential.secrets.password, { mode: 0o600, flag: 'wx' });
   }
-  const env = { ...process.env, ...(keyAuth ? {} : { SSH_ASKPASS: askpassPath, SSH_ASKPASS_REQUIRE: 'force', DISPLAY: process.env.DISPLAY || 't3-vault', T3_CREDENTIAL_PASSWORD: credential.secrets.password }) };
+  const env = { ...process.env, ...(keyAuth ? {} : { SSH_ASKPASS: askpassPath, SSH_ASKPASS_REQUIRE: 'force', DISPLAY: process.env.DISPLAY || 't3-vault', T3_CREDENTIAL_PASSWORD_FILE: passwordFile }) };
   const target = ['-p', String(credential.fields.port), '-l', credential.fields.username, '-o', 'ConnectTimeout=10', '-o', 'ConnectionAttempts=1', '-o', 'ControlPath=none',
     ...pinOptions(credential, credential.knownHostsFile, credential.hostKeyType), ...authOptions(credential, keyFile), '--', credential.fields.host];
   try {

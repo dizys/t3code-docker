@@ -20,9 +20,12 @@ Issues and pull requests are welcome. Before opening one:
   path, unavailable history or unknown event runs the full matrix; tags,
   scheduled runs and manual dispatches always do. New PR pushes cancel that PR's
   superseded run, without cancelling main or release runs.
-  Smoke checks print their elapsed time. Skills, Files, the shared editor,
-  Updates, MCP and Gateways audits use two scenario workers per suite, retaining
-  every theme, viewport, interaction and polling wait on both architectures.
+  Smoke checks print their elapsed time. Skills library and hooks, Files, the
+  shared editor, Updates settings, MCP and Gateways audits use two scenario
+  workers per suite, retaining every theme, viewport, interaction and polling
+  wait on both architectures. The ten Skills update-review scenarios retain
+  their serial schedule in CI: their native phone keyboard-scroll assertion
+  has failed with concurrent scenarios on amd64.
   `T3_UI_AUDIT_WORKERS=2` enables the same queue locally; the default is one.
   Each scenario owns its browser context, fixtures and cleanup. ZIP downloads
   have a separate HTTP fixture per scenario. Vault keeps its shared real store

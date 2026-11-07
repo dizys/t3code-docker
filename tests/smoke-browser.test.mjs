@@ -35,7 +35,8 @@ if (args[0] === 'cp') {
     for (const directory of rest.filter(value => value !== '-p')) fs.mkdirSync(inside(directory), { recursive: true });
   } else if (command === 'node') {
     const audit = inside(rest[0]), seen = new Set();
-    if (!environment.includes('T3_UI_AUDIT_WORKERS=2')) throw new Error('Image audits must use the bounded scenario queue');
+    const workers = path.basename(audit) === 'skills-update-ui-audit.js' ? 1 : 2;
+    if (!environment.includes('T3_UI_AUDIT_WORKERS=' + workers)) throw new Error('Unexpected scenario worker count for ' + path.basename(audit));
     const inspect = file => {
       if (seen.has(file)) return;
       seen.add(file);

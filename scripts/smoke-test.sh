@@ -790,7 +790,9 @@ skills_editor_works() {
   docker exec -e T3_UI_AUDIT_WORKERS=2 -e CHROME_PATH=/usr/bin/chromium \
     -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
     "$NAME" node /tmp/skills-hooks-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
-  docker exec -e T3_UI_AUDIT_WORKERS=2 -e CHROME_PATH=/usr/bin/chromium \
+  # The phone review's native keyboard-scroll check has failed with concurrent
+  # scenarios on amd64. Retain its prior serial schedule and every assertion.
+  docker exec -e T3_UI_AUDIT_WORKERS=1 -e CHROME_PATH=/usr/bin/chromium \
     -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
     "$NAME" node /tmp/skills-update-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
 }

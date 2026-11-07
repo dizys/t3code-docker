@@ -49,7 +49,13 @@ export function delivery(credential, { rename, base = process.env, askpass } = {
   if (credential.type === 'aws' && credential.fields.region) env.AWS_DEFAULT_REGION = credential.fields.region;
   if (credential.type === 'database') Object.assign(env, databaseEnv(credential));
   if (credential.type === 'git') Object.assign(env, gitEnv(credential, base));
-  if (credential.type === 'ssh' && credential.fields.auth === 'password') Object.assign(env, { SSH_ASKPASS: askpass, SSH_ASKPASS_REQUIRE: 'force', DISPLAY: base.DISPLAY || 't3-vault', T3_CREDENTIAL_PASSWORD: credential.secrets.password });
+  if (credential.type === 'ssh' && credential.fields.auth === 'password') {
+    // The password reaches the command as a private file runWith writes, not
+    // in the environment where /proc/<pid>/environ would show it. Only the
+    // file's path travels in env, which deliveredNames already hides.
+    Object.assign(env, { SSH_ASKPASS: askpass, SSH_ASKPASS_REQUIRE: 'force', DISPLAY: base.DISPLAY || 't3-vault' });
+    files.push({ env: 'T3_CREDENTIAL_PASSWORD_FILE', name: 'ssh-password', content: credential.secrets.password });
+  }
   return { env, files, masks: secretValues(credential) };
 }
 

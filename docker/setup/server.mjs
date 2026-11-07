@@ -58,6 +58,25 @@ import * as AutoUpdate from "./auto-update.mjs";
 const run = promisify(execFile);
 const gzip = promisify(gzipCallback);
 
+// Tool binaries run here by absolute path, resolved once at startup: a PATH
+// containing t3-writable directories must not decide what `qrencode` means on
+// every call. Fixed image locations win; one PATH lookup frozen at boot is the
+// fallback, and a missing tool keeps its fixed path so the call fails loudly.
+const BOOT_PATH = String(process.env.PATH || "").split(path.delimiter).filter(Boolean);
+const resolveTool = (name, candidates = []) => {
+  for (const candidate of candidates) {
+    try { if (existsSync(candidate)) return candidate; } catch { /* keep looking */ }
+  }
+  for (const dir of BOOT_PATH) {
+    const full = path.join(dir, name);
+    try { if (existsSync(full)) return full; } catch { /* keep looking */ }
+  }
+  return candidates[0] ?? `/usr/bin/${name}`;
+};
+const QRENCODE = resolveTool("qrencode", ["/usr/bin/qrencode"]);
+const SS = resolveTool("ss", ["/usr/bin/ss", "/bin/ss"]);
+const SCRIPT = resolveTool("script", ["/usr/bin/script", "/bin/script"]);
+
 // Every stylesheet and script the page inlines, read verbatim once: see the
 // note at the top of app.js for what embedding them in template literals cost.
 // A file that could not be inlined safely stops the service here, loudly,
@@ -1065,7 +1084,7 @@ const mintPairing = async ({ ttl, label }) => {
   authLists.pairing.invalidate();
   let qr = null;
   try {
-    const { stdout: svg } = await run("qrencode", ["-t", "SVG", "-m", "1", "-o", "-", issued.pairUrl]);
+    const { stdout: svg } = await run(QRENCODE, ["-t", "SVG", "-m", "1", "-o", "-", issued.pairUrl]);
     qr = svg;
   } catch {
     qr = null;
@@ -1266,7 +1285,7 @@ const startScmDeviceSignin = async (id) => {
     if (!asked.url || !asked.code) return;
     session.url = asked.url;
     session.code = asked.code;
-    run("qrencode", ["-t", "SVG", "-m", "1", "-o", "-", session.url])
+    run(QRENCODE, ["-t", "SVG", "-m", "1", "-o", "-", session.url])
       .then(({ stdout }) => { session.qr = stdout; })
       .catch(() => {});
     if (session.state === "starting") session.state = "awaiting-browser";
@@ -1346,7 +1365,7 @@ const startConnectLink = (mode = "managed") => {
     const seen = parseLinkOutput(session.output);
     if (!session.url && seen.url) {
       session.url = seen.url;
-      run("qrencode", ["-t", "SVG", "-m", "1", "-o", "-", session.url])
+      run(QRENCODE, ["-t", "SVG", "-m", "1", "-o", "-", session.url])
         .then(({ stdout }) => { session.qr = stdout; })
         .catch(() => {});
     }
@@ -1515,7 +1534,7 @@ const startSignin = async (agentId) => {
   if (!managed) throw new Error(`${agentId} is not installed`);
   const argv = [managed, ...baseArgv.slice(1)];
   const [cmd, args] = pty
-    ? ["script", ["-qec", argv.map(shellQuote).join(" "), "/dev/null"]]
+    ? [SCRIPT, ["-qec", argv.map(shellQuote).join(" "), "/dev/null"]]
     : [argv[0], argv.slice(1)];
 
   const child = spawn(cmd, args, {
@@ -1539,7 +1558,7 @@ const startSignin = async (agentId) => {
     if (!session.url) {
       session.url = findUrl(raw, session.output);
       if (session.url) {
-        run("qrencode", ["-t", "SVG", "-m", "1", "-o", "-", session.url])
+        run(QRENCODE, ["-t", "SVG", "-m", "1", "-o", "-", session.url])
           .then(({ stdout }) => { session.qr = stdout; })
           .catch(() => {});
       }
@@ -1807,7 +1826,14 @@ const readBody = async (req, maxBytes = 64 * 1024) => {
 // page cannot hold different ideas about what is exposed.
 // ---------------------------------------------------------------------------
 
-const CLOUDFLARED = process.env.T3CODE_CLOUDFLARED_PATH || "cloudflared";
+// An explicit path is taken as is; anything else is resolved once here, the
+// same way the other tools are, so later PATH changes cannot redirect it.
+const CLOUDFLARED = (() => {
+  const override = process.env.T3CODE_CLOUDFLARED_PATH;
+  if (override && path.isAbsolute(override)) return override;
+  if (override) return resolveTool(override, []);
+  return resolveTool("cloudflared", ["/usr/local/bin/cloudflared", "/usr/bin/cloudflared"]);
+})();
 const EXPOSED_FILE = `${STATE_DIR}/exposed-ports.json`;
 
 // Ports that belong to the container's own plumbing rather than to anything a
@@ -1840,7 +1866,7 @@ const listeners = async () => {
   // -p names the owning process, which is how cloudflared's own metrics
   // listener gets filtered out: publishing a port opened a second "port" in
   // this list, which is confusing and not something anyone would want to expose.
-  const { stdout } = await run("ss", ["-H", "-l", "-t", "-n", "-p"]).catch(() => ({ stdout: "" }));
+  const { stdout } = await run(SS, ["-H", "-l", "-t", "-n", "-p"]).catch(() => ({ stdout: "" }));
   return parseListeners(stdout, { reserved: RESERVED, ephemeral: EPHEMERAL }).map(({ pid, ...entry }) => {
     // The command line names a dev server far better than ss does.
     let argv = null;
@@ -1919,7 +1945,7 @@ const startTunnel = (rawPort) => {
       // Rendered here rather than in the browser for the same reason pairing
       // does it: qrencode is already in the image, and the device that needs
       // to scan this is rarely the one showing the page.
-      run("qrencode", ["-t", "SVG", "-m", "1", "-o", "-", tunnel.url])
+      run(QRENCODE, ["-t", "SVG", "-m", "1", "-o", "-", tunnel.url])
         .then(({ stdout }) => { tunnel.qr = stdout; })
         .catch(() => { tunnel.qr = null; });
     }
@@ -1980,7 +2006,7 @@ const portsStatus = async () => {
   return {
     // `available` means cloudflared can run at all; the page says so plainly
     // rather than letting every Expose click fail with the same opaque error.
-    available: existsSync(CLOUDFLARED) || CLOUDFLARED === "cloudflared",
+    available: existsSync(CLOUDFLARED),
     // Plain numbers: this is what t3-expose reads.
     listening: found.map((entry) => entry.port),
     // The same ports with what the page shows beside them.

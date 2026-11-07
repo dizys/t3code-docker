@@ -54,6 +54,7 @@ services:
       # setup page under /__setup), for a tunnel, proxy or hosting platform
       # that routes a single port. Publish it in place of the two below.
       T3_SINGLE_PORT: ${T3_SINGLE_PORT:-}
+      T3_TRUST_PROXY_HEADERS: ${T3_TRUST_PROXY_HEADERS:-0}
       T3_PAIR_TTL: ${T3_PAIR_TTL:-30d}
     volumes:
       # State, provider credentials, shell history - everything under ~.

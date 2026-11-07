@@ -172,6 +172,12 @@ With Cloudflare Tunnel that is one public hostname entry, `t3.example.com` to
 any configuration. Opened there, the setup page also offers
 `https://t3.example.com` as the [public URL](#the-public-url).
 
+For this HTTPS tunnel, set `T3_TRUST_PROXY_HEADERS=1` in `.env` when using
+the repository's Compose file. In your own Compose file, add
+`T3_TRUST_PROXY_HEADERS: "1"` under `environment`. Enable it only when
+the listener is reachable solely through your proxy or tunnel. This lets
+the setup page see the external HTTPS scheme and set secure cookies.
+
 What to expect from it:
 
 - WebSockets, streamed responses and large uploads pass straight through.

@@ -693,6 +693,16 @@ test("retired nightly caches are removed while active, previous and channel targ
   assert.deepEqual((await fs.readdir(paths.versions)).sort(), ["0.0.45", previous, NIGHTLY, "unrecognized"].sort());
 });
 
+test("pruning without the channel index keeps every cached runtime", async (t) => {
+  const { paths } = await world(t);
+  const old = "0.0.46-nightly.20261008.1000";
+  for (const version of [old, NIGHTLY, "0.0.45"]) await fakeRuntime(paths, version);
+  await writeJson(paths.releases, { channels: { stable: { version: "0.0.45" }, nightly: { version: NIGHTLY } } });
+  await fs.rm(paths.releases);
+  await pruneRuntimes(paths, { version: NIGHTLY, previous: { version: "0.0.45" } });
+  assert.deepEqual((await fs.readdir(paths.versions)).sort(), ["0.0.45", NIGHTLY, old].sort());
+});
+
 test("patch cache cleanup keeps the active, previous and channel builds without accumulating retired variants", async (t) => {
   const { paths } = await world(t);
   const previous = "b".repeat(64), retired = "c".repeat(64), target = "d".repeat(64), oldVersion = "0.0.44";

@@ -214,9 +214,11 @@ export async function syncAuthentication(paths, request) {
 }
 
 /** Bound nightly disk use, keeping the active and previous release plus each
- * channel's latest cached target. Never touch staging or unrecognized trees. */
+ * channel's latest cached target. Never touch staging or unrecognized trees.
+ * Without the channel index there is nothing safe to drop, so keep everything. */
 export async function pruneRuntimes(paths, request) {
   const releases = await readJson(paths.releases);
+  if (!releases) return;
   const keep = new Set([request.version, request.previous?.version, ...CHANNELS.map((channel) => releases?.channels?.[channel]?.version)]);
   for (const entry of await fs.readdir(paths.versions, { withFileTypes: true })) {
     if (!entry.isDirectory() || !exactVersion(entry.name)) continue;

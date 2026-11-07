@@ -33,16 +33,16 @@ export const AGENTS = Object.freeze([
   Object.freeze({ id: 'claude', driver: 'claudeAgent', name: 'Claude Code', short: 'Claude', protocol: 'messages' }),
   Object.freeze({ id: 'codex', driver: 'codex', name: 'Codex', short: 'Codex', protocol: 'responses' }),
   Object.freeze({ id: 'opencode', driver: 'opencode', name: 'OpenCode', short: 'OpenCode', protocol: 'chat' }),
+  Object.freeze({ id: 'pi', driver: 'pi', name: 'Pi', short: 'Pi', protocol: 'chat' }),
+  Object.freeze({ id: 'grok', driver: 'grok', name: 'Grok Build', short: 'Grok', protocol: 'responses' }),
 ]);
 export const agentOf = id => AGENTS.find(agent => agent.id === id) ?? null;
 
-/** Agents that can't be scoped to one instance, and the sentence that says why. */
+/** Agents without a verified scoped adapter, and the sentence that says why. */
 export const UNSUPPORTED_AGENTS = Object.freeze([
-  Object.freeze({ id: 'pi', name: 'Pi', reason: 'Pi reads endpoints from its own models.json, which every Pi instance shares.' }),
-  Object.freeze({ id: 'grok', name: 'Grok Build', reason: 'Grok Build reads endpoints from its global config, which every Grok instance shares.' }),
   Object.freeze({ id: 'cursor', name: 'Cursor', reason: 'Cursor only talks to its own service.' }),
-  Object.freeze({ id: 'muse', name: 'Muse Code', reason: 'Muse Code has no custom endpoint setting.' }),
-  Object.freeze({ id: 'antigravity', name: 'Antigravity', reason: 'Antigravity has no custom endpoint setting.' }),
+  Object.freeze({ id: 'muse', name: 'Muse Code', reason: 'Muse Code needs a scoped settings and model-catalog adapter, which is not implemented yet.' }),
+  Object.freeze({ id: 'antigravity', name: 'Antigravity', reason: 'The Antigravity runtime used by T3 Code has no verified gateway adapter.' }),
 ]);
 
 /** Colours for a gateway's instances in T3 Code's model picker. Picked once, then kept. */

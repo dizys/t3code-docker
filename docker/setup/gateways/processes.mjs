@@ -21,6 +21,9 @@ const IS_AGENT = Object.freeze({
   claude: argv => path.basename(argv[0] ?? '') === 'claude',
   codex: argv => /^codex/.test(path.basename(argv[0] ?? '')) && argv.includes('app-server'),
   opencode: argv => /^opencode/.test(path.basename(argv[0] ?? '')) && argv.includes('serve'),
+  pi: argv => argv.some((arg, index) => arg === '--mode' && argv[index + 1] === 'rpc') &&
+    (path.basename(argv[0] ?? '') === 'pi' || /^(?:node|bun)$/.test(path.basename(argv[0] ?? '')) && /(?:\/pi$|pi-coding-agent\/.*cli\.[cm]?js$)/.test(argv[1] ?? '')),
+  grok: argv => /^grok(?:$|-)/.test(path.basename(argv[0] ?? '')) && argv.includes('agent') && argv.includes('stdio'),
 });
 
 const split = text => text.split('\0').filter(Boolean);

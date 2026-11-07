@@ -157,9 +157,12 @@ and embedded sizes. It uses response fixtures, with screenshots under
 
 For gateway changes, `node scripts/gateways-native-smoke.mjs PROVIDER
 /absolute/path/to/executable` runs an adapter's real output through real Claude,
-Codex and OpenCode against a fixture gateway, in a disposable home and without a
+Codex, OpenCode, Pi and Grok Build against a fixture gateway, in a disposable home and without a
 sign-in. It holds each assumption the adapters rest on, such as `-c` beating
-`config.toml` and `settings.json` beating the environment.
+`config.toml` and `settings.json` beating the environment. Pi checks its extension
+registration and effort forwarding; Grok checks its private catalog, exact effort
+menus (including no controls for unknown models), and Responses routing for turns
+and auxiliary requests. These use local fixture replies, not paid inference.
 `scripts/t3-integration-smoke.mjs` holds the T3 API they use, including redaction
 and usage hubs.
 `node scripts/gateways-ui-audit.js http://127.0.0.1:23785/__setup/ dev` walks the

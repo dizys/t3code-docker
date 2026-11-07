@@ -146,11 +146,13 @@ const T3GatewayModel = (() => {
   /** The same in a table column, which has no room for "checked". */
   const briefly = (check, now, relTime) => check ? [check.listed ? models(check.count) : '', relTime(check.at, now)].filter(Boolean).join(' · ') : '';
 
-  /** Models a health check found that aren't applied yet. */
+  /** What a health check found that isn't applied yet. `changed` carries models whose advertised reasoning controls moved while the ids held still. */
   const newModels = gateway => {
-    if (!gateway.latest) return { added: [], removed: [] };
+    if (!gateway.latest) return { added: [], removed: [], changed: [] };
     const held = new Set(gateway.models.ids), latest = new Set(gateway.latest);
-    return { added: gateway.latest.filter(id => !held.has(id)), removed: gateway.models.ids.filter(id => !latest.has(id)) };
+    const fact = value => JSON.stringify(value ?? null);
+    return { added: gateway.latest.filter(id => !held.has(id)), removed: gateway.models.ids.filter(id => !latest.has(id)),
+      changed: gateway.latest.filter(id => held.has(id) && fact(gateway.latestCapabilities?.[id]) !== fact(gateway.models.capabilities?.[id])) };
   };
 
   /** The check's outcome, one line each, in the order someone reads them. */

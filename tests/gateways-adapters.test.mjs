@@ -1,14 +1,99 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { parse as parseToml } from '../docker/setup/vendor/toml-patch.mjs';
 import { desiredInstance, differences, fileText, filesFor, instanceIdFor, mergeInstance, modelsFor, modelsToHide } from '../docker/setup/gateways/adapters.mjs';
 import { GATEWAY_KEY_ENV, NO_KEY, agentOf } from '../docker/setup/gateways/catalog.mjs';
-import { cleanModelIds, newestIn, parseModelList } from '../docker/setup/gateways/models.mjs';
+import { cleanCapabilities, cleanModelIds, harnessMajor, newestIn, parseModelCapabilities, parseModelList } from '../docker/setup/gateways/models.mjs';
 
 const [claude, codex, opencode] = ['claude', 'codex', 'opencode'].map(agentOf);
+const [pi, grok] = ['pi', 'grok'].map(agentOf);
 const gateway = (over = {}) => ({ id: 'my-proxy', name: 'My Proxy', url: 'http://gateway:8317', accent: '#6366f1',
   models: { ids: ['claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-5', 'claude-sonnet-4-5-20250929', 'gemini-2.5-pro', 'gpt-5.6-sol', 'gpt-6-astra'], manual: [] },
   agents: { claude: { on: true }, codex: { on: true }, opencode: { on: true } }, ...over });
 const env = (instance, name) => instance.environment.find(row => row.name === name);
+
+test('Claude and Codex use exact advertised controls only with negotiated runtime support', () => {
+  const gw = gateway({ models: { ids: ['claude-known', 'gpt-known', 'unknown', 'disabled'], capabilities: {
+    'claude-known': { supported: true, effort: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+    'gpt-known': { supported: true, effort: ['none', 'minimal', 'low', 'ultra'] },
+    disabled: { supported: false, effort: ['high'] },
+  } }, agents: { claude: { scope: 'all' }, codex: { scope: 'all' } } });
+  for (const agent of [claude, codex]) {
+    for (const flag of [undefined, false, 'true', 1]) assert.ok(desiredInstance(agent, gw, { customModelCapabilityOverrides: flag }).config.customModels.every(id => typeof id === 'string'));
+    const instance = desiredInstance(agent, gw, { customModelCapabilityOverrides: true });
+    const entries = instance.config.customModels;
+    const known = entries.find(entry => entry.slug === (agent === claude ? 'claude-known' : 'gpt-known'));
+    const [descriptor] = known.capabilities.optionDescriptors;
+    assert.equal(descriptor.id, agent === claude ? 'effort' : 'reasoningEffort');
+    assert.deepEqual(descriptor.options.map(option => option.id), agent === claude ? ['low', 'medium', 'high', 'xhigh', 'max'] : ['none', 'minimal', 'low', 'ultra']);
+    assert.ok(descriptor.options.every(option => !('isDefault' in option)));
+    assert.equal(descriptor.currentValue, undefined);
+    for (const slug of ['unknown', 'disabled']) assert.deepEqual(entries.find(entry => entry.slug === slug).capabilities, { optionDescriptors: [] });
+    const old = desiredInstance(agent, gw);
+    assert.deepEqual(differences(agent, instance, old), ['customModels']);
+  }
+});
+
+test('Pi uses a launch-only extension and provider-qualified custom model ids', async () => {
+  const gw = gateway(), instance = desiredInstance(pi, gw, { dir: '/private files', instances: { pi: { config: { binaryPath: '/pi', launchArgs: '--approve' } } } });
+  assert.equal(instance.config.binaryPath, '/pi');
+  assert.match(instance.config.launchArgs, /^--approve --extension /);
+  assert.equal(env(instance, 'PI_CODING_AGENT_DIR'), undefined);
+  assert.ok(env(instance, GATEWAY_KEY_ENV).secret);
+  assert.ok(instance.config.customModels.every(id => id.startsWith('t3gw_my_proxy/')));
+  const source = fileText(pi, gw, '/private files');
+  const module = await import(`data:text/javascript,${encodeURIComponent(source)}`);
+  let registered;
+  module.default({ registerProvider: (id, config) => { registered = { id, config }; } });
+  assert.equal(registered.id, 't3gw_my_proxy');
+  assert.equal(registered.config.baseUrl, `${gw.url}/v1`);
+  assert.ok(registered.config.models.every(model => !model.reasoning && Object.values(model.thinkingLevelMap).every(value => value === null)));
+});
+
+test('Pi exposes only representable advertised efforts and hides direct provider models', async () => {
+  const gw = gateway({ models: { ids: ['unknown', 'reasoner'], capabilities: { reasoner: { supported: true, effort: ['none', 'low', 'max', 'ultra'] } } } });
+  const module = await import(`data:text/javascript,${encodeURIComponent(fileText(pi, gw, '/files'))}`);
+  let models;
+  module.default({ registerProvider: (id, config) => { models = config.models; } });
+  assert.deepEqual(models.find(model => model.id === 'reasoner').thinkingLevelMap,
+    { off: 'none', minimal: null, low: 'low', medium: null, high: null, xhigh: null, max: 'max' });
+  assert.deepEqual(modelsToHide(pi, gw, { models: [{ slug: 'openai/gpt-direct' }, { slug: 't3gw_my_proxy/reasoner' }] }), ['openai/gpt-direct']);
+});
+
+test('Pi inherits an explicitly configured resource home without copying credentials', () => {
+  const instance = desiredInstance(pi, gateway(), { dir: '/files', instances: { pi: {
+    environment: [{ name: 'PI_CODING_AGENT_DIR', value: '/my/pi', sensitive: false }, { name: 'OPENAI_API_KEY', value: 'sk-direct', sensitive: true }],
+  } } });
+  assert.equal(env(instance, 'PI_CODING_AGENT_DIR').value, '/my/pi');
+  assert.equal(env(instance, 'OPENAI_API_KEY'), undefined);
+});
+
+test('Grok cannot expand a gateway model into an environment secret or deserialize ultra', () => {
+  const gw = gateway({ url: 'http://proxy/$XAI_API_KEY', models: { ids: ['grok-$XAI_API_KEY', 'grok-ok'], manual: ['$HOME'],
+    capabilities: { 'grok-ok': { supported: true, effort: ['high', 'ultra'] } } } });
+  assert.deepEqual(modelsFor(grok, gw), ['grok-ok']);
+  const config = parseToml(fileText(grok, gw, '/files'));
+  assert.equal(config.model['grok-ok'].base_url, 'http://proxy/%24XAI_API_KEY/v1');
+  assert.equal(config.model['grok-ok'].api_base_url, config.model['grok-ok'].base_url);
+  assert.deepEqual(config.model['grok-ok'].reasoning_efforts.map(row => row.value), ['high']);
+});
+
+test('Grok uses a private home with Responses models and explicit effort menus', () => {
+  const gw = gateway({ models: { ids: ['grok-model', 'gpt-other'], capabilities: { 'grok-model': { supported: true, effort: ['low', 'high'] } } } });
+  assert.deepEqual(modelsFor(grok, gw), ['grok-model']);
+  const instance = desiredInstance(grok, gw, { dir: '/files', instances: { grok: { config: { binaryPath: '/grok' } } } });
+  assert.equal(instance.config.binaryPath, '/grok');
+  assert.equal(instance.config.launchArgs, undefined);
+  assert.equal(env(instance, 'GROK_HOME').value, '/files/my-proxy.grok');
+  assert.ok(env(instance, 'XAI_API_KEY').secret);
+  const config = parseToml(fileText(grok, gw, '/files'));
+  assert.equal(config.model['grok-model'].base_url, `${gw.url}/v1`);
+  assert.equal(config.model['grok-model'].api_backend, 'responses');
+  assert.deepEqual(config.model['grok-model'].reasoning_efforts.map(row => row.value), ['low', 'high']);
+  assert.deepEqual(config.shell_environment_policy.exclude, ['XAI_API_KEY']);
+  const unknown = parseToml(fileText(grok, gateway(), '/files'));
+  assert.ok(Object.values(unknown.model).every(model => model.supports_reasoning_effort === false && model.reasoning_efforts.length === 0));
+});
 // T3's own tokenizer: single quotes are literal, and that's what launchArgs is read with.
 const tokens = text => [...text.matchAll(/'([^']*)'|(\S+)/g)].map(match => match[1] ?? match[2]);
 // What T3 hands back: secrets stripped, flagged as redacted.
@@ -103,6 +188,46 @@ test('OpenCode’s config is narrowed to the gateway and only points at the key'
   assert.equal(Object.keys(provider.models).length, 7);
 });
 
+test('OpenCode v1 names no reasoning controls for unknown models', () => {
+  const config = JSON.parse(fileText(opencode, gateway(), '/state/agents')), provider = config.provider['t3gw-my-proxy'];
+  for (const entry of Object.values(provider.models)) {
+    assert.equal(entry.reasoning, false);
+    assert.deepEqual(Object.entries(entry.variants).filter(([, v]) => !v.disabled), [], 'no enabled variants');
+  }
+});
+
+test('OpenCode v1 emits exactly the advertised effort variants', () => {
+  const caps = { 'gpt-6-astra': { supported: true, effort: ['low', 'xhigh'] } };
+  const config = JSON.parse(fileText(opencode, gateway({ models: { ids: gateway().models.ids, manual: [], capabilities: caps } }), '/state/agents')), provider = config.provider['t3gw-my-proxy'];
+  const entry = provider.models['gpt-6-astra'];
+  assert.equal(entry.reasoning, true);
+  const enabled = Object.entries(entry.variants).filter(([, v]) => !v.disabled).map(([level]) => level).sort();
+  assert.deepEqual(enabled, ['low', 'xhigh']);
+  assert.equal(entry.variants.low.reasoningEffort, 'low');
+  assert.equal(entry.variants.xhigh.reasoningEffort, 'xhigh');
+  // The legacy trio v1 invents from reasoning:true must be explicitly disabled.
+  assert.deepEqual(entry.variants.medium, { disabled: true });
+  assert.deepEqual(entry.variants.high, { disabled: true });
+});
+
+test('OpenCode v2 uses providers key with no controls for unknown models', () => {
+  const config = JSON.parse(fileText(opencode, gateway(), '/state/agents', { major: 2 }));
+  assert.equal(config.provider, undefined, 'v1 provider key must not appear');
+  const provider = config.providers['t3gw-my-proxy'];
+  assert.equal(provider.package, '@opencode/ai/providers/openai-compatible');
+  assert.equal(provider.settings.baseURL, 'http://gateway:8317/v1');
+  assert.equal(provider.settings.apiKey, '{file:/state/agents/my-proxy.key}');
+  assert.deepEqual(config.enabled_providers, ['t3gw-my-proxy']);
+  for (const entry of Object.values(provider.models)) assert.deepEqual(entry.capabilities.reasoning, { supported: false });
+});
+
+test('OpenCode v2 emits exactly the advertised effort list', () => {
+  const caps = { 'gpt-6-astra': { supported: true, effort: ['low', 'high'] } };
+  const config = JSON.parse(fileText(opencode, gateway({ models: { ids: gateway().models.ids, manual: [], capabilities: caps } }), '/state/agents', { major: 2 })), provider = config.providers['t3gw-my-proxy'];
+  assert.deepEqual(provider.models['gpt-6-astra'].capabilities.reasoning, { supported: true, effort: ['low', 'high'] });
+  assert.deepEqual(provider.models['gemini-2.5-pro'].capabilities.reasoning, { supported: false });
+});
+
 test('only agents that need files have them', () => {
   assert.equal(filesFor(claude, gateway(), '/d'), null);
   assert.equal(fileText(codex, gateway(), '/d'), null);
@@ -181,4 +306,40 @@ test('the newest model in a family reads version numbers, not dates', () => {
   assert.equal(newestIn(['claude-3-5-sonnet-20241022', 'claude-sonnet-4-5'], 'sonnet'), 'claude-sonnet-4-5');
   assert.equal(newestIn(['gpt-6'], 'sonnet'), null);
   assert.equal(newestIn(['xsonnetx'], 'sonnet'), null);
+});
+
+test('reasoning facts are read from each shape gateways use, and only known levels survive', () => {
+  // OpenRouter's shape, cleaned and put in allowlist order.
+  assert.deepEqual(parseModelCapabilities({ data: [{ id: 'a', reasoning: { supported_efforts: ['high', 'low', 'bogus', '{file:/etc/passwd}', 'LOW'] } }] }),
+    { a: { supported: true, effort: ['low', 'high'] } });
+  assert.deepEqual(parseModelCapabilities({ data: [{ id: 'a', capabilities: { reasoning: { supported: true, effort: ['xhigh', 'none'], budget: { min: 1024, max: 65536 }, toggle: true } } }] }),
+    { a: { supported: true, toggle: true, effort: ['none', 'xhigh'], budget: { min: 1024, max: 65536 } } });
+  assert.deepEqual(parseModelCapabilities({ data: [
+    { id: 'a', reasoning: false }, { id: 'b', reasoning: true },
+    { id: 'c', supported_parameters: ['reasoning'] }, { id: 'd', supported_parameters: ['reasoning_effort'] },
+  ] }), { a: { supported: false }, b: { supported: true }, c: { supported: true }, d: { supported: true } });
+  // A budget with min >= max keeps only the max; an out-of-range budget is dropped.
+  assert.deepEqual(parseModelCapabilities({ data: [{ id: 'a', capabilities: { reasoning: { supported: true, budget: { min: 10, max: 5 } } } }] }),
+    { a: { supported: true, budget: { max: 5 } } });
+  assert.deepEqual(parseModelCapabilities({ data: [{ id: 'b', capabilities: { reasoning: { supported: true, budget: { min: 0, max: 999999999 } } } }] }),
+    { b: { supported: true } });
+  assert.deepEqual(parseModelCapabilities(null), null);
+  assert.deepEqual(parseModelCapabilities({}), null);
+  assert.deepEqual(parseModelCapabilities({ data: [{ id: 'a' }] }), {});
+});
+
+test('stored capabilities are kept only for listed ids and cleaned as if just read', () => {
+  assert.deepEqual(cleanCapabilities(['a', 'b', 'missing'], { a: { supported: true, effort: ['ultra', 'bad'] }, b: { supported: false, effort: ['low'] }, extra: { supported: true } }),
+    { a: { supported: true, effort: ['ultra'] }, b: { supported: false } });
+});
+
+test('the OpenCode major comes from the harness version rows, in priority order', () => {
+  assert.equal(harnessMajor({ version: '2.2.6' }), 2);
+  assert.equal(harnessMajor({ installedVersion: 'v1.14.19' }), 1);
+  assert.equal(harnessMajor({ recordedVersion: '3.0.0' }), 3);
+  assert.equal(harnessMajor({ recordedVersion: '2' }), null);
+  assert.equal(harnessMajor({ version: 'unknown' }), null);
+  assert.equal(harnessMajor({ version: '' }), null);
+  assert.equal(harnessMajor({}), null);
+  assert.equal(harnessMajor(null), null);
 });

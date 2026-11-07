@@ -17,12 +17,13 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ACCENTS, AGENTS, NO_KEY, PRESETS, PROTOCOLS, UNSUPPORTED_AGENTS, agentOf, presetOf } from './gateways/catalog.mjs';
 import { parseAddress, suggestName } from './gateways/address.mjs';
-import { cleanModelIds, validModelId } from './gateways/models.mjs';
+import { cleanCapabilities, cleanModelIds, harnessMajor, validModelId } from './gateways/models.mjs';
 import { desiredInstance, differences, fileText, filesFor, instanceIdFor, mergeInstance, modelsFor, modelsToHide, reachesProcess } from './gateways/adapters.mjs';
 import { probeGateway } from './gateways/probe.mjs';
 import { hubAt, hubIdFor, probeHub } from './gateways/hub.mjs';
 import { clearClaudeSettings, scanClaudeSettings } from './gateways/conflicts.mjs';
 import { createGatewayStore, gatewayFilesDir, writePrivate } from './gateways/store.mjs';
+import { parse as parseToml } from './vendor/toml-patch.mjs';
 
 export class GatewayError extends Error {
   constructor(message, status = 400, code = 'invalid', extra = {}) { super(message); this.status = status; this.code = code; this.extra = extra; }
@@ -86,14 +87,21 @@ const offersOf = probe => Object.fromEntries(AGENTS.map(agent => [agent.id, mode
 
 const checkOf = probe => ({ at: probe.at, ok: probe.ok, code: probe.code, ms: probe.ms ?? null, message: probe.message ?? null, hint: probe.hint ?? null, count: probe.models.ids.length, listed: probe.models.listed, protocols: probe.protocols, product: probe.product ?? null });
 
-/** A health check records what it saw. Models it finds wait in `latest` until someone chooses to apply them: applying restarts instances. */
+/** A health check records what it saw. Models it finds wait in `latest` until someone chooses to apply them: applying restarts instances. Reasoning facts wait beside them in `latestCapabilities`, and a change to those alone is pending too: the applied ids stay what they are, but the controls differ. */
 const observed = (gateway, probe) => {
   const ids = probe.ok && probe.models.listed ? cleanModelIds(probe.models.ids) : null;
-  const same = ids && JSON.stringify(ids) === JSON.stringify(gateway.models?.ids ?? []);
-  return { check: checkOf(probe), latest: !ids ? gateway.latest ?? null : same ? null : ids };
+  if (!ids) return { check: checkOf(probe), latest: gateway.latest ?? null, latestCapabilities: gateway.latestCapabilities ?? null };
+  const capabilities = cleanCapabilities(ids, probe.models.capabilities);
+  // An older probe shape says nothing about capabilities, so it cannot clear what was advertised.
+  const knows = probe.models.capabilities !== undefined;
+  const applied = gateway.models?.ids ?? [], appliedCapabilities = cleanCapabilities(applied, gateway.models?.capabilities);
+  const sameIds = JSON.stringify(ids) === JSON.stringify(applied);
+  const sameCapabilities = !knows || JSON.stringify(capabilities) === JSON.stringify(appliedCapabilities);
+  if (sameIds && sameCapabilities) return { check: checkOf(probe), latest: null, latestCapabilities: null };
+  return { check: checkOf(probe), latest: ids, latestCapabilities: knows ? capabilities : appliedCapabilities };
 };
 
-export function createGatewayService({ baseDir, home, env = process.env, io, t3, vault, processes, fetchImpl = globalThis.fetch, now = Date.now, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), onEvent = () => {} }) {
+export function createGatewayService({ baseDir, home, env = process.env, io, t3, vault, processes, fetchImpl = globalThis.fetch, now = Date.now, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), onEvent = () => {}, getHarness } = {}) {
   const store = createGatewayStore({ io, baseDir }), filesDir = gatewayFilesDir(baseDir);
   const probes = new Map();       // digest of address and key -> { at, probe }, so Connect reuses the test just shown
   const settling = new Map();     // gateway id -> { started, again }, while its instances start
@@ -161,13 +169,19 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     return entry ? entry.changedAt : undefined;
   };
 
+  /** The installed OpenCode's config major, once per reconcile. Unknown (or unreadable) means the catalogue's default v1, whose spelling v2 still reads. */
+  const openCodeMajor = async () => {
+    try { return harnessMajor(await getHarness?.('opencode')) ?? 1; }
+    catch { return 1; }
+  };
+
   /**
    * Make T3 match one gateway. Each agent stands alone, so one failure leaves the
    * others done. A `key` passed here is one someone just chose, and always applies.
    * `quiet` means only the name changed, which no running process needs to hear.
    */
   const reconcile = async (gateway, { state, key, renamed = false, quiet = false } = {}) => {
-    const results = [], agents = { ...gateway.agents }, stamp = await keyStamp(gateway);
+    const results = [], agents = { ...gateway.agents }, stamp = await keyStamp(gateway), major = await openCodeMajor();
     for (const agent of AGENTS) {
       const instanceId = instanceIdFor(gateway.id, agent), wanted = gateway.agents[agent.id], actual = state.instances[instanceId];
       if (!wanted?.on && !actual) continue;
@@ -180,13 +194,13 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
           results.push({ agent: agent.id, ok: true, action: 'updated' });
           continue;
         }
-        const desired = desiredInstance(agent, gateway, { instances: state.instances, enabled: true, dir: filesDir });
+        const desired = desiredInstance(agent, gateway, { instances: state.instances, enabled: true, dir: filesDir, customModelCapabilityOverrides: state.customModelCapabilityOverrides });
         const changed = differences(agent, desired, actual).filter(name => renamed || !COSMETIC.has(name));
         // A key deleted from the Vault leaves the working copy alone.
         const stale = key !== undefined || (stamp !== undefined && wanted.keyAt !== stamp);
         const lostSecret = desired.environment.some(row => row.secret && changed.includes(row.name));
         const secret = !actual || stale || lostSecret ? key ?? await keyFor(gateway) : undefined;
-        const rewritten = await writeAgentFiles(agent, gateway, secret, { quiet });
+        const rewritten = await writeAgentFiles(agent, gateway, secret, { quiet, major, instances: state.instances });
         if (!changed.length && !stale && !rewritten) { results.push({ agent: agent.id, ok: true, action: 'none' }); continue; }
         const merged = mergeInstance(agent, desired, actual, { key: secret });
         // Before the write: T3 checks a changed instance by starting the same command
@@ -206,16 +220,55 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
   };
 
   /** Bring an agent's files up to date. Answers whether a process would need to reread them. */
-  const writeAgentFiles = async (agent, gateway, secret, { quiet = false } = {}) => {
+  const writeAgentFiles = async (agent, gateway, secret, { quiet = false, major, instances } = {}) => {
     const files = filesFor(agent, gateway, filesDir);
     if (!files) return false;
-    const config = await writePrivate(io, files.config, fileText(agent, gateway, filesDir));
-    const key = secret === undefined ? false : await writePrivate(io, files.key, secret || NO_KEY);
+    let baseConfig;
+    if (agent.id === 'grok') {
+      const configured = instances?.grok?.environment?.find(row => row.name === 'GROK_HOME' && !row.sensitive)?.value || env.GROK_HOME || '.grok';
+      const source = path.resolve(home, configured.replace(/^~(?=\/|$)/, home));
+      let text;
+      try { text = await io.readFile(path.join(source, 'config.toml'), 'utf8'); }
+      catch (error) { if (error.code !== 'ENOENT') throw new Error('Grok Build’s user config could not be read. Check its permissions before connecting.'); }
+      if (text) {
+        let parsed;
+        try { parsed = parseToml(text); }
+        catch { throw new Error('Grok Build’s user config is not valid TOML. Fix it before connecting.'); }
+        // Copy only user behavior. Direct credentials, model routing, enterprise
+        // auth and telemetry destinations never enter a gateway's private home.
+        const keep = ['agent', 'mcp_servers', 'mcp', 'disabled_mcp_servers', 'disabled_mcp_tools', 'permission', 'plugins', 'skills', 'paths', 'hooks', 'ui', 'compat', 'subagents', 'sandbox', 'session', 'memory', 'memory_v2', 'shell_environment_policy'];
+        // References into the original home still mean the user's resources,
+        // including hook scripts outside the linked discovery directories.
+        const anchor = value => typeof value === 'string' ? value.replace(/\$\{GROK_HOME\}|\$GROK_HOME\b/g, () => source)
+          : Array.isArray(value) ? value.map(anchor)
+            : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, anchor(entry)])) : value;
+        baseConfig = Object.fromEntries(keep.filter(key => Object.hasOwn(parsed, key)).map(key => [key, anchor(parsed[key])]));
+      }
+      await io.mkdir(path.dirname(files.config), { recursive: true, mode: 0o700 });
+      // Resource-only links retain normal discovery without sharing auth,
+      // configuration, caches or session state. Never replace an existing path.
+      for (const name of ['skills', 'rules', 'plugins', 'agents', 'workflows', 'hooks', 'prompts']) {
+        const target = path.join(path.dirname(files.config), name), origin = path.join(source, name);
+        const existing = await io.lstat(target).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
+        if (existing?.isSymbolicLink() && await io.readlink(target) !== origin) await io.unlink(target);
+        try { await io.symlink(origin, target); }
+        catch (error) { if (error.code !== 'EEXIST') throw error; }
+      }
+    }
+    const config = await writePrivate(io, files.config, fileText(agent, gateway, filesDir, { major, baseConfig }));
+    const key = !files.key || secret === undefined ? false : await writePrivate(io, files.key, secret || NO_KEY);
     return (config && !quiet) || key;
   };
   const removeAgentFiles = async (agent, gateway) => {
     const files = filesFor(agent, gateway, filesDir);
     if (files) await Promise.all(Object.values(files).map(file => io.rm(file, { force: true }).catch(() => {})));
+    if (agent.id === 'grok') {
+      // These links are ours; the resource targets and persisted sessions aren't.
+      for (const name of ['skills', 'rules', 'plugins', 'agents', 'workflows', 'hooks', 'prompts']) {
+        const file = path.join(path.dirname(files.config), name);
+        if ((await io.lstat(file).catch(() => null))?.isSymbolicLink()) await io.rm(file, { force: true });
+      }
+    }
   };
 
   /** Keep the list T3 shows true: hide what this gateway stopped serving, restore what it serves again. */
@@ -322,7 +375,7 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     if (!state.ok) return { ...row, state: 'unknown' };
     if (!actual) return { ...row, state: 'missing' };
     if (actual.enabled === false) return { ...row, state: 'paused' };
-    if (differences(agent, desiredInstance(agent, gateway, { instances: state.instances, dir: filesDir }), actual).some(name => !COSMETIC.has(name))) return { ...row, state: 'drift' };
+    if (differences(agent, desiredInstance(agent, gateway, { instances: state.instances, dir: filesDir, customModelCapabilityOverrides: state.customModelCapabilityOverrides }), actual).some(name => !COSMETIC.has(name))) return { ...row, state: 'drift' };
     if (vaultKey && wanted.keyAt !== vaultKey.changedAt) return { ...row, state: 'key-stale' };
     if (!provider || (settling.get(gateway.id)?.has(agent.id) && !hasStarted(provider))) return { ...row, state: 'starting' };
     if (provider.installed === false) return { ...row, state: 'not-installed' };
@@ -353,8 +406,8 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     return {
       id: gateway.id, name: gateway.name, preset: gateway.preset, url: gateway.url, host: address.ok ? address.host : gateway.url, insecure: Boolean(address.ok && address.insecure),
       key: !gateway.credentialId ? { state: 'none' } : !vaultKey ? { state: 'missing', credentialId: gateway.credentialId } : { state: 'saved', credentialId: gateway.credentialId, changedAt: vaultKey.changedAt },
-      check: gateway.check ?? null, models: { ids: gateway.models?.ids ?? [], manual: gateway.models?.manual ?? [], at: gateway.models?.at ?? null },
-      latest: gateway.latest ?? null, settling: settling.has(gateway.id), limits: limitsOf(gateway, state, reports),
+      check: gateway.check ?? null, models: { ids: gateway.models?.ids ?? [], manual: gateway.models?.manual ?? [], at: gateway.models?.at ?? null, capabilities: cleanCapabilities(gateway.models?.ids ?? [], gateway.models?.capabilities) },
+      latest: gateway.latest ?? null, latestCapabilities: gateway.latest ? cleanCapabilities(gateway.latest, gateway.latestCapabilities) : null, settling: settling.has(gateway.id), limits: limitsOf(gateway, state, reports),
       agents: AGENTS.map(agent => agentRow(gateway, agent, state, vaultKey)), createdAt: gateway.createdAt,
     };
   };
@@ -435,8 +488,8 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     let id = base;
     for (let index = 2; taken.has(id); index++) id = `${base.slice(0, 28).replace(/-+$/, '')}-${index}`;
     const credentialId = typed ? (await vault.create({ id: await vault.available(`${id}-gateway`), name, url, key: typed })).id : input.credentialId ?? null;
-    const gateway = { id, name, preset: preset.id, url, credentialId, accent: ACCENTS[gateways.length % ACCENTS.length], createdAt: new Date(now()).toISOString(), check: checkOf(result), latest: null,
-      models: { ids: cleanModelIds(result.models.ids), manual, at: result.models.listed ? now() : null },
+    const gateway = { id, name, preset: preset.id, url, credentialId, accent: ACCENTS[gateways.length % ACCENTS.length], createdAt: new Date(now()).toISOString(), check: checkOf(result), latest: null, latestCapabilities: null,
+      models: { ids: cleanModelIds(result.models.ids), manual, at: result.models.listed ? now() : null, capabilities: cleanCapabilities(result.models.ids, result.models.capabilities) },
       agents: Object.fromEntries(selection.map(agent => [agent, { on: true, scope: 'compatible', keyAt: null }])) };
     try { await store.update(revision, rows => [...rows, gateway]); }
     catch (error) { if (typed) await vault.remove(credentialId).catch(() => {}); throw error; }
@@ -463,8 +516,8 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     const known = key ?? (moved ? await keyFor({ credentialId }) : '');
     const result = moved ? recentProbe(url, known) ?? await probe(url, known) : null;
     const next = { ...previous, name, url, credentialId, preset: presetOf(input.gateway.preset)?.id ?? previous.preset, ...(result ? observed(previous, result) : {}),
-      models: { ...previous.models, manual, ...(result?.ok && result.models.listed ? { ids: cleanModelIds(result.models.ids), at: now() } : {}) } };
-    if (result?.ok) next.latest = null;
+      models: { ...previous.models, manual, ...(result?.ok && result.models.listed ? { ids: cleanModelIds(result.models.ids), at: now(), capabilities: cleanCapabilities(result.models.ids, result.models.capabilities) } : {}) } };
+    if (result?.ok) { next.latest = null; next.latestCapabilities = null; }
     await store.update(undefined, rows => rows.map(entry => entry.id === next.id ? next : entry));
     const renamed = name !== previous.name, sameModels = JSON.stringify(manual) === JSON.stringify(previous.models?.manual ?? []);
     const results = await applyAndSave(next, { state, key, renamed, quiet: renamed && !moved && sameModels });
@@ -526,7 +579,7 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
       await store.update(undefined, rows => rows.map(entry => entry.id === previous.id ? { ...entry, ...observed(entry, result) } : entry));
       return { ok: true, results: [], result, ...await status() };
     }
-    const next = { ...previous, check: checkOf(result), latest: null, models: { ...previous.models, ...(result.models.listed ? { ids: cleanModelIds(result.models.ids), at: now() } : {}) } };
+    const next = { ...previous, check: checkOf(result), latest: null, latestCapabilities: null, models: { ...previous.models, ...(result.models.listed ? { ids: cleanModelIds(result.models.ids), at: now(), capabilities: cleanCapabilities(result.models.ids, result.models.capabilities) } : {}) } };
     await store.update(undefined, rows => rows.map(entry => entry.id === next.id ? next : entry));
     const results = await applyAndSave(next, { state });
     return { ok: true, results, result, ...await status() };

@@ -68,6 +68,16 @@ test('concurrent uploads across instances share one reserve',async t=>{
   const second=await c.start({dest:f.workspace,items:[item('b.bin',8*1024*1024)]});await c.cancel({ids:second.uploads.map(row=>row.id)});
 });
 
+test('simultaneous starts across instances cannot promise the same free space',async t=>{
+  const f=await filesFixture(t),statfs=async()=>({bavail:1024**3+10*1024*1024,bsize:1});
+  const instances=[0,1].map(()=>createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs}));
+  await Promise.all(instances.map(uploads=>uploads.ready()));
+  const results=await Promise.allSettled(instances.map((uploads,index)=>uploads.start({dest:f.workspace,items:[item('race-'+index+'.bin',8*1024*1024)]})));
+  for(const [index,result]of results.entries())if(result.status==='fulfilled')await instances[index].cancel({ids:result.value.uploads.map(row=>row.id)});
+  assert.equal(results.filter(row=>row.status==='fulfilled').length,1,'only one 8 MiB upload fits in 10 MiB of headroom');
+  assert.equal(results.find(row=>row.status==='rejected')?.reason.code,'no-space');
+});
+
 test('restarted uploads restore remaining-byte reservations without double-counting',async t=>{
   const f=await filesFixture(t),free=1024**3+10*1024*1024,statfs=async()=>({bavail:free,bsize:1});
   const a=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs});

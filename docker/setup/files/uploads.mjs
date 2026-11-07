@@ -9,12 +9,13 @@ import { readText, statRevision } from './text.mjs';
 export const CHUNK_BYTES=8*1024*1024;
 const RESERVE=1024**3,DAY=86400_000;
 // Bytes promised to in-flight uploads but not yet on disk, across every
-// instance in this process. Starts are serialized per instance, but chunks
-// run under per-id locks, so uploads with different ids would otherwise each
-// see the full reserve and jointly spend past it.
+// instance in this process. Starts share one queue so checking free space and
+// registering claims cannot race across instances. Chunks run under per-id
+// locks, with pending claims deducted from the available space.
 let reservedBytes=0;
 // One remaining-byte claim per upload id, shared by duplicate live instances.
 const reservedIds=new Map();
+const starts=createLimiter(1);
 const validId=id=>typeof id==='string'&&/^u_[0-9a-f-]{36}$/.test(id);
 const relative=value=>{
   if(typeof value!=='string'||!value||path.isAbsolute(value)||Buffer.byteLength(value)>4096)fail('invalid','Use a relative upload path.');
@@ -29,7 +30,7 @@ const digest=async(file,expected)=>{
   }finally{await handle.close();}
 };
 export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.statfs(value),onFinish=()=>{}}) {
-  const sessions=new Map(),locks=new Map(),metadata=createLimiter(1),starts=createLimiter(1);
+  const sessions=new Map(),locks=new Map(),metadata=createLimiter(1);
   const reserve=row=>{row.reserved=row.size;reservedBytes+=row.size;if(row.size>0)reservedIds.set(row.id,row.size);};
   // Reconcile an absolute remainder: duplicate instances must not release the same chunk twice.
   const release=(row,n=row.reserved??0)=>{

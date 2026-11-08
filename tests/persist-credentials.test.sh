@@ -216,6 +216,58 @@ persist_agent_credentials
 is "a fresh Claude config starts as valid JSON" '{}' "$(cat "$T3_HOME/.claude.json")"
 is "a fresh Claude config is private" '600' "$(stat -c '%a' "$STORE/.claude.json")"
 
+# A copy that fails (a full or failing state volume) keeps the original,
+# unlinked: deleting it anyway would lose the sign-in, linking over a
+# live directory would plant a stray link inside it, and aborting the
+# start would trade a lost sign-in for a container that never boots. `cp`
+# is shadowed for the paths under test; everything else still copies for
+# real. The calls run guarded, as a start that survives the failure must:
+# an entrypoint that aborts here fails these checks instead of ending the
+# whole suite.
+rm -rf "$T3_HOME" "$T3CODE_HOME"
+mkdir -p "$T3_HOME/.codex" "$T3CODE_HOME"
+printf '%s' 'Codex sign-in' > "$T3_HOME/.codex/auth.json"
+printf '[user]\n\tname = Ana\n' > "$T3_HOME/.gitconfig"
+MOUNTED=""
+cp() {
+  case "$*" in
+    *"/.codex/. "*|*"/.gitconfig "*) return 1 ;;
+  esac
+  command cp "$@"
+}
+persist_agent_credentials || no "a failed copy does not abort the start"
+unset -f cp
+[ -d "$T3_HOME/.codex" ] && [ ! -L "$T3_HOME/.codex" ] && ok "a failed directory copy leaves the original in place" || no "a failed directory copy leaves the original in place"
+is "with its sign-in intact" 'Codex sign-in' "$(cat "$T3_HOME/.codex/auth.json")"
+[ ! -e "$T3_HOME/.codex/.codex" ] && ok "and no stray link inside it" || no "and no stray link inside it"
+[ -f "$T3_HOME/.gitconfig" ] && [ ! -L "$T3_HOME/.gitconfig" ] && ok "a failed file copy leaves the original in place" || no "a failed file copy leaves the original in place"
+is "with git's settings intact" "Ana" "$(git config --file "$T3_HOME/.gitconfig" user.name)"
+# The next start retries the move, and this time it lands.
+persist_agent_credentials || no "the retried move completes"
+[ -L "$T3_HOME/.codex" ] && ok "a later start retries the move" || no "a later start retries the move"
+is "and the sign-in arrives" 'Codex sign-in' "$(cat "$T3_HOME/.codex/auth.json")"
+[ -L "$T3_HOME/.gitconfig" ] && ok "the retried file move links too" || no "the retried file move links too"
+
+# The root ownership migration must stay inside the home tree. The chown
+# traversal refuses to dereference, and the usermod that precedes it -
+# which rechowns the home tree itself, dereferencing as it goes - runs
+# against an empty stand-in home, with the real one restored after. These
+# run as root before anything else, so they are checked as the entrypoint
+# invokes them rather than executed here.
+entrypoint_text="$(cat "$ROOT/docker/entrypoint.sh")"
+case "$entrypoint_text" in
+  *'chown -R --no-dereference "$PUID:$PGID" "$dir"'*) ok "the ownership traversal never dereferences links" ;;
+  *) no "the ownership traversal never dereferences links" ;;
+esac
+case "$entrypoint_text" in
+  *'usermod -o -u "$PUID" -d /run/t3-remap-home "$T3_USER"'*) ok "usermod remaps against a stand-in home" ;;
+  *) no "usermod remaps against a stand-in home" ;;
+esac
+case "$entrypoint_text" in
+  *'usermod -d "$T3_HOME" "$T3_USER"'*) ok "and the real home is restored after" ;;
+  *) no "and the real home is restored after" ;;
+esac
+
 # Turned off: nothing moves.
 rm -rf "$T3_HOME" "$T3CODE_HOME"
 mkdir -p "$T3_HOME" "$T3CODE_HOME"

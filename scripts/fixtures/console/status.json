@@ -878,6 +878,41 @@
     "mode": null,
     "sourceRevision": "e004dd803b93b033d2f905853a8c7adb09b7fbc31c9e6e216564107c16a0bbf6",
     "error": null
+   },
+   {
+    "provider": "cursor",
+    "path": "/home/t3/.cursor/t3-instructions/AGENTS.md",
+    "mode": null,
+    "sourceRevision": "fixture-cursor",
+    "error": null
+   },
+   {
+    "provider": "grok",
+    "path": "/home/t3/.grok/rules/t3-instructions.md",
+    "mode": null,
+    "sourceRevision": "fixture-grok",
+    "error": null
+   },
+   {
+    "provider": "muse",
+    "path": "/home/t3/.config/muse/AGENTS.md",
+    "mode": null,
+    "sourceRevision": "fixture-muse",
+    "error": null
+   },
+   {
+    "provider": "antigravity",
+    "path": "/home/t3/.gemini/config/AGENTS.md",
+    "mode": null,
+    "sourceRevision": "fixture-antigravity",
+    "error": null
+   },
+   {
+    "provider": "pi",
+    "path": "/home/t3/.pi/agent/AGENTS.md",
+    "mode": null,
+    "sourceRevision": "fixture-pi",
+    "error": null
    }
   ]
  },

@@ -13,9 +13,12 @@ import { adapterDetection } from "./skills/adapters.mjs";
 import { resolveSkillSource, parseSkillSource } from "./skills/sources.mjs";
 import { createSkillImporter } from "./skills/imports.mjs";
 import { skillReach } from "./skills/reach.mjs";
+import { createSkillPlacement, placementProviders, disabledSkillRoot } from "./skills/placement.mjs";
+import { createAdditionalSkillPolicies } from "./skills/additional-policies.mjs";
+import { AGENT_NAMES, agentResourcePaths } from "./agent-resources.mjs";
 import { createPluginHookService } from "./skills/hooks.mjs";
 
-const PROVIDERS = Object.freeze({ claude: "Claude Code", codex: "Codex", opencode: "OpenCode", cursor: "Cursor", grok: "Grok Build", muse: "Muse Code", antigravity: "Antigravity" });
+const PROVIDERS = AGENT_NAMES;
 const DEFAULT_LIMITS = { entries: 2048, skills: 256, depth: 8, bytes: 4 * 1024 * 1024, fileBytes: 64 * 1024, milliseconds: 3000 };
 const problem = (code, message) => Object.assign(new Error(message), { code });
 const summaryError = (error) => String(error?.message || error).slice(0, 240);
@@ -27,6 +30,7 @@ export function skillRoots(provider, { home, env = {} }) {
   if (!Object.hasOwn(PROVIDERS, provider)) throw problem("invalid", "Unknown skill provider.");
   const override = (key, fallback) => path.resolve(home, String(env[key] || "").trim() || fallback);
   const claude = override("CLAUDE_CONFIG_DIR", ".claude"), codex = override("CODEX_HOME", ".codex");
+  const resources = agentResourcePaths(home, env);
   const config = override("XDG_CONFIG_HOME", ".config"), shared = path.join(home, ".agents/skills");
   const own = (directory) => ({ path: path.join(directory, "skills"), source: "Provider", scope: "user" });
   const compat = (directory, source) => ({ path: directory, source, scope: "user" });
@@ -35,9 +39,10 @@ export function skillRoots(provider, { home, env = {} }) {
     claude: [own(claude)],
     codex: [own(codex), common, { path: path.join(codex, "skills/.system"), source: "System", scope: "system" }, { path: "/etc/codex/skills", source: "Admin", scope: "admin" }],
     opencode: [own(override("OPENCODE_CONFIG_DIR", path.join(config, "opencode"))), compat(path.join(claude, "skills"), "Claude compatibility"), common],
-    cursor: [own(path.join(home, ".cursor")), common, compat(path.join(claude, "skills"), "Claude compatibility"), compat(path.join(codex, "skills"), "Codex compatibility")],
-    grok: [own(override("GROK_HOME", ".grok")), compat(path.join(claude, "skills"), "Claude compatibility"), common, compat(path.join(home, ".cursor/skills"), "Cursor compatibility")],
-    muse: [own(path.join(config, "muse")), common, compat(path.join(claude, "skills"), "Claude compatibility"), compat(path.join(codex, "skills"), "Codex compatibility")],
+    cursor: [own(resources.cursor), common, compat(path.join(claude, "skills"), "Claude compatibility"), compat(path.join(codex, "skills"), "Codex compatibility")],
+    grok: [own(override("GROK_HOME", ".grok")), compat(path.join(claude, "skills"), "Claude compatibility"), common, compat(path.join(resources.cursor, "skills"), "Cursor compatibility")],
+    muse: [own(resources.muse), common, compat(path.join(home, ".claude/skills"), "Claude compatibility"), compat(path.join(codex, "skills"), "Codex compatibility")],
+    pi: [own(resources.pi), common],
     antigravity: [own(path.join(home, ".gemini/config")), compat(path.join(home, ".gemini/antigravity-cli/skills"), "Antigravity CLI")],
   }[provider];
   return roots.filter((root, index) => roots.findIndex((other) => other.path === root.path) === index);
@@ -146,13 +151,16 @@ export async function scanSkillFiles(provider, options) {
     }
   };
   for (const root of roots) await walk(root.path, root, 0, new Set());
+  if (placementProviders.includes(provider)) await walk(disabledSkillRoot(roots[0].path), { path: disabledSkillRoot(roots[0].path), source: "Parked provider skill", scope: "user" }, 0, new Set());
   return { skills: [...rows.values()], roots, warnings: [...warnings] };
 }
 
-export function createSkillsService({ home, env = process.env, io = fs, nativeCodex = listCodexSkills, nativeCodexWrite = writeCodexSkillConfig, nativeCodexHooks, nativeCodexHookWrite, inspectClaude, inspectOpenCode, getHarness = async () => null, ttlMs = 15000, limits, resolveSource } = {}) {
+export function createSkillsService({ home, env = process.env, io = fs, nativeCodex = listCodexSkills, nativeCodexWrite = writeCodexSkillConfig, nativeCodexHooks, nativeCodexHookWrite, inspectClaude, inspectOpenCode, getHarness = async () => null, onNativeChange = async () => {}, ttlMs = 15000, limits, resolveSource } = {}) {
   home = path.resolve(home || env.HOME || "/home/t3");
   const cache = new Map(), updateStates = new Map(), updateChecks = new Map();
   const policies = createSkillPolicies({ home, env, io, getHarness, inspectClaude, inspectOpenCode, invalidate: () => cache.clear() });
+  const placement = createSkillPlacement({ io, readSkillFile, invalidate: () => cache.clear() });
+  const additionalPolicies = createAdditionalSkillPolicies({ home, env, io, invalidate: () => cache.clear(), onNativeChange });
   const load = async (provider) => {
     const scanned = await scanSkillFiles(provider, { home, env, io, limits });
     let coverage = "files", nativeError = null, config = null;
@@ -199,7 +207,17 @@ export function createSkillsService({ home, env = process.env, io = fs, nativeCo
         scanned.skills = result.skills; coverage = "policy";
       } catch (error) { nativeError = summaryError(error); }
     }
+    if (["grok", "muse", "pi"].includes(provider)) {
+      try {
+        const result = await additionalPolicies.inspect(provider, scanned.skills);
+        scanned.skills = result.skills; coverage = "settings";
+      } catch (error) { nativeError = summaryError(error); }
+    }
     const policy = await fileManager.policyFor(provider);
+    if (placementProviders.includes(provider)) {
+      scanned.skills = await placement.inspect(scanned.roots[0].path, scanned.skills, policy);
+      coverage = "placement";
+    }
     const adapter = await adapterDetection(provider, { home, env, io });
     for (const row of scanned.skills) {
       const origin = await readSkillOrigin(io, row, home);
@@ -210,7 +228,7 @@ export function createSkillsService({ home, env = process.env, io = fs, nativeCo
       }
     }
     return { ok: true, provider, canCreate: policy.canCreate, creationTargets: policy.creationTargets, providers: skillProviders(), skills: scanned.skills.map((row) => {
-      if (row.stateAuthority === "user-policy") return { ...row, ...policy.capabilities(row) };
+      if (["user-policy", "placement"].includes(row.stateAuthority)) return { ...row, ...policy.capabilities(row) };
       const reason = provider !== "codex" ? nativeError || "Native policy controls are currently supported for Claude Code and OpenCode; native availability controls for Codex."
         : !row.native ? "Codex has not verified this skill's availability."
           : row.scope !== "user" || row.source === "Plugin" ? "System, admin and plugin availability is managed through its source."
@@ -220,13 +238,17 @@ export function createSkillsService({ home, env = process.env, io = fs, nativeCo
         stateRevision: !reason ? stateRevision(config, row) : null };
     }).sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path)),
       roots: scanned.roots, coverage, nativeError, warnings: scanned.warnings, scannedAt: Date.now(), adapter,
-      coverageText: coverage === "policy" ? "Known global skill folders with native user policy settings checked by the managed provider. Project/session and managed policies can further restrict availability."
+      coverageText: coverage === "placement" ? "Known global folders. On/off parks ordinary local installations outside discovery; native activation, plugins and session state are not reported."
+        : coverage === "settings" ? "Known global folders with native user skill settings. Project, package and session overrides are not verified."
+        : coverage === "policy" ? "Known global skill folders with native user policy settings checked by the managed provider. Project/session and managed policies can further restrict availability."
         : coverage === "native" ? "Managed Codex inventory in the setup environment, with known local folders included. Project skills are excluded."
         : "Known global skill folders only. Provider availability, plugins and additional configured locations are not verified.",
     };
   };
   const setState = async (provider, id, revision, enabled, state) => {
     if (!Object.hasOwn(PROVIDERS, provider) || typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id)) throw problem("invalid", "Expected a provider and skill identifier.");
+    if (placementProviders.includes(provider)) return placement.set(provider, () => load(provider), id, revision, enabled);
+    if (["grok", "muse", "pi"].includes(provider)) return additionalPolicies.set(provider, () => load(provider), id, revision, state);
     if (["claude", "opencode"].includes(provider)) return policies.set(provider, () => load(provider), id, revision, state);
     if (typeof enabled !== "boolean") throw problem("invalid", "Expected a boolean enabled value.");
     if (provider !== "codex") throw problem("unsupported", "Native availability controls are currently supported for Codex.");

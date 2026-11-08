@@ -38,9 +38,9 @@ const SCENARIOS = {
   },
   skills: (s) => {
     SCENARIOS.ready(s);
-    for (const id of ['cursor', 'grok', 'muse', 'antigravity']) {
+    for (const id of ['cursor', 'grok', 'muse', 'antigravity', 'pi']) {
       let agent = harness(s, id);
-      if (!agent) { agent = { id, name: { cursor: 'Cursor', grok: 'Grok Build', muse: 'Muse Code', antigravity: 'Antigravity' }[id] }; s.harnesses.push(agent); }
+      if (!agent) { agent = { id, name: { cursor: 'Cursor', grok: 'Grok Build', muse: 'Muse Code', antigravity: 'Antigravity', pi: 'Pi' }[id] }; s.harnesses.push(agent); }
       Object.assign(agent, { installed: ['cursor', 'grok'].includes(id), runnable: true, version: '1.0.0', installedVersion: '1.0.0', signedIn: true });
     }
     s.context.agentsMd = { ...s.context.agentsMd, present: true, path: '/home/t3/.t3/setup/context/AGENTS.md', revision: 'fixture-shared', modifiedAt: Date.now() - 120000, bytes: 384 };

@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createSkillsService } from '../docker/setup/skills.mjs';
 
-test('reach describes all seven agents with overridden, missing and aliased roots', async t => {
+test('reach describes all eight agents with overridden, missing and aliased roots', async t => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 't3-reach-'));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   const env = { CLAUDE_CONFIG_DIR: 'custom-claude', CODEX_HOME: 'custom-codex', XDG_CONFIG_HOME: 'custom-config', GROK_HOME: 'custom-grok' };

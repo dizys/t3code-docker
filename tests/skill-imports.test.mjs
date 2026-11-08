@@ -22,8 +22,8 @@ async function fixture(t, options = {}) {
 test("preview and destination review do not write provider homes; install uses the exact preview and supports every provider", async (t) => {
   const f = await fixture(t, { env: { OPENCODE_CONFIG_DIR: "custom-opencode", CODEX_HOME: "custom-codex", CLAUDE_CONFIG_DIR: "custom-claude", GROK_HOME: "custom-grok", XDG_CONFIG_HOME: "custom-config" } });
   const preview = await f.preview(); assert.ok(preview.previewId); assert.equal(preview.skills[0].files.length, 3);
-  const providers = ["claude", "codex", "opencode", "cursor", "grok", "muse", "antigravity"], plan = await f.plan(preview.previewId, providers);
-  assert.equal(plan.canInstall, true); assert.equal(plan.destinations.length, 7);
+  const providers = ["claude", "codex", "opencode", "cursor", "grok", "muse", "antigravity", "pi"], plan = await f.plan(preview.previewId, providers);
+  assert.equal(plan.canInstall, true); assert.equal(plan.destinations.length, 8);
   await assert.rejects(fs.stat(path.join(f.home, ".cursor")), { code: "ENOENT" });
   await fs.writeFile(f.source, markdown("Changed after preview"));
   const result = await f.service.installImport(preview.previewId, plan.planId);

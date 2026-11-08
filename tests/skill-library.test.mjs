@@ -18,7 +18,7 @@ const roots = [
 ];
 const installed = roots.slice(0, 5).map(root => root.owner);
 
-test('seven-provider browser fixtures share physical identities, reach and native controls', () => {
+test('eight-provider browser fixtures share physical identities, reach and native controls', () => {
   const fixture = name => JSON.parse(fs.readFileSync(new URL('../scripts/fixtures/console/' + name + '.json', import.meta.url), 'utf8'));
   const inventories = Object.fromEntries(model.providers.map(provider => [provider.id, fixture('skills-' + provider.id)]));
   const reach = fixture('skills-reach');

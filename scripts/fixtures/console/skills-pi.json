@@ -1,0 +1,68 @@
+{
+  "ok": true,
+  "provider": "pi",
+  "canCreate": true,
+  "creationTargets": [
+    {
+      "id": "provider",
+      "name": "Provider folder",
+      "path": "/home/t3/.pi/agent/skills"
+    }
+  ],
+  "skills": [
+    {
+      "id": "pi-ef6f3e5d6a3828519da2d45401d2f2bd",
+      "path": "/home/t3/.pi/agent/skills/terminal-review/SKILL.md",
+      "resolvedPath": "/home/t3/.t3/agents/.pi/agent/skills/terminal-review/SKILL.md",
+      "name": "terminal-review",
+      "description": "A reusable workflow in this agent’s native folder.",
+      "source": "Provider",
+      "scope": "user",
+      "state": "enabled",
+      "native": false,
+      "bytes": 3527,
+      "error": null,
+      "metadataError": null,
+      "canToggle": false,
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "enabled",
+          "label": "On"
+        },
+        {
+          "value": "disabled",
+          "label": "Off"
+        }
+      ],
+      "stateRevision": "fixture-state-cursor",
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.pi/agent/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
+      "stateReadOnlyReason": null,
+      "canEdit": true,
+      "canRemove": true,
+      "revision": "fixture-file-release-notes",
+      "readOnlyReason": null,
+      "packageManaged": false,
+      "packageSource": null
+    }
+  ],
+  "roots": [
+    {
+      "path": "/home/t3/.pi/agent/skills",
+      "resolvedPath": "/home/t3/.t3/agents/.pi/agent/skills",
+      "source": "Provider",
+      "scope": "user"
+    },
+    {
+      "path": "/home/t3/.agents/skills",
+      "source": "Shared .agents",
+      "scope": "user"
+    }
+  ],
+  "coverage": "settings",
+  "warnings": [],
+  "nativeError": null,
+  "scannedAt": 1792575000000
+}

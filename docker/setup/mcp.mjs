@@ -3,7 +3,7 @@
 import path from 'node:path';
 import { mcpStorePathFor, readMcpStore, createMcpServer, saveMcpServer, removeMcpServer, adoptMcpServer,
   redactMcpServer, validateMcpServer, MCP_PROVIDERS, UNSUPPORTED_MCP_PROVIDERS, withStore } from './mcp/store.mjs';
-import { readProviderMcp, writeProviderMcpEntry, toClaudeEntry, toCodexEntry, toOpenCodeEntry, toCursorEntry, isSupportedMcpProvider } from './mcp/adapters.mjs';
+import { readProviderMcp, writeProviderMcpEntry, toClaudeEntry, toCodexEntry, toOpenCodeEntry, toCursorEntry, toAdditionalEntry, isSupportedMcpProvider } from './mcp/adapters.mjs';
 import { parseMcpSnippet } from './mcp/parse.mjs';
 
 const problem = (code, message) => Object.assign(new Error(message), { code });
@@ -40,13 +40,21 @@ export function mcpDifferences(shared, row) {
   return { fields, extraOptions: row.extraOptions || [], adoptable: true, dropped: row.extraOptions || [] };
 }
 
-export function createMcpService({ home, env = process.env, io, baseDir, ttlMs = 15000 } = {}) {
+export function createMcpService({ home, env = process.env, io, baseDir, getHarness = async () => null, onNativeChange = async () => {}, ttlMs = 15000 } = {}) {
   if (!io) throw new Error('mcp service needs an fs implementation');
   home = path.resolve(home || env.HOME || '/home/t3');
   baseDir = baseDir || env.T3CODE_HOME || path.join(home, '.t3');
   let cached = null, at = 0;
   const invalidate = () => { cached = null; at = 0; };
   const native = provider => readProviderMcp(io, provider, { home, env });
+  const capabilityError = async provider => {
+    if (provider !== 'pi') return null;
+    const harness = await getHarness(provider), version = harness?.installedVersion || harness?.version;
+    if (!harness?.installed && !harness?.runnable) return null;
+    const match = /^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/.exec(version || '');
+    if (match && (Number(match[1]) > 0 || Number(match[2]) >= 99)) return null;
+    return 'Update Pi to 0.99.0 or later to use native MCP servers. This installed version does not have verified mcp.json support.';
+  };
   const storeRead = async () => {
     const store = await readMcpStore(io, baseDir);
     if (store.error) throw problem(store.code || 'unavailable', store.error);
@@ -74,9 +82,13 @@ export function createMcpService({ home, env = process.env, io, baseDir, ttlMs =
     if (!refresh && cached && Date.now() - at < ttlMs) return cached;
     const promise = (async () => {
       const store = await readMcpStore(io, baseDir), reads = new Map();
-      const providers = await Promise.all(['claude', 'codex', 'opencode', 'cursor', 'grok', 'muse', 'antigravity'].map(async provider => {
+      const providers = await Promise.all(Object.keys(MCP_PROVIDERS).map(async provider => {
         if (UNSUPPORTED_MCP_PROVIDERS[provider]) return { provider, supported: false, error: UNSUPPORTED_MCP_PROVIDERS[provider], ...(provider === 'grok' ? { imports: ['claude', 'cursor'] } : {}), linked: [], diverged: [], unlinked: [], disabled: [], own: [], ownCount: 0 };
-        try { const read = await native(provider); reads.set(provider, read); return stateFor(provider, read, store.servers); }
+        try {
+          const unavailable = await capabilityError(provider);
+          if (unavailable) throw problem('upgrade-required', unavailable);
+          const read = await native(provider); reads.set(provider, read); return stateFor(provider, read, store.servers);
+        }
         catch (error) { return { provider, supported: true, revision: null, linked: [], diverged: [], unlinked: [], disabled: [], own: [], ownCount: 0,
           error: String(error?.message || error).slice(0, 240), code: error?.code }; }
       }));
@@ -114,16 +126,20 @@ export function createMcpService({ home, env = process.env, io, baseDir, ttlMs =
   const setLink = async (provider, name, linked, sharedRevision, providerRevision, enabled) => withStore(mcpStorePathFor(baseDir), async () => {
     assertProvider(provider);
     if (typeof linked !== 'boolean' || (enabled !== undefined && typeof enabled !== 'boolean')) throw problem('invalid', 'Expected boolean linked and enabled values.');
-    if (enabled === false && !['codex', 'opencode'].includes(provider)) throw problem('unsupported', `${MCP_PROVIDERS[provider]} has no global off switch. Remove it instead.`);
+    const unavailable = linked && await capabilityError(provider);
+    if (unavailable) throw problem('upgrade-required', unavailable);
+    if (enabled === false && !['codex', 'opencode', 'grok', 'muse', 'pi', 'antigravity'].includes(provider)) throw problem('unsupported', `${MCP_PROVIDERS[provider]} has no global off switch. Remove it instead.`);
     const store = await storeRead();
     if (store.revision !== sharedRevision) throw problem('conflict', 'Shared MCP servers changed. Refresh the list before changing links.');
     const server = getServer(store, name);
     const current = await native(provider), existing = current.servers.find(r => r.name === name);
     const on = enabled ?? existing?.canonical?.enabled ?? server.enabled !== false;
     const entry = !linked ? null : provider === 'codex' ? toCodexEntry(server, on) : provider === 'opencode' ? toOpenCodeEntry(server, false, on)
-      : provider === 'claude' ? toClaudeEntry(server) : toCursorEntry(server);
+      : provider === 'claude' ? toClaudeEntry(server) : provider === 'cursor' ? toCursorEntry(server) : toAdditionalEntry(provider, server, on);
     const result = await writeProviderMcpEntry(io, provider, { home, env }, name, entry, { revision: providerRevision });
-    invalidate(); return { ...result, ok: true, provider, name, linked };
+    invalidate();
+    const propagation = await onNativeChange(provider);
+    return { ...result, ok: true, provider, name, linked, ...(propagation ? { propagation } : {}) };
   });
   const adopt = async (provider, name, providerRevision, sharedRevision, replace = false) => {
     assertProvider(provider);
@@ -148,8 +164,9 @@ export function createMcpService({ home, env = process.env, io, baseDir, ttlMs =
     list: async provider => {
       assertProvider(provider);
       const store = await storeRead(), detail = await native(provider), state = stateFor(provider, detail, store.servers);
+      const unavailable = await capabilityError(provider);
       return { ok: true, ...state, sharedRevision: store.revision, shared: store.servers.map(s => ({ ...redactMcpServer(s),
-        linked: state.linked.includes(s.name), diverged: state.diverged.includes(s.name), linkable: true })), unsupported: detail.servers.filter(r => !r.canonical).map(r => r.name) };
+        linked: state.linked.includes(s.name), diverged: state.diverged.includes(s.name), linkable: !unavailable })), ...(unavailable ? { error: unavailable, code: 'upgrade-required' } : {}), unsupported: detail.servers.filter(r => !r.canonical).map(r => r.name) };
     },
     create: mutation(createMcpServer), save: mutation(saveMcpServer),
     remove: async (name, revision) => {

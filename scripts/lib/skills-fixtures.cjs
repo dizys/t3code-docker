@@ -12,10 +12,11 @@ const filesFor = name => [
 ];
 const createSkillsFixtures = ({ partial = false } = {}) => {
   const reach = read('skills-reach');
-  const inventories = Object.fromEntries(['claude', 'codex', 'opencode', 'cursor', 'grok', 'muse', 'antigravity'].map(id => [id, read('skills-' + id)]));
+  const inventories = Object.fromEntries(['claude', 'codex', 'opencode', 'cursor', 'grok', 'muse', 'antigravity', 'pi'].map(id => [id, read('skills-' + id)]));
   const tracked = { 'frontend-design': ['vercel-labs/skills', 'available'], 'deep-research': ['acme/research-skills', 'available'], 'docx': ['anthropics/skills', 'current'], 'google-workspace': ['acme/workspace-skills', 'error'] };
   for (const inventory of Object.values(inventories)) for (const skill of inventory.skills) {
     if (tracked[skill.name] && skill.path.includes('/.claude/')) skill.origin = { source: tracked[skill.name][0], name: skill.name, fingerprint: 'a'.repeat(64) };
+    if (skill.stateAuthority === 'placement') skill.placementKey = skill.path;
   }
   const hooks = read('skill-plugin-hooks').hooks;
   const pluginRoot = '/home/t3/.codex/plugins/cache/review-tools/skills';
@@ -26,6 +27,7 @@ const createSkillsFixtures = ({ partial = false } = {}) => {
     readOnlyReason: 'Managed by its installed Codex plugin.', packageManaged: true, origin: null });
   reach.roots.push({ path: pluginRoot, resolvedPath: pluginRoot, source: 'Plugin', scope: 'user', readers: ['codex'], owner: null, writable: false });
   const previews = new Map();
+  const placementReaders = new Map();
   let serial = 0;
   let shared = '# How I work\n\nBe direct and specific. Explain tradeoffs and check your assumptions.\n\n## Before making changes\n\nRead the relevant code and tests. Keep changes focused on the task.\n\n## Quality\n\nTest the complete user journey. Preserve accessibility and keyboard controls.\n';
   const answer = (body, status = 200) => ({ status, body });
@@ -88,7 +90,7 @@ const createSkillsFixtures = ({ partial = false } = {}) => {
     if (at('/read')) {
       const skill = inventories[provider]?.skills.find(row => row.id === url.searchParams.get('id'));
       return skill ? answer({ ok: true, ...skill, content: contentFor(skill.name), files: filesFor(skill.name), fileCount: 3,
-        removalRevision: 'fixture-removal', removalKind: 'directory', removalPath: path.dirname(skill.path), removalFiles: 5 })
+        removalRevision: skill.placementKey ? 'fixture-removal-' + skill.revision : 'fixture-removal', removalKind: 'directory', removalPath: path.dirname(skill.path), removalFiles: 5 })
         : answer({ ok: false, error: 'This skill is no longer installed. Rescan the library.' }, 404);
     }
     if (method === 'GET') return answer({ ...inventories[provider], scannedAt: Date.now() - 120000 });
@@ -96,6 +98,27 @@ const createSkillsFixtures = ({ partial = false } = {}) => {
       const row = inventories[provider].skills.find(row => row.id === input.id);
       if (!row) return answer({ ok: false, error: 'Unknown skill' }, 404);
       row.state = input.state || (input.enabled ? 'enabled' : 'disabled');
+      if (row.stateAuthority === 'placement') {
+        const enabled = row.state === 'enabled';
+        if (!enabled) {
+          const readers = [];
+          for (const [other, inventory] of Object.entries(inventories)) if (other !== provider) {
+            readers.push(...inventory.skills.filter(copy => copy.path === row.path).map(copy => ({ provider: other, row: copy })));
+            inventory.skills = inventory.skills.filter(copy => copy.path !== row.path);
+          }
+          placementReaders.set(row.placementKey, readers);
+        } else {
+          for (const copy of placementReaders.get(row.placementKey) || []) inventories[copy.provider].skills.push(copy.row);
+          placementReaders.delete(row.placementKey);
+        }
+        row.path = row.path.replace(/\/skills(?:\.t3-disabled)?\//, enabled ? '/skills/' : '/skills.t3-disabled/');
+        row.resolvedPath = row.resolvedPath.replace(/\/skills(?:\.t3-disabled)?\//, enabled ? '/skills/' : '/skills.t3-disabled/');
+        row.id = 'fixture-placement-' + provider + '-' + row.state + '-' + row.name;
+        row.revision = 'fixture-file-placement-' + (++serial);
+        row.canEdit = row.canRemove = enabled;
+        row.readOnlyReason = enabled ? null : 'Restore this parked installation to edit or remove its files.';
+      }
+      row.stateRevision = 'fixture-state-' + (++serial);
       return answer({ ok: true, inventory: inventories[provider] });
     }
     if (at('/source')) {

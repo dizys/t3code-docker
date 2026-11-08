@@ -116,8 +116,8 @@ test("links write provider files and derive state by comparison", async (t) => {
   assert.deepEqual(unlinked.linked, []);
   assert.deepEqual(unlinked.unlinked, ["playwright"]);
   const grok = (await svc.status()).providers.find((entry) => entry.provider === "grok");
-  assert.equal(grok.supported, false);
-  assert.match(grok.error, /not implemented/);
+  assert.equal(grok.supported, true);
+  assert.equal(grok.error, null);
 });
 
 test("legacy disabled definitions allow each agent to choose its own state", async (t) => {
@@ -130,7 +130,8 @@ test("legacy disabled definitions allow each agent to choose its own state", asy
   await svc.setLink("claude", "quiet", true, created.revision);
   assert.equal((await svc.list("claude")).shared[0].linked, true);
   await assert.rejects(svc.setLink("claude", "quiet", true, created.revision, undefined, false), { code: "unsupported" });
-  await assert.rejects(svc.setLink("grok", "quiet", true, created.revision), /not implemented/);
+  await svc.setLink("grok", "quiet", true, created.revision);
+  assert.deepEqual((await svc.list("grok")).disabled, ["quiet"]);
 });
 
 test("unsupported and unknown MCP shapes stay in place with a warning", async (t) => {

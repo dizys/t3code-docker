@@ -597,9 +597,12 @@ const loadStorage = () => {
 const CONTEXT_HOME = process.env.HOME || "/home/t3";
 const contextFs = async () => (await import("node:fs/promises"));
 const skillsService = createSkillsService({ home: CONTEXT_HOME, env: process.env,
+  onNativeChange: provider => gateways.syncNativeResources(provider),
   getHarness: async (provider) => (await harnessCache.snapshotCheap()).harnesses?.find((row) => row.id === provider),
 });
 const mcpService = createMcpService({ home: CONTEXT_HOME, env: process.env, baseDir: STATE_DIR,
+  getHarness: async provider => (await harnessCache.snapshotCheap()).harnesses?.find(row => row.id === provider),
+  onNativeChange: provider => gateways.syncNativeResources(provider),
   io: await contextFs(),
 });
 let credentialInstalled = null;

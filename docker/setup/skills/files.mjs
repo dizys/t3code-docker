@@ -3,7 +3,7 @@ import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 
-const writableProviders = new Set(["claude", "codex", "opencode", "cursor", "grok", "muse", "antigravity"]);
+const writableProviders = new Set(["claude", "codex", "opencode", "cursor", "grok", "muse", "antigravity", "pi"]);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const inside = (parent, file) => { const relative = path.relative(parent, file); return relative !== "" && !relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative); };
 const stamp = (stat) => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeMs].join(":");

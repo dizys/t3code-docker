@@ -8,7 +8,7 @@ import { skillRoots, createSkillsService } from "../docker/setup/skills.mjs";
 
 test("adapter registry covers every provider with portable project locations", () => {
   const ids = adapterProviders().map((entry) => entry.id).sort();
-  assert.deepEqual(ids, ["antigravity", "claude", "codex", "cursor", "grok", "muse", "opencode"]);
+  assert.deepEqual(ids, ["antigravity", "claude", "codex", "cursor", "grok", "muse", "opencode", "pi"]);
   for (const { id, name } of adapterProviders()) {
     assert.match(name, /^[A-Za-z ]+$/);
     const adapter = skillAdapter(id, { home: "/home/fixture", env: {} });
@@ -26,9 +26,9 @@ test("adapter registry covers every provider with portable project locations", (
   for (const id of ["codex", "cursor", "opencode", "antigravity"]) {
     assert.equal(skillAdapter(id, { home: "/home/fixture", env: {} }).projectDir, ".agents/skills");
   }
-  // Grok and Muse project scope stays unverified rather than guessed.
-  assert.equal(skillAdapter("grok", { home: "/home/fixture", env: {} }).projectDir, null);
-  assert.equal(skillAdapter("muse", { home: "/home/fixture", env: {} }).projectDir, null);
+  assert.equal(skillAdapter("grok", { home: "/home/fixture", env: {} }).projectDir, '.grok/skills');
+  assert.equal(skillAdapter("muse", { home: "/home/fixture", env: {} }).projectDir, '.agents/skills');
+  assert.equal(skillAdapter("pi", { home: "/home/fixture", env: {} }).projectDir, '.pi/skills');
   assert.throws(() => skillAdapter("unknown", { home: "/home/fixture", env: {} }), /Unknown skill provider/);
 });
 

@@ -20,11 +20,10 @@ to manage it here. Unsupported entries remain visible and stay unchanged.
 | Cell | Meaning and actions |
 | --- | --- |
 | On | Matches the shared definition and is configured to start in a new session. |
-| Off | Codex or OpenCode keeps the entry but does not start it. Its content still matches. |
+| Off | The agent keeps the entry but does not start it. Its content still matches. Available in Codex, OpenCode, Grok, Muse, Pi and Antigravity. |
 | Differs | The native copy has different fields or agent-specific options. Review before replacing it. |
 | — | Not added. Use Add to copy the definition into this agent’s settings. |
 | Own entry | Native settings contain this server; it has no shared definition yet. |
-| Via Claude Code / Via Cursor | Grok may import that copy. It does not report what it actually loads. |
 
 These states describe configuration, not connectivity. Unreadable settings get
 an attention notice and disable that agent’s controls. While a change saves, its
@@ -33,21 +32,29 @@ cell shows progress and that agent’s column is disabled; other agents remain u
 The **Installed agents / All agents** menu beside **Server** controls the matrix
 columns, as it does in Skills. It stays visible when the table scrolls sideways.
 All agents also shows uninstalled agents; their saved entries are read-only.
-Muse Code and Antigravity show **Not managed here**, and Grok remains imports only.
+All eight agents support native global MCP configuration.
 Changing the visible columns never adds a server or changes native settings.
 
-Claude Code and Cursor have Add/Remove here. Codex and OpenCode also support
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="media/agent-resources/mcp-dark.png">
+  <img src="media/agent-resources/mcp-light.png" alt="MCP server inspector with native controls for all eight agents" width="1440">
+</picture>
+
+Claude Code and Cursor have Add/Remove here. The other six agents also support
 On/Off. Claude’s per-project toggles are outside Setup’s inventory. A legacy
-shared `enabled: false` value is still readable and makes new Codex/OpenCode
-copies start off; it no longer blocks adding a copy to Claude or Cursor.
+shared `enabled: false` value is still readable and makes new copies with On/Off
+start off; it no longer blocks adding a copy to Claude or Cursor.
 
 ## Add, edit and share
 
-**Add server…** accepts Claude/Cursor JSON or JSONC, Codex TOML, OpenCode V1/V2
-JSON, a `claude mcp add` command, a plain command line or an HTTP URL. Nothing
+**Add server…** accepts Claude/Cursor, Muse, Pi and Antigravity JSON, Codex/Grok
+TOML, OpenCode V1/V2 JSON, a `claude mcp add` command, a plain command line or an HTTP URL. Nothing
 pasted is run. When several servers are found, choose one and add the others
 later. Placeholder values get a warning; replace them with your own credentials.
 Variable references remain literal and follow each agent’s own rules.
+Existing Muse `mcp_servers` sections and Antigravity direct server maps retain
+their native layout when adding or removing a server. Both layouts can also be
+pasted directly, as can a single native server entry.
 
 Command lines use quoting without shell expansion. **Edit one per line** provides
 one field per argument and preserves empty arguments, surrounding whitespace and
@@ -110,11 +117,13 @@ claude mcp login SERVER_NAME
 codex mcp login SERVER_NAME
 opencode mcp auth SERVER_NAME
 cursor-agent mcp login SERVER_NAME
+muse mcp login SERVER_NAME
+pi mcp login SERVER_NAME
 ```
 
 Native approval, project configuration, custom T3 provider profiles, enterprise
-policy and effective runtime discovery remain with the agents. Grok is imports
-only; Muse Code and Antigravity are not managed here. SSE-only addresses cannot
+policy and effective runtime discovery remain with the agents. Grok and
+Antigravity authentication uses their native MCP interfaces. SSE-only addresses cannot
 be imported as portable HTTP servers; use the server’s Streamable HTTP address.
 
 ## Files and safety
@@ -139,9 +148,23 @@ limited to 64 KiB, and performs no execution, expansion, network calls or writes
 | OpenCode 1 | `opencode.json[c]`, `.mcp[name]` | Local and HTTP; native `enabled` |
 | OpenCode 2 | `opencode.json[c]`, `.mcp.servers[name]` | Local and HTTP; native `disabled`; existing native V2 files stay V2; new files use the V1-compatible format also accepted by V2 |
 | Cursor | `~/.cursor/mcp.json` | Local and HTTP; native approval/login still applies |
-| Antigravity | T3's isolated provider profile | Not integrated; Gemini CLI settings are not an Antigravity integration |
-| Grok Build | `~/.grok/config.toml` | Not managed; Grok may also load Claude/Cursor MCP entries through native compatibility imports |
-| Muse Code | `$XDG_CONFIG_HOME/muse/settings.json` | Not managed in this release |
+| Antigravity | `~/.gemini/config/mcp_config.json` | Local and HTTP; `serverUrl` and `disabled`; normalized into T3's private profile before launch |
+| Grok Build | `$GROK_HOME/config.toml` (default `~/.grok/config.toml`) | Local and HTTP in `mcp_servers`; `headers`, `enabled` and `disabled_mcp_servers`; connected gateway profiles refreshed after saves |
+| Muse Code | `$XDG_CONFIG_HOME/muse/settings.json` (default `~/.config/muse/settings.json`) | Local and HTTP in `mcpServers`; `enabled`; preserves schema version 1 and an existing legacy `mcp_servers` section |
+| Pi | `$PI_CODING_AGENT_DIR/mcp.json` (default `~/.pi/agent/mcp.json`) | Local and HTTP in `mcpServers`; `enabled`; requires Pi 0.99.0 or later |
+
+Older Pi versions do not load native `mcp.json`. They show an update message and
+cannot receive new copies until updated; existing files remain untouched. The
+reserved Pi server name `t3-code` belongs to T3's orchestration extension.
+Grok server names must start with a letter.
+
+The installed Antigravity ACP loader reads remote servers from `url` and does
+not honor `disabled`. T3's bridge therefore creates a private snapshot that
+maps `serverUrl` to `url` and omits disabled servers. It refreshes at session
+startup, preserves private credentials and hooks, and removes its own stale
+snapshot when the global source is deleted. Private or manually edited profile
+resources are preserved and reported as a launch conflict with their path.
+The bridge ships with the maintained Stable and Nightly runtime patches.
 
 Claude HTTP entries require an explicit transport type; a URL alone is
 reported as differing. The documented `streamable-http` alias is recognized.
@@ -155,8 +178,9 @@ follow existing file/directory symlinks, reject stale revisions/retargeting and
 publish atomically with owner-only permissions. Other applications can still
 race between the final check and rename; this is not a cross-process transaction.
 The page manages default global files, honoring the server environment’s
-Claude/Codex/XDG/OpenCode directory overrides. With credential persistence enabled,
-Claude’s default `.claude.json` also lives on the state volume. Custom roots need
+Claude/Codex/XDG/OpenCode/Grok/Pi directory overrides. With credential persistence enabled,
+all default resources, including Claude's `.claude.json` and Antigravity's
+global config, live on the state volume. Custom roots need
 their own persistent mounts.
 
 `t3-browser-mcp` remains a separate quick CLI path for the bundled browser
@@ -164,15 +188,16 @@ servers. It writes native entries directly and does not create shared definition
 
 ## Verification
 
-Run `node --test tests/mcp*.test.mjs` for parsing, per-agent state, adoption,
+Run `node --test tests/mcp*.test.mjs tests/full-agent-resources.test.mjs tests/agent-resources-patch.test.mjs` for parsing, per-agent state, adoption,
 revisions, redaction, format preservation and the authenticated API boundary.
 `node scripts/mcp-ui-audit.js URL KEY` exercises desktop, phone and embedded flows
 in both themes with synthetic data. All API mutations are intercepted.
 
 `node scripts/mcp-native-smoke.mjs PROVIDER /absolute/path/to/executable` verifies
-local/HTTP handshakes, credential delivery, unlink and Codex/OpenCode Off/On using
+local/HTTP handshakes, credential delivery, unlink and native Off/On using
 fresh native reads, disposable homes and fixture servers. It never sends model
-prompts or real credentials. This checks native configuration and MCP negotiation,
+requests to an external provider or uses real credentials. Muse uses its local
+echo provider. This checks native configuration and MCP negotiation,
 not model-selected tool calls or OAuth.
 
 Native contracts: [Claude](https://code.claude.com/docs/en/mcp),
@@ -180,6 +205,7 @@ Native contracts: [Claude](https://code.claude.com/docs/en/mcp),
 [OpenCode V1](https://opencode.ai/docs/mcp-servers/),
 [OpenCode V2](https://dev.opencode.ai/v2/docs/mcp-servers/),
 [Cursor](https://cursor.com/docs/cli/mcp),
-[Antigravity](https://antigravity.google/docs/cli/gcli-migration/),
+[Antigravity](https://antigravity.google/docs/mcp/),
 [Grok](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/07-mcp-servers.md),
-and [Muse](https://meta-models.github.io/muse-code-sdk/next/guides/extend/mcp-servers/).
+[Muse](https://meta-models.github.io/muse-code-sdk/next/guides/extend/mcp-servers/),
+and [Pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/mcp.md).

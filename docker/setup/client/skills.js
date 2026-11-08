@@ -110,17 +110,24 @@ const T3SkillsUI = (() => {
       const enabled = row.canToggle ? row.state !== 'enabled' : undefined;
       const response = await api('/context/skills/state', { body: { provider, id, stateRevision: row.stateRevision, enabled, state: value } });
       changing.delete(provider);
-      if (response.ok) { inventories[provider] = response.data.inventory; delete errors[provider]; rebuild(); paint(); Kit.toast('Saved ' + S.nameOf(provider) + ' setting'); Kit.announce('Saved ' + S.nameOf(provider) + '’s skill setting'); }
+      if (response.ok) {
+        inventories[provider] = response.data.inventory; delete errors[provider]; rebuild(); paint();
+        // A placement move also changes discovery for compatibility readers.
+        if (row.stateAuthority === 'placement') await loadAll(true);
+        Kit.toast('Saved ' + S.nameOf(provider) + ' setting'); Kit.announce('Saved ' + S.nameOf(provider) + '’s skill setting');
+      }
       else { Kit.toast('Couldn’t change ' + S.nameOf(provider) + '’s setting for ' + row.name, { tone: 'danger', detail: response.error }); await loadProvider(provider, true); }
       if (focusedKey && (document.activeElement === document.body || document.activeElement?.classList.contains('tc-skill-inspector'))) document.querySelector('[data-key="' + CSS.escape(focusedKey) + '"]')?.focus({ preventScroll: true });
     };
     const policyMenu = (id, provider, trigger) => {
       const row = inventories[provider]?.skills.find(row => row.id === id);
       if (!row?.canSetState || changing.has(provider)) return;
-      const explanations = { on: 'Claude sees its name and description. You can run /' + row.name + '.', 'name-only': 'Claude sees its name without the description, which saves context.', 'user-invocable-only': 'Hidden from Claude. You can still run /' + row.name + '.', off: 'Hidden from Claude and from the / menu.', allow: 'The agent can use this skill.', ask: 'The agent asks before using this skill.', deny: 'The agent cannot use this skill.' };
-      Kit.menu(trigger, { label: S.nameOf(provider) + ' skill setting', head: { title: S.nameOf(provider) + ' · ' + (provider === 'claude' ? 'visibility' : 'permission') },
+      const explanations = provider === 'claude'
+        ? { on: 'Claude sees its name and description. You can run /' + row.name + '.', 'name-only': 'Claude sees its name without the description, which saves context.', 'user-invocable-only': 'Hidden from Claude. You can still run /' + row.name + '.', off: 'Hidden from Claude and from the / menu.' }
+        : { on: 'Available for the agent to discover and use.', enabled: 'Available for the agent to discover and use.', 'user-invocable-only': 'Available when you invoke it explicitly.', off: 'Excluded by your saved skill settings.', disabled: 'Excluded by your saved skill settings.', allow: 'The agent can use this skill.', ask: 'The agent asks before using this skill.', deny: 'The agent cannot use this skill.' };
+      Kit.menu(trigger, { label: S.nameOf(provider) + ' skill setting', head: { title: S.nameOf(provider) + ' · ' + (provider === 'claude' ? 'visibility' : provider === 'opencode' ? 'permission' : 'availability') },
         items: row.stateOptions.map(option => ({ label: option.label, description: explanations[option.value], radio: true, checked: option.value === row.state, run: () => setState(id, provider, option.value) })),
-        footer: html`${row.statePath ? html`Saved in <code>${S.displayPath(row.statePath, library().home)}</code>. ` : ''}Applies to new sessions.${provider === 'opencode' && row.effectiveStateText ? html`<br>${row.effectiveStateText}` : ''}` });
+        footer: html`${row.statePath ? html`Saved in <code>${S.displayPath(row.statePath, library().home)}</code>. ` : ''}Applies to new sessions.${row.effectiveStateText ? html`<br>${row.effectiveStateText}` : ''}` });
     };
     const findRow = key => displayRows().find(row => row.key === key) || rows.find(row => row.key === key);
     const expandKeys = keys => {

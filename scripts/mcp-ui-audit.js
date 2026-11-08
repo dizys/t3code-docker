@@ -80,10 +80,10 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
         assert.equal(await columnButton.evaluate(element => element === document.activeElement), true, 'Column menu restores keyboard focus');
         await columnButton.click();
         await target.getByRole('menuitemradio', { name: /^All agents/ }).click();
-        await target.waitForFunction(() => document.querySelectorAll('.tc-mcp-table [role="columnheader"]').length === 8);
+        await target.waitForFunction(() => document.querySelectorAll('.tc-mcp-table [role="columnheader"]').length === 9);
         assert.equal(await columnButton.innerText(), 'All agents');
-        assert.equal(await target.locator('.tc-mcp-table .tc-mx-agent[data-uninstalled]').count(), 2);
-        assert.equal(await target.locator('.tc-mcp-table .tc-mx-agent').filter({ hasText: 'Not managed here' }).count(), 2);
+        assert.equal(await target.locator('.tc-mcp-table .tc-mx-agent[data-uninstalled]').count(), 3);
+        assert.equal(await target.locator('.tc-mcp-table .tc-mx-agent').filter({ hasText: 'Not managed here' }).count(), 0);
         const measureColumns = () => target.locator('.tc-mcp-table .tc-mx').evaluate(table => {
           const right = table.getBoundingClientRect().right;
           return {
@@ -106,7 +106,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
         const containment = await measureColumns();
         if (containment.overflow > 1) await screenshot('all-agent-columns-containment-failure');
         assert.ok(containment.overflow <= 1, `${variant} ${theme}: expanded columns fit their table background: ${JSON.stringify(containment)}`);
-        assert.ok(containment.rows.every(row => row.cells === 8 && Math.abs(row.right - containment.right) < 1 && Math.abs(row.right - row.last - 8) < 1), `${variant} ${theme}: every header and row uses eight columns with the same end inset: ${JSON.stringify(containment)}`);
+        assert.ok(containment.rows.every(row => row.cells === 9 && Math.abs(row.right - containment.right) < 1 && Math.abs(row.right - row.last - 8) < 1), `${variant} ${theme}: every header and row uses eight columns with the same end inset: ${JSON.stringify(containment)}`);
         const sticky = await target.locator('.tc-mcp-table .tc-mx-scroll').evaluate(scroll => {
           scroll.scrollLeft = scroll.scrollWidth - scroll.clientWidth;
           const left = scroll.getBoundingClientRect().left, header = scroll.querySelector('.tc-mx-head'), label = scroll.querySelector('.tc-mx-head-label'), group = scroll.querySelector('.tc-mx-group').getBoundingClientRect();
@@ -232,21 +232,21 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
       await screenshot('add-snippet');
       const beforeCreates = calls.filter(c => c.route === 'create').length;
       createGate = deferred();
-      await target.getByRole('button', { name: 'Add to 4 agents', exact: true }).click();
+      await target.getByRole('button', { name: 'Add to 5 agents', exact: true }).click();
       await target.getByRole('button', { name: 'Adding', exact: true }).waitFor();
       assert.equal(await target.getByRole('button', { name: 'Cancel', exact: true }).isEnabled(), false);
       await page.keyboard.press('Control+Enter'); await page.keyboard.press('Control+Enter');
       createGate.resolve(); createGate = null;
       await target.locator('.tc-mcp-editor').waitFor({ state: 'detached' });
       assert.equal(calls.filter(c => c.route === 'create').length, beforeCreates + 1);
-      assert.deepEqual(calls.filter(c => c.route === 'link' && c.name === 'issues').map(c => c.provider).sort(), ['claude', 'codex', 'cursor', 'opencode']);
+      assert.deepEqual(calls.filter(c => c.route === 'link' && c.name === 'issues').map(c => c.provider).sort(), ['claude', 'codex', 'cursor', 'grok', 'opencode']);
 
       await target.locator(phone ? '.tc-sk-phone-list [data-cmd="mcp.share"][data-id="github"]' : '.tc-mx [data-cmd="mcp.share"][data-id="github"]').first().click();
       await target.locator('[data-mcp-consent="opencode"]').waitFor();
-      assert.equal(await target.getByRole('button', { name: 'Share and use in 4 agents', exact: true }).isEnabled(), false);
+      assert.equal(await target.getByRole('button', { name: 'Share and use in 5 agents', exact: true }).isEnabled(), false);
       await target.locator('[data-mcp-consent="opencode"]').check();
       await screenshot('share-consent');
-      await target.getByRole('button', { name: 'Share and use in 4 agents', exact: true }).click();
+      await target.getByRole('button', { name: 'Share and use in 5 agents', exact: true }).click();
       await target.locator('.tc-mcp-editor').waitFor({ state: 'detached' });
       assert.equal(mcp.status().ownGroups.some(g => g.name === 'github'), false);
       assert.equal(mcp.status().shared.servers.some(s => s.name === 'github'), true);
@@ -315,10 +315,30 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
         await target.locator('[data-cmd="mcp.columns"]').click();
         await target.getByRole('menuitemradio', { name: /^All agents/ }).click();
         assert.equal(await target.locator('.tc-mcp-table .tc-cellwrap button').count(), 0, 'Zero installed agents cannot mutate native settings');
-        await reload(['claude', 'codex', 'opencode', 'cursor', 'grok', 'muse', 'antigravity']);
+        await reload(['claude', 'codex', 'opencode', 'cursor', 'grok', 'muse', 'antigravity', 'pi']);
         assert.equal(await target.locator('[data-cmd="mcp.columns"]').count(), 0, 'No redundant choice when all agents are installed');
-        assert.equal(await target.locator('[data-key="mcp-shared:issues-muse"] button').count(), 0, 'Installing an unsupported agent does not enable management');
+        for (const id of ['muse', 'antigravity', 'pi']) assert.equal(await target.locator(`[data-key="mcp-shared:issues-${id}"] button`).count(), 1, `${id} has a native management control when installed`);
       }
+      unreadableStore = false;
+      installedOverride = ['claude', 'codex', 'opencode', 'cursor', 'grok', 'muse', 'antigravity', 'pi'];
+      await target.evaluate(() => location.reload());
+      await target.locator('#mcp-search').waitFor();
+      await openServer('issues');
+      for (const provider of ['grok', 'muse', 'antigravity', 'pi']) {
+        const policy = target.locator('[data-mcp-policy="' + provider + '"]');
+        if (!await policy.count()) await target.locator('[data-mcp-inspect="add"][data-provider="' + provider + '"]').click();
+        await policy.waitFor();
+        for (const state of ['off', 'on']) {
+          await policy.selectOption(state);
+          await target.waitForFunction(([provider, state]) => document.querySelector('[data-mcp-policy="' + provider + '"]')?.value === state, [provider, state]);
+          const call = calls.findLast(call => call.route === 'link');
+          assert.equal(call.provider, provider); assert.equal(call.name, 'issues');
+          assert.equal(call.linked, true); assert.equal(call.enabled, state === 'on');
+          assert(call.sharedRevision && call.providerRevision, 'native copies include both revisions');
+        }
+      }
+      await screenshot('all-agent-native-controls');
+      await closeInspector();
       await noOverflow(); assert.deepEqual(errors, [], 'No browser exceptions');
       console.log(`${variant} ${theme}: matrix, secrets, per-agent off, draft/poll guards, snippet, consent, partial removal, failed/late reads passed`);
 

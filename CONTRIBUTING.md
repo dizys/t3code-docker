@@ -78,7 +78,7 @@ Issues and pull requests are welcome. Before opening one:
   API. It never connects to production or executes source files. Reload reads the
   current console assets; restart resets fixture mutations. This is a review
   server, not a deployment mode. `--scenarios skills --skill-overlays` adds the
-  seven-provider library, policy menu, inspector and all three import steps to
+  eight-provider library, policy menu, inspector and all three import steps to
   `console-screens.js`. Fixtures use synthetic instruction text and paths.
   `node scripts/skills-ui-audit.js http://127.0.0.1:23785/__setup/ dev` exercises
   desktop, phone, tablet and embedded flows in both themes, including settings
@@ -148,7 +148,13 @@ Issues and pull requests are welcome. Before opening one:
 
 For shared MCP changes, run `node scripts/mcp-native-smoke.mjs PROVIDER
 /absolute/path/to/executable` for Claude, Codex, OpenCode (both V1 and V2) and
-Cursor. It uses disposable homes and fixture servers without model requests.
+Cursor, Grok, Muse and Pi. It uses disposable homes and fixture servers without
+external model requests. Muse runs its local echo provider. Also run
+`node scripts/agent-resources-native-smoke.mjs PROVIDER /absolute/executable`
+for Grok, Muse and Pi to verify instruction/skill loading and native skill
+settings. Antigravity's private-profile normalization and Cursor's instruction
+workspace are covered by `tests/agent-resources-patch.test.mjs`; changes must
+also build against the current Stable and Nightly source anchors.
 `node scripts/mcp-ui-audit.js` checks the MCP page’s matrix, per-agent Off/On,
 that the agent list can be reached at every size, snippet import, masked values, edit/update, sharing consent, partial removal,
 revision conflicts and failed/late reads in both themes at phone, desktop

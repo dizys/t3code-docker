@@ -494,16 +494,16 @@
       "description": "Draft release notes from the pull requests merged since the last tag, grouped by area, in the project’s changelog style.",
       "source": "Provider",
       "scope": "user",
-      "state": "unknown",
+      "state": "enabled",
       "native": false,
       "bytes": 3527,
       "error": null,
       "metadataError": null,
-      "canToggle": false,
+      "canToggle": true,
       "canSetState": false,
       "stateOptions": [],
       "stateRevision": "fixture-state-cursor",
-      "stateAuthority": "files",
+      "stateAuthority": "placement",
       "statePath": null,
       "effectiveStateText": null,
       "stateReadOnlyReason": null,
@@ -541,7 +541,7 @@
       "scope": "user"
     }
   ],
-  "coverage": "files",
+  "coverage": "placement",
   "warnings": [],
   "nativeError": null,
   "scannedAt": 1792575000000

@@ -58,7 +58,7 @@ test("a tracked shared installation updates in place without creating an agent c
   await fs.mkdir(path.dirname(target), { recursive: true }); await fs.rename(path.dirname(initial.path), target); f.change();
   const view = await review(f);
   assert.equal(view.target.directory, target);
-  assert.deepEqual([...view.target.readers].sort(), ["codex", "cursor", "grok", "muse", "opencode"]);
+  assert.deepEqual([...view.target.readers].sort(), ["codex", "cursor", "grok", "muse", "opencode", "pi"]);
   await commit(f, view);
   assert.match(await fs.readFile(path.join(target, "SKILL.md"), "utf8"), /Updated instructions/);
   await assert.rejects(fs.stat(path.dirname(initial.path)), { code: "ENOENT" });
@@ -197,8 +197,8 @@ test("publication failures restore the entire previous installation", async t =>
   assert.equal(await fs.readFile(path.join(path.dirname(initial.path), ORIGIN_FILE), "utf8"), origin);
 });
 
-test("reviewed updates work for all seven managed global skill folders", async t => {
-  for (const provider of ["claude", "codex", "opencode", "cursor", "grok", "muse", "antigravity"]) {
+test("reviewed updates work for all eight managed global skill folders", async t => {
+  for (const provider of ["claude", "codex", "opencode", "cursor", "grok", "muse", "antigravity", "pi"]) {
     const f = await fixture(t, provider), initial = await f.row(); f.change();
     const view = await review(f); assert.equal(view.target.provider, provider);
     assert(view.target.readers.includes(provider));

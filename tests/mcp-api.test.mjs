@@ -62,14 +62,14 @@ test("shared MCP API creates, links and removes servers without leaking secrets"
   assert.equal(status.context.mcp.shared.count, 1);
   assert.equal(JSON.stringify(status).includes('"secret"'), false);
   assert.deepEqual(status.context.mcp.providers.find((row) => row.provider === "codex").linked, []);
-  assert.match(status.context.mcp.providers.find((row) => row.provider === "grok").error, /not implemented/);
+  assert.equal(status.context.mcp.providers.find((row) => row.provider === "grok").supported, true);
 
   const read = await (await get("/context/mcp/read?name=playwright")).json();
   assert.equal(read.server.env.TOKEN, "secret");
   assert.equal((await get("/context/mcp/read")).status, 400);
   assert.equal((await get("/context/mcp/read?name=missing")).status, 404);
   assert.equal((await get("/context/mcp?provider=nope")).status, 400);
-  assert.equal((await get("/context/mcp?provider=grok")).status, 403);
+  assert.equal((await get("/context/mcp?provider=grok")).status, 200);
 
   const providerRevision = (provider) => get('/context/mcp?provider=' + provider).then(r => r.json()).then(r => r.revision);
   const link = await post("/context/mcp/link", { provider: "codex", name: "playwright", linked: true, sharedRevision: created.revision, providerRevision: await providerRevision('codex') });
@@ -81,7 +81,7 @@ test("shared MCP API creates, links and removes servers without leaking secrets"
   assert.equal((await post("/context/mcp/link", { provider: "codex", name: "playwright", linked: false, sharedRevision: created.revision })).status, 400);
   const unlink = await post("/context/mcp/link", { provider: "claude", name: "playwright", linked: false, sharedRevision: created.revision, providerRevision: await providerRevision('claude') });
   assert.equal(unlink.status, 200);
-  assert.equal((await post("/context/mcp/link", { provider: "grok", name: "playwright", linked: true, sharedRevision: created.revision, providerRevision: 'unused' })).status, 403);
+  assert.equal((await post("/context/mcp/link", { provider: "grok", name: "playwright", linked: true, sharedRevision: created.revision, providerRevision: 'unused' })).status, 409);
 
   const saved = await post("/context/mcp/save", { name: "playwright", revision: "stale", server: { name: "playwright", type: "local", command: ["other"], env: {} } });
   assert.equal(saved.status, 409);

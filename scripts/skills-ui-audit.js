@@ -137,15 +137,15 @@ const checkSelect = async (page, select, theme) => {
         assert(await columnButton.evaluate(el=>el===document.activeElement),'column menu returns keyboard focus');
         await columnButton.click();
         await target.getByRole('menuitemradio',{name:/All agents/}).click();
-        await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent').length === 7);
-        assert.equal(await target.locator('.tc-mx-agent[data-uninstalled]').count(), 2);
+        await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent').length === 8);
+        assert.equal(await target.locator('.tc-mx-agent[data-uninstalled]').count(), 3);
         await target.waitForFunction(() => { const table=document.querySelector('.tc-mx'); return table.scrollWidth <= table.clientWidth + 1 && ![...table.querySelectorAll('.tc-mx-agent-kind')].some(el=>el.textContent.includes('Reading')); });
         const containment = await target.locator('.tc-mx').evaluate(table => {
           const right = table.getBoundingClientRect().right;
           return {overflow:table.scrollWidth-table.clientWidth,rows:[...table.querySelectorAll('.tc-mx-head,.tc-mx-row')].map(row=>({right:row.getBoundingClientRect().right,cells:row.querySelectorAll(':scope > [role=cell],:scope > [role=columnheader]').length,last:row.lastElementChild.getBoundingClientRect().right})),right};
         });
         assert(containment.overflow<=1,'expanded agent columns stay within the table background: '+containment.overflow+'px overflow');
-        assert(containment.rows.every(row=>row.cells===8&&Math.abs(row.right-containment.right)<1&&Math.abs(row.right-row.last-8)<1),'headers and every data row share the same eight columns and end inset');
+        assert(containment.rows.every(row=>row.cells===9&&Math.abs(row.right-containment.right)<1&&Math.abs(row.right-row.last-8)<1),'headers and every data row share the same nine columns and end inset');
         assert.equal(await target.locator('.tc-mx-row > .tc-mx-actions').count(),0,'row actions do not reserve an anonymous trailing column');
         const sticky = await target.locator('.tc-mx-scroll').evaluate(scroll => {
           scroll.scrollLeft=scroll.scrollWidth-scroll.clientWidth;
@@ -165,6 +165,12 @@ const checkSelect = async (page, select, theme) => {
         await target.getByRole('menuitemradio',{name:/Installed agents/}).click();
         await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent').length === 5);
       };
+      if (process.env.T3_SKILLS_UI_RESOURCES_ONLY === '1') {
+        await checkNativeResources();
+        assert.deepEqual(errors, []);
+        console.log(`${theme} ${width}${embedded ? ' embedded' : ''}: native availability and placement passed`);
+        return;
+      }
       if (process.env.T3_SKILLS_UI_UNIFIED_ONLY === '1') {
         await checkUnifiedLocations();
         assert.deepEqual(errors, []);
@@ -539,7 +545,7 @@ const checkSelect = async (page, select, theme) => {
       const showAllAgents = target.getByRole('menuitemradio', { name: /All agents/ });
       await showAllAgents.waitFor({ state: 'visible' });
       await showAllAgents.click({ force: true });
-      await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent[data-uninstalled]').length === 2);
+      await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent[data-uninstalled]').length === 3);
       assert.equal(await target.locator('.tc-sk-provider-notice').filter({ hasText: 'isn’t detected' }).count(), 0);
       await shot('undetected-agent');
       await openSource();
@@ -579,10 +585,11 @@ const checkSelect = async (page, select, theme) => {
         assert(await visible(target, '.tc-sk-phone-row').count() > 0, 'phones keep the grouped list');
       }
       await checkUnifiedLocations();
+      await checkNativeResources();
       await navigate('instructions');
       await target.locator('.tc-doc-preview .tc-code').waitFor();
-      assert.equal(await target.locator('.tc-reads-row').count(), 3);
-      assert.equal(await target.locator('.tc-reads-row .tc-seg button').count(), 9);
+      assert.equal(await target.locator('.tc-reads-row').count(), 8);
+      assert.equal(await target.locator('.tc-reads-row .tc-seg button').count(), 24);
       assert.equal(await target.locator('.tc-doc-preview script').count(), 0);
       await shot('instructions');
       const overflow = await target.evaluate(() => document.documentElement.scrollWidth > innerWidth);
@@ -664,6 +671,84 @@ const checkSelect = async (page, select, theme) => {
         await target.locator('#skill-search').fill('');
         const overflow = await target.evaluate(() => document.documentElement.scrollWidth > innerWidth);
         assert.equal(overflow, false, 'the page never scrolls sideways');
+      }
+      async function checkNativeResources() {
+        for (const agent of status.harnesses) agent.installed = true;
+        await target.evaluate(() => {
+          localStorage.setItem('t3-console-skill-unified', 'false');
+          localStorage.setItem('t3-console-skill-view', 'table');
+          location.hash = 'instructions/skills';
+          location.reload();
+        });
+        await target.waitForFunction(() => document.querySelectorAll('.tc-mx-agent').length === 8
+          && ![...document.querySelectorAll('.tc-mx-agent-kind')].some(el => el.textContent.includes('Reading')));
+        const openInstallation = async entry => {
+          await visible(target, 'button[data-cmd="skills.view"][data-id="' + (entry.resolvedPath || entry.path) + '"]').click();
+          await target.locator('.tc-skill-inspector #skill-content').waitFor();
+          await target.waitForFunction(() => document.querySelector('.tc-skill-inspector .tc-insp-body')?.getAttribute('aria-busy') === 'false');
+        };
+        for (const provider of ['grok', 'muse', 'pi']) {
+          const entry = api.inventories[provider].skills.find(row => row.canSetState);
+          await openInstallation(entry);
+          const select = target.locator('[data-skill-policy][data-skill-provider="' + provider + '"]');
+          for (const state of provider === 'muse' ? ['off', 'user-invocable-only', 'on'] : ['disabled', 'enabled']) {
+            await select.selectOption(state);
+            await target.waitForFunction(([provider, state]) => document.querySelector('[data-skill-policy][data-skill-provider="' + provider + '"]')?.value === state, [provider, state]);
+            const saved = writes.findLast(write => write.path.endsWith('/state'));
+            assert.equal(saved.input.provider, provider); assert.equal(saved.input.id, entry.id); assert.equal(saved.input.state, state);
+            assert(saved.input.stateRevision, 'native availability includes its optimistic revision');
+          }
+          await checkSelect(page, select, theme);
+          await shot('native-policy-' + provider);
+          await close();
+          if (width >= (TAB ? 640 : 1024)) {
+            await target.locator('[data-cmd="skills.policy"][data-provider="' + provider + '"][data-id="' + entry.id + '"]').click();
+            const menu = target.getByRole('menu');
+            assert.match(await menu.innerText(), /availability/);
+            assert.doesNotMatch(await menu.innerText(), /Claude/);
+            assert.match(await menu.innerText(), /Saved in/);
+            await page.keyboard.press('Escape');
+          }
+        }
+        for (const provider of ['cursor', 'antigravity']) {
+          const entry = api.inventories[provider].skills.find(row => row.stateAuthority === 'placement' && row.canToggle);
+          const originalId = entry.id, originalPath = entry.path;
+          await openInstallation(entry);
+          await target.locator('[data-inspect-edit]').click();
+          const content = target.locator('#skill-content'), draft = '---\nname: ' + entry.name + '\ndescription: A preserved draft\n---\nKeep this draft while moving.';
+          await content.fill(draft);
+          const toggle = target.locator('.tc-skill-inspector [data-cmd="skills.state"][data-provider="' + provider + '"]');
+          await toggle.click();
+          await target.waitForFunction(provider => document.querySelector('.tc-skill-inspector [data-cmd="skills.state"][data-provider="' + provider + '"]')?.getAttribute('aria-checked') === 'false'
+            && document.querySelector('#skill-content')?.readOnly, provider);
+          assert.notEqual(entry.id, originalId); assert.notEqual(entry.path, originalPath);
+          assert.match(await target.locator('.tc-pathlist').innerText(), /skills\.t3-disabled/);
+          assert.equal(await content.inputValue(), draft, 'parking preserves the draft');
+          assert(await target.locator('[data-inspect-save]').isDisabled(), 'parked files cannot be saved');
+          await shot('parked-' + provider);
+          await toggle.click();
+          await target.waitForFunction(provider => document.querySelector('.tc-skill-inspector [data-cmd="skills.state"][data-provider="' + provider + '"]')?.getAttribute('aria-checked') === 'true'
+            && document.querySelector('#skill-content')?.readOnly === false
+            && document.querySelector('[data-inspect-save]')?.disabled === false, provider);
+          assert.equal(entry.path, originalPath);
+          assert.doesNotMatch(await target.locator('.tc-pathlist').innerText(), /skills\.t3-disabled/);
+          assert.equal(await content.inputValue(), draft, 'restoring preserves the draft');
+          await target.locator('[data-inspect-save]').click();
+          await target.locator('.tc-skill-inspector').waitFor({ state: 'hidden' });
+          const saved = writes.findLast(write => write.path.endsWith('/save'));
+          assert.equal(saved.input.provider, provider); assert.equal(saved.input.id, entry.id);
+          assert.equal(saved.input.revision, entry.revision, 'saving uses the restored installation’s fresh revision');
+          assert.equal(saved.input.content, draft);
+          await openInstallation(entry);
+          await toggle.click();
+          await target.waitForFunction(provider => document.querySelector('.tc-skill-inspector [data-cmd="skills.state"][data-provider="' + provider + '"]')?.getAttribute('aria-checked') === 'false'
+            && document.querySelector('.tc-skill-inspector .tc-insp-body')?.getAttribute('aria-busy') === 'false', provider);
+          assert.equal(await target.locator('[data-inspect-edit], [data-inspect-remove]').count(), 0, 'parked installations are read-only');
+          await toggle.click();
+          await target.locator('[data-inspect-edit]').waitFor();
+          await close();
+        }
+        assert.equal(await target.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'new availability controls fit the page');
       }
     }, { name: 'Skills', output });
   } finally { await browser.close(); }

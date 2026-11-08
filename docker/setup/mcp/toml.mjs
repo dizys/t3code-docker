@@ -3,7 +3,7 @@
 import { parse, patch, stringify, TomlDocument } from "../vendor/toml-patch.mjs";
 import { isDeepStrictEqual } from "node:util";
 
-const problem = () => Object.assign(new Error("Codex config.toml cannot be safely edited. Check its TOML syntax before changing MCP servers."), { code: "unsupported" });
+const problem = () => Object.assign(new Error("The native config.toml cannot be safely edited. Check its TOML syntax before changing MCP servers."), { code: "unsupported" });
 const object = (v) => v && typeof v === "object" && !Array.isArray(v);
 const plain = (v) => Array.isArray(v) ? v.map(plain)
   : v && Object.getPrototypeOf(v) === null ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plain(x)])) : v;

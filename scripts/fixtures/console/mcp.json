@@ -13,30 +13,204 @@
     ]
   },
   "providers": [
-    { "provider": "claude", "supported": true, "path": "/home/t3/.claude.json", "revision": "claude-fixture",
-      "linked": ["playwright"], "diverged": ["docs"], "unlinked": ["database"], "disabled": [],
-      "own": [ { "name": "github", "type": "local", "command": ["github-mcp-server", "stdio"], "envKeys": ["GITHUB_PERSONAL_ACCESS_TOKEN"], "headerKeys": [], "recognized": true, "extra": [] } ],
-      "ownCount": 1, "error": null, "warning": null },
-    { "provider": "codex", "supported": true, "path": "/home/t3/.codex/config.toml", "revision": "codex-fixture",
-      "linked": ["playwright", "docs", "database"], "diverged": [], "unlinked": [], "disabled": ["database"],
-      "own": [], "ownCount": 0, "error": null, "warning": null },
-    { "provider": "opencode", "supported": true, "path": "/home/t3/.config/opencode/opencode.jsonc", "revision": "opencode-fixture",
-      "linked": ["docs"], "diverged": [], "unlinked": ["playwright", "database"], "disabled": [],
-      "own": [
-        { "name": "github", "type": "local", "command": ["docker", "run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"], "envKeys": ["GITHUB_PERSONAL_ACCESS_TOKEN"], "headerKeys": [], "recognized": true, "extra": [] },
-        { "name": "filesystem", "type": "local", "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/workspace"], "envKeys": [], "headerKeys": [], "recognized": true, "extra": [] }
+    {
+      "provider": "claude",
+      "supported": true,
+      "path": "/home/t3/.claude.json",
+      "revision": "claude-fixture",
+      "linked": [
+        "playwright"
       ],
-      "ownCount": 2, "error": null, "warning": null },
-    { "provider": "cursor", "supported": true, "path": "/home/t3/.cursor/mcp.json", "revision": "cursor-fixture",
-      "linked": [], "diverged": [], "unlinked": ["playwright", "docs", "database"], "disabled": [],
-      "own": [], "ownCount": 0, "error": null, "warning": null },
-    { "provider": "grok", "supported": false, "imports": ["claude", "cursor"],
-      "error": "Grok MCP management is not implemented. Grok may inherit Claude and Cursor servers through compatibility imports.",
-      "linked": [], "diverged": [], "unlinked": [], "disabled": [], "own": [], "ownCount": 0 },
-    { "provider": "muse", "supported": false, "error": "Muse MCP management is not implemented yet.",
-      "linked": [], "diverged": [], "unlinked": [], "disabled": [], "own": [], "ownCount": 0 },
-    { "provider": "antigravity", "supported": false, "error": "Antigravity uses isolated T3 profiles; shared MCP settings are not integrated yet.",
-      "linked": [], "diverged": [], "unlinked": [], "disabled": [], "own": [], "ownCount": 0 }
+      "diverged": [
+        "docs"
+      ],
+      "unlinked": [
+        "database"
+      ],
+      "disabled": [],
+      "own": [
+        {
+          "name": "github",
+          "type": "local",
+          "command": [
+            "github-mcp-server",
+            "stdio"
+          ],
+          "envKeys": [
+            "GITHUB_PERSONAL_ACCESS_TOKEN"
+          ],
+          "headerKeys": [],
+          "recognized": true,
+          "extra": []
+        }
+      ],
+      "ownCount": 1,
+      "error": null,
+      "warning": null
+    },
+    {
+      "provider": "codex",
+      "supported": true,
+      "path": "/home/t3/.codex/config.toml",
+      "revision": "codex-fixture",
+      "linked": [
+        "playwright",
+        "docs",
+        "database"
+      ],
+      "diverged": [],
+      "unlinked": [],
+      "disabled": [
+        "database"
+      ],
+      "own": [],
+      "ownCount": 0,
+      "error": null,
+      "warning": null
+    },
+    {
+      "provider": "opencode",
+      "supported": true,
+      "path": "/home/t3/.config/opencode/opencode.jsonc",
+      "revision": "opencode-fixture",
+      "linked": [
+        "docs"
+      ],
+      "diverged": [],
+      "unlinked": [
+        "playwright",
+        "database"
+      ],
+      "disabled": [],
+      "own": [
+        {
+          "name": "github",
+          "type": "local",
+          "command": [
+            "docker",
+            "run",
+            "-i",
+            "--rm",
+            "-e",
+            "GITHUB_PERSONAL_ACCESS_TOKEN",
+            "ghcr.io/github/github-mcp-server"
+          ],
+          "envKeys": [
+            "GITHUB_PERSONAL_ACCESS_TOKEN"
+          ],
+          "headerKeys": [],
+          "recognized": true,
+          "extra": []
+        },
+        {
+          "name": "filesystem",
+          "type": "local",
+          "command": [
+            "npx",
+            "-y",
+            "@modelcontextprotocol/server-filesystem",
+            "/workspace"
+          ],
+          "envKeys": [],
+          "headerKeys": [],
+          "recognized": true,
+          "extra": []
+        }
+      ],
+      "ownCount": 2,
+      "error": null,
+      "warning": null
+    },
+    {
+      "provider": "cursor",
+      "supported": true,
+      "path": "/home/t3/.cursor/mcp.json",
+      "revision": "cursor-fixture",
+      "linked": [],
+      "diverged": [],
+      "unlinked": [
+        "playwright",
+        "docs",
+        "database"
+      ],
+      "disabled": [],
+      "own": [],
+      "ownCount": 0,
+      "error": null,
+      "warning": null
+    },
+    {
+      "provider": "grok",
+      "supported": true,
+      "error": null,
+      "linked": [],
+      "diverged": [],
+      "unlinked": [
+        "playwright",
+        "docs",
+        "database"
+      ],
+      "disabled": [],
+      "own": [],
+      "ownCount": 0,
+      "path": "/home/t3/.grok/config.toml",
+      "revision": "grok-fixture",
+      "warning": null
+    },
+    {
+      "provider": "muse",
+      "supported": true,
+      "error": null,
+      "linked": [],
+      "diverged": [],
+      "unlinked": [
+        "playwright",
+        "docs",
+        "database"
+      ],
+      "disabled": [],
+      "own": [],
+      "ownCount": 0,
+      "path": "/home/t3/.config/muse/settings.json",
+      "revision": "muse-fixture",
+      "warning": null
+    },
+    {
+      "provider": "antigravity",
+      "supported": true,
+      "error": null,
+      "linked": [],
+      "diverged": [],
+      "unlinked": [
+        "playwright",
+        "docs",
+        "database"
+      ],
+      "disabled": [],
+      "own": [],
+      "ownCount": 0,
+      "path": "/home/t3/.gemini/config/mcp_config.json",
+      "revision": "antigravity-fixture",
+      "warning": null
+    },
+    {
+      "provider": "pi",
+      "supported": true,
+      "path": "/home/t3/.pi/agent/mcp.json",
+      "revision": "pi-fixture",
+      "linked": [],
+      "diverged": [],
+      "unlinked": [
+        "playwright",
+        "docs",
+        "database"
+      ],
+      "disabled": [],
+      "own": [],
+      "ownCount": 0,
+      "error": null,
+      "warning": null
+    }
   ],
   "ownGroups": [
     { "name": "github", "providers": ["claude", "opencode"], "identical": false },

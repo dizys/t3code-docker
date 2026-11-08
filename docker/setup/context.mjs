@@ -3,7 +3,7 @@
 // and links are preserved; existing files change only on an explicit save.
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { opencodeConfigRoot } from "./opencode-config.mjs";
+import { agentResourcePaths } from "./agent-resources.mjs";
 
 export function contextDirFor(baseDir) {
   return path.join(baseDir, "setup", "context");
@@ -13,19 +13,29 @@ export function agentsMdPathFor(baseDir) {
   return path.join(contextDirFor(baseDir), "AGENTS.md");
 }
 
-/** Native global instruction paths; other providers are deferred. */
+/** Cursor's dedicated rule workspace is loaded by the T3 SDK bridge. */
 export function agentsMdTargets(env = {}, home = "/home/t3") {
-  const claudeDir = String(env.CLAUDE_CONFIG_DIR ?? "").trim() || path.join(home, ".claude");
-  const codexHome = String(env.CODEX_HOME ?? "").trim() || path.join(home, ".codex");
-  // OpenCode reads its config dir through OPENCODE_CONFIG_DIR; the entrypoint
-  // points it at a real folder on the state volume, so instructions belong
-  // there rather than under a symlinked ~/.config/opencode.
-  const openCodeHome = opencodeConfigRoot(home, env);
-  return [
-    { provider: "claude", path: path.join(claudeDir, "CLAUDE.md") },
-    { provider: "codex", path: path.join(codexHome, "AGENTS.md") },
-    { provider: "opencode", path: path.join(openCodeHome, "AGENTS.md") },
-  ];
+  const roots = agentResourcePaths(home, env);
+  return Object.entries({
+    claude: "CLAUDE.md", codex: "AGENTS.md", opencode: "AGENTS.md",
+    cursor: "t3-instructions/AGENTS.md", grok: "rules/t3-instructions.md",
+    muse: "AGENTS.md", antigravity: "AGENTS.md", pi: "AGENTS.md",
+  }).map(([provider, name]) => ({ provider, path: path.join(roots[provider], name) }));
+}
+
+// Pi and Codex choose one context file by precedence. Edit the file they
+// actually load, preserving an existing override instead of shadowing it.
+async function instructionTargets(fs, env = {}, home = "/home/t3") {
+  return Promise.all(agentsMdTargets(env, home).map(async target => {
+    const names = target.provider === "pi" ? ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]
+      : target.provider === "codex" ? ["AGENTS.override.md", "AGENTS.md"] : null;
+    if (names) for (const name of names) {
+      const file = path.join(path.dirname(target.path), name);
+      try { await fs.lstat(file); return { ...target, path: file }; }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+    }
+    return target;
+  }));
 }
 
 const MAX_INSTRUCTION_BYTES = 64 * 1024;
@@ -154,7 +164,7 @@ export async function deleteAgentsMd(fs, baseDir, revision = null, { home = "/ho
     const canonical = path.resolve(file);
     await fs.rm(file, { force: true });
     let unlinked = 0;
-    for (const target of agentsMdTargets(env, home)) {
+    for (const target of await instructionTargets(fs, env, home)) {
       try {
         const stat = await fs.lstat(target.path);
         if (!stat.isSymbolicLink()) continue;
@@ -179,7 +189,7 @@ export async function reconcileAgentsMd(fs, baseDir, { home = "/home/t3", env = 
   const allowed = only ? new Set(only) : null;
   const linked = [];
   const skipped = [];
-  for (const target of agentsMdTargets(env, home)) {
+  for (const target of await instructionTargets(fs, env, home)) {
     if (allowed && !allowed.has(target.provider)) continue;
     try {
       try {
@@ -205,7 +215,7 @@ export async function reconcileAgentsMd(fs, baseDir, { home = "/home/t3", env = 
 
 /** Read a known provider's existing file, following its symlinks. */
 export async function readProviderAgentsMd(fs, provider, { home = "/home/t3", env = {} } = {}) {
-  const target = agentsMdTargets(env, home).find((entry) => entry.provider === provider);
+  const target = (await instructionTargets(fs, env, home)).find((entry) => entry.provider === provider);
   if (!target) return { ok: false, code: "invalid", error: "Unknown instruction provider" };
   let resolvedPath;
   try {
@@ -238,7 +248,7 @@ export async function writeProviderAgentsMd(fs, provider, content, revision, opt
 
 /** The native file itself records whether a provider uses shared or separate instructions. */
 export async function providerInstructionState(fs, baseDir, provider, options = {}) {
-  const target = agentsMdTargets(options.env, options.home).find((entry) => entry.provider === provider);
+  const target = (await instructionTargets(fs, options.env, options.home)).find((entry) => entry.provider === provider);
   if (!target) return { ok: false, code: "invalid", error: "Unknown instruction provider" };
   let entry;
   try { entry = await fs.lstat(target.path); }
@@ -333,7 +343,7 @@ export async function contextStatus(fs, { baseDir, home = "/home/t3", env = {} }
   const snapshotFs = { ...fs, [instructionReads]: new Map() };
   const read = await readAgentsMd(snapshotFs, baseDir);
   const providers = [];
-  for (const target of agentsMdTargets(env, home)) {
+  for (const target of await instructionTargets(fs, env, home)) {
     const state = await providerInstructionState(snapshotFs, baseDir, target.provider, { home, env });
     providers.push({ ...target, mode: state.mode, sourceRevision: state.sourceRevision, bytes: state.bytes, modifiedAt: state.modifiedAt, error: state.error ?? null });
   }

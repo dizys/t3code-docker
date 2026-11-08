@@ -54,7 +54,7 @@ test("global instruction API discovers existing files and changes them only on e
   assert.equal(save.status, 200);
   const result = await save.json();
   assert.equal(result.reconcile.skipped[0].provider, "codex");
-  assert.equal(result.reconcile.linked.length, 2);
+  assert.equal(result.reconcile.linked.length, 7);
   for (const target of [".claude/CLAUDE.md", ".config/opencode/AGENTS.md"]) assert.equal(await fs.readFile(path.join(home, target), "utf8"), "# Shared instructions\n");
   assert.equal(await fs.readFile(path.join(codex, "AGENTS.md"), "utf8"), "# User-owned Codex instructions");
   const status = await (await fetch(base + '/status', { headers: { 'x-t3-setup-key': 'fixture-key' } })).json();

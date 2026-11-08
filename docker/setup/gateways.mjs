@@ -629,8 +629,30 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     return { ok: true, ...await status() };
   });
 
+  // Native user MCP/skill saves must also reach gateway-owned Grok homes.
+  // Refresh behavior sections without touching keys or interrupting a turn.
+  const syncNativeResources = provider => serial(async () => {
+    if (provider !== 'grok') return;
+    const { gateways } = await store.read();
+    const connected = gateways.filter(gateway => gateway.agents.grok?.on);
+    if (!connected.length) return;
+    const state = await requireT3(), agent = AGENTS.find(agent => agent.id === 'grok');
+    const results = [];
+    for (const gateway of connected) {
+      try {
+        await writeAgentFiles(agent, gateway, undefined, { quiet: true, instances: state.instances });
+        results.push({ id: gateway.id, ok: true });
+      } catch {
+        results.push({ id: gateway.id, ok: false });
+      }
+    }
+    invalidate();
+    if (results.some(result => !result.ok)) throw new GatewayError('Native settings were saved, but a Grok gateway profile could not be updated. Use Apply on that gateway before starting a new session.', 409, 'partial');
+    return { updated: results.length };
+  });
+
   const actions = { '/gateways/test': test, '/gateways/create': create, '/gateways/save': save, '/gateways/agent': setAgent, '/gateways/limits': setLimits, '/gateways/limits/refresh': refreshLimits, '/gateways/apply': reapply, '/gateways/models': refreshModels, '/gateways/remove': remove, '/gateways/conflict': clearConflict };
-  return { status, summary, test, create, save, setAgent, setLimits, refreshLimits, reapply, refreshModels, remove, clearConflict,
+  return { status, summary, test, create, save, setAgent, setLimits, refreshLimits, reapply, refreshModels, remove, clearConflict, syncNativeResources,
     /** One entry point for the server. `route` is one of GATEWAY_ROUTES. */
     handle: (route, input) => route === '/gateways' ? status() : actions[route]?.(input) ?? Promise.reject(new GatewayError('Gateway action not found.', 404, 'not-found')) };
 }

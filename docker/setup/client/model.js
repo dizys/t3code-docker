@@ -2033,9 +2033,9 @@ const T3Model = (() => {
     return { present: Boolean(file.present), bytes: file.bytes || 0, error: file.error || null };
   };
 
-  const PROVIDER_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' };
+  const PROVIDER_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor', grok: 'Grok Build', muse: 'Muse Code', antigravity: 'Antigravity', pi: 'Pi' };
   // The file each agent reads on its own when it is not using the shared one.
-  const OWN_FILE = { claude: 'CLAUDE.md', codex: 'AGENTS.md', opencode: 'AGENTS.md' };
+  const OWN_FILE = { claude: 'CLAUDE.md', grok: 't3-instructions.md' };
 
   /** The shared AGENTS.md: how big it is, and which agents read it. */
   const contextAgentsMdRow = (status) => {
@@ -2078,7 +2078,7 @@ const T3Model = (() => {
       : providers.filter((file) => installed.has(file.provider) || file.mode || file.error);
     return list.map((file) => {
       const name = PROVIDER_NAMES[file.provider] || file.provider;
-      const own = OWN_FILE[file.provider] || 'AGENTS.md';
+      const own = file.path?.split('/').at(-1) || OWN_FILE[file.provider] || 'AGENTS.md';
       return {
         id: file.provider,
         key: 'agentsmd:' + file.provider,
@@ -2088,7 +2088,7 @@ const T3Model = (() => {
         status: file.error ? { dot: 'danger', text: file.error }
           : file.mode === 'shared' ? { text: 'Reads the shared AGENTS.md' }
             : file.mode === 'separate' ? { text: 'Reads its own ' + own }
-              : { text: 'Reads no global instructions' },
+              : { text: 'No managed global instructions' },
         // What the row says under its name, beside the choice that already
         // says what it reads: where its own file is, or why it reads nothing.
         note: file.error ? null : file.mode === 'separate' ? file.path || null

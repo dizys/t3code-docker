@@ -45,6 +45,7 @@ import { createGatewayT3 } from "./gateways/t3.mjs";
 import { createGatewayVault } from "./gateways/vault.mjs";
 import { createSessionStore, TERMINAL_STATES } from "./signin-sessions.mjs";
 import { clientAddress } from "./client-address.mjs";
+import { cookieValue, forwardedPrefix } from "./request-auth.mjs";
 import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
 import { createCredentialStore, credentialFailure, CredentialError, credentialDirectory } from "./credentials.mjs";
 import { createCredentialsService, CREDENTIAL_ROUTES } from "./credentials/service.mjs";
@@ -1793,13 +1794,7 @@ const send = (res, code, body, headers = {}) => {
 const sendJson = (res, code, value, headers = {}) =>
   send(res, code, JSON.stringify(value), { "content-type": "application/json", ...headers });
 
-const cookieFrom = (req) =>
-  Object.fromEntries(
-    (req.headers.cookie ?? "")
-      .split(";")
-      .map((part) => part.trim().split("="))
-      .filter((pair) => pair.length === 2),
-  )[COOKIE];
+const cookieFrom = (req) => cookieValue(req.headers.cookie, COOKIE);
 
 const readBody = async (req, maxBytes = 64 * 1024) => {
   const chunks = [];
@@ -2615,15 +2610,8 @@ const helloNav = () => {
  * looks like a password problem rather than a routing one. So infer it, and
  * keep T3_SETUP_BASE_PATH only as an override.
  */
-// A proxy that rewrites the path is supposed to say so. nginx, Traefik and
-// friends send X-Forwarded-Prefix; when the path itself no longer carries the
-// prefix, that header is the only thing left that knows it.
-const forwardedPrefix = (req) => {
-  const raw = req?.headers?.["x-forwarded-prefix"];
-  if (typeof raw !== "string") return "";
-  const trimmed = raw.trim().replace(/\/+$/, "");
-  return /^\/[\w\-./~]*$/.test(trimmed) ? trimmed : "";
-};
+// The prefix a path-rewriting proxy declares lives in request-auth.mjs,
+// with the cookie that carries the key.
 
 const resolve = (pathname) => {
   if (BASE_PATH && (pathname === BASE_PATH || pathname.startsWith(`${BASE_PATH}/`))) {
@@ -2647,13 +2635,16 @@ const server = createServer(async (req, res) => {
   const route = resolved.route;
   // The inferred mount wins when the prefix survived the hop; otherwise fall
   // back to what the proxy declared.
-  const mount = resolved.mount || forwardedPrefix(req);
+  const mount = resolved.mount || forwardedPrefix(req.headers);
   // The page sends a cookie; the in-container CLIs send a header. Same key,
   // same comparison - so `t3-expose` and the page are the same client as far
   // as this server is concerned, and neither can act on state the other cannot.
   // A browser signed in to T3 Code may come in on that session instead.
   const viewer = await viewerOf(req).catch(() => null);
   const authed = Boolean(viewer);
+  // A right key resets the guessing delay, however it arrived: the page sends
+  // a cookie, the in-container CLIs a header, and only /login cleared it.
+  if (viewer?.via === "key") failures.delete(ip);
   // Opened inside T3 Code's settings rather than on its own.
   const embed = raw.searchParams.get("embed") === "t3";
   const host = embed && raw.searchParams.get("host") === "tab" ? "tab" : undefined;

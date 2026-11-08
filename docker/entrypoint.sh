@@ -118,10 +118,11 @@ if [ "$(id -u)" -eq 0 ]; then
     gosu "$T3_USER" test -w "$dir" || need=1
   done
 
-  # Persist the intent before the first account or ownership change. `usermod`
-  # rewrites ownership inside the home itself, so a crash between it and the
-  # explicit traversal would otherwise leave a half-migrated tree that passes a
-  # later writability probe and is never repaired.
+  # Persist the intent before the first ownership change. The explicit
+  # traversal below is the only ownership rewrite: `usermod` runs with a
+  # home outside the volume (see the remap below), so nothing else walks
+  # the tree. A crash mid-traversal would otherwise leave a half-migrated
+  # tree that passes a later writability probe and is never repaired.
   if [ "$need" -eq 1 ] && [ "$pending" -eq 0 ]; then
     write_ownership_marker
     pending=1
@@ -134,17 +135,26 @@ if [ "$(id -u)" -eq 0 ]; then
     fi
     if [ "$PUID" != "$current_uid" ]; then
       log "remapping user ${T3_USER}: ${current_uid} -> ${PUID}"
-      usermod -o -u "$PUID" "$T3_USER"
+      # Point the account's home at an empty directory for the remap alone:
+      # usermod rechowns the home tree itself, dereferencing symlinks, so a
+      # link inside home would redirect root ownership changes at its
+      # target before the guarded traversal below ever runs. The account
+      # keeps its real home either side of this call.
+      mkdir -p /run/t3-remap-home
+      usermod -o -u "$PUID" -d /run/t3-remap-home "$T3_USER"
+      usermod -d "$T3_HOME" "$T3_USER"
     fi
   fi
 
   # A resumed migration traverses both trees: the previous attempt may have
   # stopped anywhere between them. A fresh one only walks what is not writable.
+  # --no-dereference (-P is already the default): symlinks planted inside the
+  # home tree must not redirect root ownership changes at their targets.
   for dir in "$T3_HOME" "$T3CODE_HOME"; do
     mkdir -p "$dir"
     if [ "$resumed" -eq 1 ] || [ "$remap" -eq 1 ] || ! gosu "$T3_USER" test -w "$dir"; then
       log "taking ownership of ${dir}"
-      chown -R "$PUID:$PGID" "$dir"
+      chown -R --no-dereference "$PUID:$PGID" "$dir"
     fi
   done
 
@@ -295,7 +305,7 @@ AGENT_FILES=".gitconfig .agents/.skill-lock.json .claude.json"
 
 persist_agent_credentials() {
   [ "$T3_PERSIST_AGENT_CREDENTIALS" = "1" ] || return 0
-  local store="${T3CODE_HOME}/agents" src dst rel
+  local store="${T3CODE_HOME}/agents" src dst rel moved
   mkdir -p "$store"
   for rel in $AGENT_DIRS $AGENT_FILES; do
     src="${T3_HOME}/${rel}"
@@ -309,13 +319,21 @@ persist_agent_credentials() {
       continue
     fi
     mkdir -p "$(dirname "$src")"
+    # Set to 0 when the copy onto the state volume failed: the original
+    # stays, unlinked, rather than being deleted or hidden behind a link
+    # to a half-copied tree. The next start retries the move.
+    moved=1
     case " $AGENT_FILES " in
       *" $rel "*)
         # Anything written before this existed comes along, as for a directory.
         if [ -f "$src" ]; then
-          cp -a "$src" "$dst"
-          rm -f "$src"
-          log "moved ${rel} onto the state volume"
+          if cp -a "$src" "$dst"; then
+            rm -f "$src"
+            log "moved ${rel} onto the state volume"
+          else
+            moved=0
+            log "WARNING: could not copy ${rel} onto the state volume; leaving the original in place"
+          fi
         fi
         # The skills CLI owns its JSON lock format. An absent lock stays absent;
         # its future write follows the link onto the volume without an empty or
@@ -331,14 +349,22 @@ persist_agent_credentials() {
         mkdir -p "$dst"
         if [ -d "$src" ]; then
           # Anything signed in before this existed comes along rather than being
-          # silently orphaned behind the new link.
-          cp -a "$src/." "$dst/" 2>/dev/null || true
-          rm -rf "$src"
-          log "moved ${rel} onto the state volume"
+          # silently orphaned behind the new link. The original stays if the
+          # copy fails: deleting it unconditionally would lose sign-ins on a
+          # full or failing volume.
+          if cp -a "$src/." "$dst/" 2>/dev/null; then
+            rm -rf "$src"
+            log "moved ${rel} onto the state volume"
+          else
+            moved=0
+            log "WARNING: could not copy ${rel} onto the state volume; leaving the original in place"
+          fi
         fi
         ;;
     esac
-    ln -sfn "$dst" "$src"
+    # Only link once the original is gone (or never existed): linking over
+    # a live directory would plant a stray link inside it instead.
+    [ "$moved" -eq 1 ] && ln -sfn "$dst" "$src"
   done
   ensure_opencode_config
 }

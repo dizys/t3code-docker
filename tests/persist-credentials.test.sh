@@ -75,6 +75,11 @@ printf '%s' 'Supporting reference' > "$T3_HOME/.agents/skills/local/references/g
 printf '%s' 'Unrelated agent data' > "$T3_HOME/.agents/unrelated"
 mkdir -p "$T3_HOME/.gemini/config/skills/review"
 printf '%s' 'Antigravity skill' > "$T3_HOME/.gemini/config/skills/review/SKILL.md"
+printf '%s' '# Antigravity global instructions' > "$T3_HOME/.gemini/config/AGENTS.md"
+printf '%s' '{"mcpServers":{"probe":{"command":"fixture"}}}' > "$T3_HOME/.gemini/config/mcp_config.json"
+mkdir -p "$T3_HOME/.gemini/config/skills.t3-disabled/parked"
+printf '%s' 'Parked Antigravity skill' > "$T3_HOME/.gemini/config/skills.t3-disabled/parked/SKILL.md"
+printf '%s' '# Native Gemini instructions' > "$T3_HOME/.gemini/GEMINI.md"
 printf '%s' 'Other Gemini data' > "$T3_HOME/.gemini/unrelated"
 mkdir -p "$T3_HOME/.gemini/antigravity-cli/skills/cli-check"
 printf '%s' 'Antigravity CLI skill' > "$T3_HOME/.gemini/antigravity-cli/skills/cli-check/SKILL.md"
@@ -89,6 +94,8 @@ persist_agent_credentials
 [ ! -e "$T3_HOME/.config/opencode" ] && ok "no home OpenCode symlink is created" || no "no home OpenCode symlink is created"
 [ -d "$OC_ROOT/skills" ] && [ ! -L "$OC_ROOT/skills" ] && [ -d "$OC_ROOT/agents" ] && [ ! -L "$OC_ROOT/agents" ] && ok "the state-volume OpenCode config stays real dirs" || no "the state-volume OpenCode config stays real dirs"
 [ -L "$T3_HOME/.gemini/config/skills" ] && ok "Antigravity skills become a scoped link" || no "Antigravity skills become a scoped link"
+[ -L "$T3_HOME/.gemini/config" ] && ok "Antigravity global resources become a persisted config link" || no "Antigravity global resources become a persisted config link"
+[ -L "$T3_HOME/.gemini/AGENTS.md" ] && [ ! -e "$T3_HOME/.gemini/AGENTS.md" ] && ok "absent optional instructions stay absent" || no "absent optional instructions stay absent"
 [ ! -L "$T3_HOME/.gemini" ] && [ -f "$T3_HOME/.gemini/unrelated" ] && ok "the rest of .gemini stays in place" || no "the rest of .gemini stays in place"
 [ ! -L "$T3_HOME/.agents" ] && [ -f "$T3_HOME/.agents/unrelated" ] && ok "the rest of .agents stays in place" || no "the rest of .agents stays in place"
 [ -L "$T3_HOME/.agents/.skill-lock.json" ] && [ ! -e "$T3_HOME/.agents/.skill-lock.json" ] && ok "an absent package lock is linked without inventing JSON" || no "an absent package lock is linked without inventing JSON"
@@ -126,6 +133,10 @@ is "OpenCode database sidecars survive a recreate" 'OpenCode pending journal' "$
 is "Claude global MCP config survives a recreate" '{"mcpServers":{"probe":{"command":"server"}}}' "$(cat "$T3_HOME/.claude.json")"
 is "Antigravity CLI skills survive a recreate" 'Antigravity CLI skill' "$(cat "$T3_HOME/.gemini/antigravity-cli/skills/cli-check/SKILL.md")"
 is "Antigravity skills survive a recreate" 'Antigravity skill' "$(cat "$T3_HOME/.gemini/config/skills/review/SKILL.md")"
+is "Antigravity instructions survive a recreate" '# Antigravity global instructions' "$(cat "$T3_HOME/.gemini/config/AGENTS.md")"
+is "Antigravity MCP survives a recreate" '{"mcpServers":{"probe":{"command":"fixture"}}}' "$(cat "$T3_HOME/.gemini/config/mcp_config.json")"
+is "parked skills survive a recreate" 'Parked Antigravity skill' "$(cat "$T3_HOME/.gemini/config/skills.t3-disabled/parked/SKILL.md")"
+is "standalone Gemini instructions survive a recreate" '# Native Gemini instructions' "$(cat "$T3_HOME/.gemini/GEMINI.md")"
 is "shared skills survive a recreate" 'Shared skill instructions' "$(cat "$T3_HOME/.agents/skills/local/SKILL.md")"
 is "shared supporting files survive a recreate" 'Supporting reference' "$(cat "$T3_HOME/.agents/skills/local/references/guide.md")"
 is "the package lock survives a recreate" '{"version":3,"skills":{"tracked":{"source":"owner/repo"}}}' "$(cat "$T3_HOME/.agents/.skill-lock.json")"
@@ -267,6 +278,21 @@ case "$entrypoint_text" in
   *'usermod -d "$T3_HOME" "$T3_USER"'*) ok "and the real home is restored after" ;;
   *) no "and the real home is restored after" ;;
 esac
+
+# Turned off: nothing moves.
+rm -rf "$T3_HOME" "$T3CODE_HOME"
+mkdir -p "$T3_HOME/.gemini/config" "$STORE/.gemini_config_skills/old"
+ln -s "$STORE/.gemini_config_skills" "$T3_HOME/.gemini/config/skills"
+printf '%s' 'Pre-upgrade skill' > "$STORE/.gemini_config_skills/old/SKILL.md"
+printf '%s' '# Added global instructions' > "$T3_HOME/.gemini/config/AGENTS.md"
+persist_agent_credentials
+is "the old scoped skill link keeps its target during migration" "$STORE/.gemini_config_skills" "$(readlink "$T3_HOME/.gemini/config/skills")"
+is "migrating the parent keeps old skill contents" 'Pre-upgrade skill' "$(cat "$T3_HOME/.gemini/config/skills/old/SKILL.md")"
+rm -rf "$T3_HOME"
+mkdir -p "$T3_HOME"
+persist_agent_credentials
+is "migrated instructions survive recreation" '# Added global instructions' "$(cat "$T3_HOME/.gemini/config/AGENTS.md")"
+is "migrated skills survive recreation" 'Pre-upgrade skill' "$(cat "$T3_HOME/.gemini/config/skills/old/SKILL.md")"
 
 # Turned off: nothing moves.
 rm -rf "$T3_HOME" "$T3CODE_HOME"

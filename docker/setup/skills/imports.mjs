@@ -1,5 +1,6 @@
 // Previewed source snapshots become local skills with repository provenance.
 import path from "node:path";
+import { adapterProviders } from "./adapters.mjs";
 import { randomBytes } from "node:crypto";
 import { resolveSkillSource } from "./sources.mjs";
 import { ORIGIN_FILE, skillFingerprint, readSkillOrigin } from "./origins.mjs";
@@ -91,7 +92,7 @@ export function createSkillImporter({ home, env, io, metadata, policyFor, invali
     const partial = snapshot.result?.results.some(entry => entry.status === "failed");
     if (snapshot.installing || snapshot.planning || (snapshot.result && !partial)) throw fail("conflict", "This preview has already been installed. Preview again to make another change.");
     if (!Array.isArray(names) || !names.length || names.length > 128 || new Set(names).size !== names.length || names.some((name) => !snapshot.skills.some((skill) => skill.name === name))) throw fail("invalid", "Choose skills from this preview.");
-    if (!Array.isArray(providers) || !providers.length || providers.length > 7 || new Set(providers).size !== providers.length) throw fail("invalid", "Choose at least one provider.");
+    if (!Array.isArray(providers) || !providers.length || providers.length > adapterProviders().length || new Set(providers).size !== providers.length) throw fail("invalid", "Choose at least one provider.");
     snapshot.planning = true;
     try {
       const destinations = [], physical = new Map();

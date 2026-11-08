@@ -5,10 +5,11 @@ const T3SkillModel = (() => {
     { id: 'claude', name: 'Claude Code', control: 'Visibility' },
     { id: 'codex', name: 'Codex', control: 'On or off' },
     { id: 'opencode', name: 'OpenCode', control: 'Permission' },
-    { id: 'cursor', name: 'Cursor', control: 'Not reported' },
-    { id: 'grok', name: 'Grok Build', control: 'Not reported' },
-    { id: 'muse', name: 'Muse Code', control: 'Not reported' },
-    { id: 'antigravity', name: 'Antigravity', control: 'Not reported' },
+    { id: 'cursor', name: 'Cursor', control: 'Placement' },
+    { id: 'grok', name: 'Grok Build', control: 'On or off' },
+    { id: 'muse', name: 'Muse Code', control: 'Visibility' },
+    { id: 'antigravity', name: 'Antigravity', control: 'Placement' },
+    { id: 'pi', name: 'Pi', control: 'On or off' },
   ]);
   const nameOf = id => providers.find(p => p.id === id)?.name || id;
   const pluginName = id => {

@@ -1,21 +1,12 @@
 // Shared MCP server store. Canonical JSON on the state volume; provider
 // files are only touched by explicit link/unlink saves.
 import path from "node:path";
+import { AGENT_NAMES } from "../agent-resources.mjs";
 import { createHash, randomBytes } from "node:crypto";
 
-export const MCP_PROVIDERS = Object.freeze({
-  claude: "Claude Code",
-  codex: "Codex",
-  opencode: "OpenCode",
-  cursor: "Cursor",
-});
+export const MCP_PROVIDERS = AGENT_NAMES;
 export const SUPPORTED_MCP_PROVIDERS = Object.freeze(Object.keys(MCP_PROVIDERS));
-// Keep native formats without a verified integration explicitly unavailable.
-export const UNSUPPORTED_MCP_PROVIDERS = Object.freeze({
-  antigravity: "Antigravity uses isolated T3 profiles; shared MCP settings are not integrated yet.",
-  grok: "Grok MCP management is not implemented. Grok may also load Claude and Cursor MCP settings through its native compatibility imports.",
-  muse: "Muse MCP management is not implemented yet.",
-});
+export const UNSUPPORTED_MCP_PROVIDERS = Object.freeze({});
 
 const MAX_STORE_BYTES = 256 * 1024;
 const MAX_SERVERS = 128;

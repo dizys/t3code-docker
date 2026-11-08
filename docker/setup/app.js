@@ -1738,7 +1738,7 @@
     const shared = M.contextView(state.status).present;
     const options = [
       ['shared', 'Shared', !shared && row.mode !== 'shared'],
-      ['separate', 'Own ' + row.ownFile, false],
+      ['separate', 'Own file', false],
       ['none', 'Nothing', false],
     ];
     return html`
@@ -1748,7 +1748,7 @@
         <div class="tc-row-title"><span class="tc-row-name">${row.name}</span>${badge(row.badge)}</div>
         ${row.error ? statusLine(row.status) : html`<span class="tc-reads-path">${row.mode === 'shared' ? icon('link') : ''}<code title="${row.path || ''}">${T3SkillModel.displayPath(row.path, state.status?.paths?.volume) || row.ownFile}</code>${row.mode === 'shared' ? html`<span>→ shared</span>` : ''}${row.mode === 'separate' && typeof row.bytes === 'number' ? html`<span>${M.formatBytes(row.bytes)}</span>` : ''}${row.mode === 'separate' ? html`<button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-cmd="context.provider.edit" data-id="${row.id}" aria-label="Edit ${row.name}’s ${row.ownFile}"${busy ? raw(' disabled') : ''}>Edit</button>` : ''}</span>`}
       </div>
-      <div class="tc-seg" role="group" aria-label="What ${row.name} reads">${options.map(([mode, label, off]) => html`<button type="button" data-key="instruction-mode-${row.id}-${mode}" data-cmd="context.provider.mode" data-id="${row.id}" data-mode="${mode}" aria-pressed="${String((row.mode || 'none') === mode)}"${busy || row.error || off ? raw(' disabled') : ''}${off ? raw(' title="Write the shared AGENTS.md first"') : ''}>${label}</button>`)}</div>
+      <div class="tc-seg" role="group" aria-label="What ${row.name} reads">${options.map(([mode, label, off]) => html`<button type="button" data-key="instruction-mode-${row.id}-${mode}" data-cmd="context.provider.mode" data-id="${row.id}" data-mode="${mode}" aria-pressed="${String((row.mode || 'none') === mode)}" aria-label="${mode === 'separate' ? 'Own ' + row.ownFile : label}" title="${off ? 'Write the shared AGENTS.md first' : mode === 'separate' ? 'Use ' + row.ownFile : label}"${busy || row.error || off ? raw(' disabled') : ''}>${label}</button>`)}</div>
     </div>`;
   };
 
@@ -1771,7 +1771,7 @@
           ${rows.length ? html`<div class="tc-list">${rows.map(contextProviderRow)}</div>`
             : html`<div class="tc-empty tc-empty--compact"><span class="tc-empty-desc">No agent that reads global instructions is installed.</span></div>`}
           <div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>Switching away from an own file keeps it as a backup next to it.</span></div>
-        </div><p class="tc-hint">Cursor, Grok Build, Muse Code and Antigravity global instructions aren’t managed here. A repository’s own AGENTS.md still applies on top of these.</p></section></div><p class="tc-hint tc-ins-session-note">Agents read instructions when a session starts. Start a new one after you save.</p>`;
+        </div><p class="tc-hint">All eight agents can use shared or separate instructions. Cursor loads this file through T3’s SDK integration. Other native rules and repository instructions still apply.</p></section></div><p class="tc-hint tc-ins-session-note">Agents read instructions when a session starts. Start a new one after you save.</p>`;
     return html`
       <header class="tc-instructions-phone-head"><a class="tc-btn tc-btn--ghost" href="#more">${icon('chevron-right', 'tc-back-icon')}Setup</a><h1>Instructions & skills</h1>${EMBED ? html`<button class="tc-btn tc-btn--ghost tc-btn--icon" type="button" data-cmd="embed.close" aria-label="Close setup">${icon('x')}</button>` : html`<a class="tc-btn tc-btn--ghost tc-btn--icon" href="${T3Routes.docUrl('context-management.md', s.image?.version)}" target="_blank" rel="noopener" aria-label="Instructions and skills guide">${icon('info')}</a>`}</header>
       ${pageHead('instructions')}
@@ -1800,8 +1800,9 @@
   const openContextEditor = async (trigger, provider = null) => {
     if (contextEditor.layer) return;
     Object.assign(contextEditor, { content: '', original: '', loading: true, saving: false, error: null, provider, revision: null, path: '', readError: false });
-    const providerName = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }[provider];
-    const filename = provider === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
+    const providerRow = provider ? M.contextProviderRows(state.status).find(row => row.id === provider) : null;
+    const providerName = providerRow?.name || provider;
+    const filename = providerRow?.ownFile || 'AGENTS.md';
     const title = provider ? providerName + '’s ' + filename : 'Shared AGENTS.md';
     const readers = M.contextAgentsMdRow(state.status).readers;
     const isDirty = () => !contextEditor.readError && contextEditor.content !== contextEditor.original;
@@ -4106,7 +4107,7 @@
       if (!view.present) return;
       const confirmed = await Kit.confirm({
         title: 'Delete the shared AGENTS.md?',
-        body: 'Agents set to read it read nothing until you write it again, or give them a file of their own.',
+        body: 'The shared file and its managed links are removed. Native fallback and project instructions can still apply. Backups are kept.',
         confirm: 'Delete',
       });
       if (!confirmed) return;
@@ -4142,17 +4143,19 @@
         }
         if (a.mode === 'none') {
           const confirmed = await Kit.confirm({
-            title: row.name + ': read no instructions?',
-            body: row.mode === 'separate'
+            title: row.name + ': remove these global instructions?',
+            body: (row.mode === 'separate'
               ? 'Its own ' + row.ownFile + ' is backed up, and comes back if you choose it again.'
-              : 'It stops reading the shared AGENTS.md. A file of its own backed up earlier is kept for later.',
-            confirm: 'Read nothing',
+              : 'It stops reading the shared AGENTS.md. A file of its own backed up earlier is kept for later.')
+              + (row.fallbackPaths.length ? ' Its other global instruction files are also backed up so they cannot become active.' : ''),
+            consequences: row.fallbackPaths.map(file => ({ icon: 'file-text', text: file })),
+            confirm: 'Disconnect instructions',
           });
           if (!confirmed) return;
         }
         const result = await api('/context/agents-md', { body: { provider: a.id, mode: a.mode, sourceRevision: row.sourceRevision } });
         if (!result.ok) { Kit.toast('Couldn’t change what ' + row.name + ' reads', { tone: 'danger', detail: result.error }); return; }
-        Kit.toast(row.name + (a.mode === 'shared' ? ' reads the shared AGENTS.md' : a.mode === 'none' ? ' reads no instructions' : ' reads its own ' + row.ownFile));
+        Kit.toast(row.name + (a.mode === 'shared' ? ' reads the shared AGENTS.md' : a.mode === 'none' ? ' has no managed global instructions' : ' reads its own ' + row.ownFile));
         await loadStatus();
         if (a.mode === 'separate') openContextEditor(el, a.id);
       } finally {

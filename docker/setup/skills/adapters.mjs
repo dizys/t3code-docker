@@ -5,6 +5,7 @@
 // Detection is advisory only: an undetected tool stays fully manageable
 // through its files, unlike registries that refuse unknown tools.
 import path from "node:path";
+import { agentResourcePaths } from "../agent-resources.mjs";
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
@@ -17,8 +18,9 @@ const TABLE = Object.freeze({
   codex: Object.freeze({ label: "Codex", projectDir: ".agents/skills" }),
   opencode: Object.freeze({ label: "OpenCode", projectDir: ".agents/skills" }),
   cursor: Object.freeze({ label: "Cursor", projectDir: ".agents/skills" }),
-  grok: Object.freeze({ label: "Grok Build", projectDir: null }),
-  muse: Object.freeze({ label: "Muse Code", projectDir: null }),
+  grok: Object.freeze({ label: "Grok Build", projectDir: ".grok/skills" }),
+  muse: Object.freeze({ label: "Muse Code", projectDir: ".agents/skills" }),
+  pi: Object.freeze({ label: "Pi", projectDir: ".pi/skills" }),
   antigravity: Object.freeze({ label: "Antigravity", projectDir: ".agents/skills" }),
 });
 
@@ -31,17 +33,7 @@ export function adapterProviders() {
 export function skillAdapter(provider, { home, env = {} } = {}) {
   const entry = TABLE[provider];
   if (!entry) throw fail("invalid", "Unknown skill provider.");
-  const override = (key, fallback) => path.resolve(home, String(env[key] || "").trim() || fallback);
-  const config = override("XDG_CONFIG_HOME", ".config");
-  const root = {
-    claude: override("CLAUDE_CONFIG_DIR", ".claude"),
-    codex: override("CODEX_HOME", ".codex"),
-    opencode: override("OPENCODE_CONFIG_DIR", path.join(config, "opencode")),
-    cursor: path.join(home, ".cursor"),
-    grok: override("GROK_HOME", ".grok"),
-    muse: path.join(config, "muse"),
-    antigravity: path.join(home, ".gemini", "config"),
-  }[provider];
+  const root = agentResourcePaths(home, env)[provider];
   return {
     id: provider,
     label: entry.label,

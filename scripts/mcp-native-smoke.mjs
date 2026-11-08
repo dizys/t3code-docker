@@ -12,7 +12,7 @@ const setup = process.env.T3_SETUP_MODULE || new URL("../docker/setup/mcp.mjs", 
 const { createMcpService } = await import(setup);
 const { withNativeProcess } = await import(process.env.T3_NATIVE_PROCESS_MODULE || new URL("../docker/harness/native-process.mjs", import.meta.url).href);
 const [provider, executable] = process.argv.slice(2);
-assert.ok(["claude", "codex", "opencode", "cursor"].includes(provider) && path.isAbsolute(executable || ""), "Pass a provider and its absolute executable path.");
+assert.ok(["claude", "codex", "opencode", "cursor", "grok", "muse", "pi"].includes(provider) && path.isAbsolute(executable || ""), "Pass a provider and its absolute executable path.");
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "t3-mcp-native-"));
 const requests = [];
 const answer = (request) => request.method === "initialize"
@@ -40,6 +40,9 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
 const nativeCommand = async (env, home, args) => (await promisify(execFile)(executable, args, { env, cwd: home, timeout: 20000, maxBuffer: 1024 * 1024 })).stdout;
 
 async function inventory(env, home, major) {
+  if (provider === 'grok') return nativeCommand(env, home, ['mcp', 'doctor', '--json']);
+  if (provider === 'pi') return nativeCommand(env, home, ['mcp', 'list', '--json']);
+  if (provider === 'muse') return nativeCommand(env, home, ['exec', '--provider', 'echo', '--disable-shell', '--disable-write', '--disable-sandbox', 'Reply OK']);
   if (provider === "codex") return withNativeProcess({ executable, env, home, timeoutMs: 20000 }, ["app-server", "--stdio"], async ({ child, nextLine }) => {
     const request = async (id, method, params) => {
       child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
@@ -72,9 +75,9 @@ try {
   for (const transport of ["local", "remote"]) {
     const home = path.join(root, transport); await fs.mkdir(home);
     const env = { ...process.env };
-    for (const key of Object.keys(env)) if (/TOKEN|API_KEY|PASSWORD|^OPENCODE|^CLAUDE|^ANTHROPIC|^GEMINI|^T3_/.test(key)) delete env[key];
+    for (const key of Object.keys(env)) if (/TOKEN|API_KEY|PASSWORD|^OPENCODE|^CLAUDE|^ANTHROPIC|^GEMINI|^GROK|^MUSE|^PI_|^CURSOR|^T3_/.test(key)) delete env[key];
     Object.assign(env, { HOME: home, CODEX_HOME: path.join(home, ".codex"), CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
-      XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".data"), XDG_STATE_HOME: path.join(home, ".state"), XDG_CACHE_HOME: path.join(home, ".cache"),
+      XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".data"), XDG_STATE_HOME: path.join(home, ".state"), XDG_CACHE_HOME: path.join(home, ".cache"), GROK_HOME: path.join(home, '.grok'), PI_CODING_AGENT_DIR: path.join(home, '.pi/agent'),
       OPENCODE_CONFIG_DIR: path.join(home, ".config/opencode"), OPENCODE_DISABLE_MODELS_FETCH: "1", OPENCODE_CONFIG_PROJECT_DISABLE: "1", OPENCODE_DISABLE_PROJECT_CONFIG: "1", DISABLE_AUTOUPDATER: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" });
     const version = (await nativeCommand(env, home, ["--version"])).trim(), major = Number(/(?:^|\s|v)(\d+)\./.exec(version)?.[1]);
     if (provider === 'claude' && transport === 'local') {
@@ -107,7 +110,7 @@ try {
     if (provider === "codex") assert.ok(result.data.some(row => row.tools?.fixture));
     if (provider === "opencode" && major === 2) assert.equal(result.data.find(row => row.name === "fixture").status.status, "connected");
     let currentRevision = created.revision;
-    if (["codex", "opencode"].includes(provider)) {
+    if (["codex", "opencode", "grok", "muse", "pi"].includes(provider)) {
       await svc.setLink(provider, 'fixture', true, currentRevision, (await svc.list(provider)).revision, false);
       const count = transport === 'local' ? (await fs.readFile(marker, 'utf8')).length : requests.length;
       await inventory(env, home, major);
@@ -122,7 +125,7 @@ try {
     }
     await svc.setLink(provider, "fixture", false, currentRevision, (await svc.list(provider)).revision);
     assert.equal((await svc.list(provider)).shared[0].linked, false);
-    console.log(`${provider} ${version}: ${transport} MCP initialize, credentials, unlink${['codex','opencode'].includes(provider) ? ' and native disable' : ''} passed.`);
+    console.log(`${provider} ${version}: ${transport} MCP initialize, credentials, unlink${['codex','opencode','grok','muse','pi'].includes(provider) ? ' and native disable' : ''} passed.`);
   }
 } finally {
   http.closeAllConnections(); await new Promise(resolve => http.close(resolve));

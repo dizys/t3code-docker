@@ -27,7 +27,7 @@ test('plain ssh mentions find a bare host, and nothing that only looks like one'
   for (const line of ['ssh user@host', 'ssh host.example.com', 'ssh host:22', 'ssh -i key host', 'openssh server', 'x-ssh nope', 'ssh Bad', 'ssh-keygen -t ed25519']) assert.deepEqual([...sshMentions(line)], [], line);
 });
 
-test('seven-provider scans deduplicate shared real files, include instructions and cache with invalidation', async t => {
+test('eight-provider scans deduplicate shared real files, include instructions and cache with invalidation', async t => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'credential-usage-')); t.after(() => fs.rm(home, { recursive: true, force: true }));
   const real = path.join(home, 'shared', 'deploy', 'SKILL.md'); await fs.mkdir(path.dirname(real), { recursive: true });
   await fs.writeFile(real, '---\nname: deploy\ndescription: Deploy from a shared skill.\n---\nt3-vault ssh build-server -- uptime');
@@ -40,10 +40,10 @@ test('seven-provider scans deduplicate shared real files, include instructions a
   const one = await usage.annotate([{ id: 'build-server' }, { id: 'project-api' }]);
   assert.deepEqual(one.credentials[0].usedIn, [{ kind: 'skill', name: 'deploy', where: 'All agents' }]);
   assert.deepEqual(one.credentials[1].usedIn, [{ kind: 'instructions', name: 'Global instructions' }]);
-  assert.equal(scans, 7); assert.equal(reads, 1); assert.equal(one.usageWarnings.length, 1);
-  await usage.annotate([]); assert.equal(scans, 7);
-  at += 16000; await usage.annotate([]); assert.equal(scans, 14);
-  usage.invalidate(); await usage.annotate([]); assert.equal(scans, 21);
+  assert.equal(scans, 8); assert.equal(reads, 1); assert.equal(one.usageWarnings.length, 1);
+  await usage.annotate([]); assert.equal(scans, 8);
+  at += 16000; await usage.annotate([]); assert.equal(scans, 16);
+  usage.invalidate(); await usage.annotate([]); assert.equal(scans, 24);
 });
 
 test('a skill that says plain ssh NAME only counts for an SSH credential of that name', async t => {

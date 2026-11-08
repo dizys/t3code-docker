@@ -8,10 +8,10 @@ const fixture = () => JSON.parse(readFileSync(new URL('../scripts/fixtures/conso
 const plain = value => JSON.parse(JSON.stringify(value));
 test('MCP columns use installation state without treating unsupported agents as uninstalled', () => {
   assert.deepEqual(plain(S.columns(['claude', 'muse']).map(p => p.id)), ['claude', 'muse']);
-  assert.equal(S.columns(['claude'], true).length, 7);
+  assert.equal(S.columns(['claude'], true).length, 8);
   assert.equal(S.columns([]).length, 0);
-  assert.equal(S.columns([], true).length, 7);
-  assert.equal(S.columns(S.providers.map(p => p.id)).length, 7);
+  assert.equal(S.columns([], true).length, 8);
+  assert.equal(S.columns(S.providers.map(p => p.id)).length, 8);
 });
 test('definition comparison ignores only the agent state, never named credential values', () => {
   const a = { name: 'server', type: 'local', command: ['server'], enabled: true, env: { enabled: 'one', TOKEN: 'secret' } };
@@ -32,19 +32,20 @@ test('MCP rows join shared and own entries without claiming live connections', (
   assert.equal(S.state(data, docs, 'cursor').kind, 'none');
   assert.equal(S.state(data, own, 'claude').kind, 'own');
   assert.equal(S.state(data, own, 'codex').kind, 'none');
-  assert.equal(S.state(data, docs, 'grok').label, 'Via Claude Code');
+  assert.equal(S.state(data, docs, 'grok').label, '—');
   assert.equal(S.state(data, db, 'grok').label, '—');
-  assert.equal(S.state(data, docs, 'muse').kind, 'unsupported');
+  assert.equal(S.state(data, docs, 'muse').kind, 'none');
   data.providers.find(p => p.provider === 'cursor').error = 'Unreadable';
   assert.equal(S.state(data, docs, 'cursor').kind, 'error');
 });
-test('Grok imports prefer Claude, then Cursor, and do not assert effective discovery', () => {
+test('Grok native entries take their own on/off state independently of compatibility files', () => {
   const data = fixture(), docs = S.rows(data).find(r => r.name === 'docs');
-  data.providers.find(p => p.provider === 'claude').diverged = [];
-  data.providers.find(p => p.provider === 'cursor').linked = ['docs'];
-  assert.equal(S.state(data, docs, 'grok').label, 'Via Cursor');
-  data.providers.find(p => p.provider === 'grok').imports = [];
-  assert.equal(S.state(data, docs, 'grok').label, '—');
+  const grok = data.providers.find(p => p.provider === 'grok');
+  grok.linked = ['docs'];
+  assert.equal(S.state(data, docs, 'grok').kind, 'on');
+  grok.disabled = ['docs'];
+  assert.equal(S.state(data, docs, 'grok').kind, 'off');
+  assert.equal(S.state(data, docs, 'claude').kind, 'differs');
 });
 test('filters include native command and URL summaries and attention counts are per copy', () => {
   const data = fixture();
@@ -55,5 +56,5 @@ test('filters include native command and URL summaries and attention counts are 
   data.providers.find(p => p.provider === 'cursor').error = 'Unreadable';
   assert.equal(S.attention(data).length, 2);
   assert.equal(S.attention(data, ['codex']).length, 0);
-  assert.equal(S.providers.length, 7);
+  assert.equal(S.providers.length, 8);
 });

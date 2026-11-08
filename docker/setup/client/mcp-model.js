@@ -7,9 +7,10 @@ const T3McpModel = (() => {
     { id: 'codex', name: 'Codex', control: 'On or off', managed: true, canDisable: true },
     { id: 'opencode', name: 'OpenCode', control: 'On or off', managed: true, canDisable: true },
     { id: 'cursor', name: 'Cursor', control: 'Add or remove', managed: true },
-    { id: 'grok', name: 'Grok Build', control: 'Imports only' },
-    { id: 'muse', name: 'Muse Code', control: 'Not managed here' },
-    { id: 'antigravity', name: 'Antigravity', control: 'Not managed here' },
+    { id: 'grok', name: 'Grok Build', control: 'On or off', managed: true, canDisable: true },
+    { id: 'muse', name: 'Muse Code', control: 'On or off', managed: true, canDisable: true },
+    { id: 'antigravity', name: 'Antigravity', control: 'On or off', managed: true, canDisable: true },
+    { id: 'pi', name: 'Pi', control: 'On or off', managed: true, canDisable: true },
   ];
   const columns = (installed, all = false) => providers.filter(provider => all || installed.includes(provider.id));
   const normalize = value => Array.isArray(value) ? value.map(normalize) : value && typeof value === 'object'
@@ -25,10 +26,6 @@ const T3McpModel = (() => {
   const has = (provider, name) => ['linked', 'diverged'].some(key => provider?.[key]?.includes(name)) || provider?.own?.some(row => row.name === name);
   const state = (data, row, id) => {
     const provider = data?.providers?.find(p => p.provider === id);
-    if (id === 'grok') {
-      const source = (provider?.imports || []).find(id => has(data?.providers?.find(p => p.provider === id), row.name));
-      return { kind: 'via', label: source ? 'Via ' + nameOf(source) : '—', source };
-    }
     if (!provider?.supported) return { kind: 'unsupported', label: '—', reason: provider?.error || 'Not managed here.' };
     if (provider.error) return { kind: 'error', label: '—', reason: provider.error };
     if (!row.shared && provider.own?.some(entry => entry.name === row.name)) return { kind: 'own', label: 'Own entry' };

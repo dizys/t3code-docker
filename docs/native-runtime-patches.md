@@ -34,6 +34,18 @@ wait is bounded at ten seconds; failures leave the inventory retryable instead
 of caching partial results. Warm and genuinely empty workspaces use the same
 native readiness signal.
 
+The agent resources patch loads Cursor's global instruction directory as an
+additional local SDK workspace. It preserves the primary project, existing
+workspace roots, setting sources and system prompt. Antigravity links global
+instruction files and modular rules into each private `GEMINI_HOME`, alongside
+upstream's skill links. Authentication, hooks and other profile settings stay
+private. MCP configuration is copied into an owner-only snapshot: disabled
+servers are omitted and `serverUrl` is normalized to the installed ACP loader's
+`url` spelling. Content-addressed snapshots identify bridge-owned files across
+starts; manual or private conflicts remain untouched and fail with their path.
+Concurrent profile setup is serialized. Removing the global source removes only
+the bridge's matching snapshot. Changes apply when a session starts.
+
 Linux ARM64 runners use upstream's native `build-exe` command without a
 cross-build target, retaining its SEA injection workaround for 16/64 KiB page
 kernels. The builder reads that path's `dist-exe/t3` output; explicit targets

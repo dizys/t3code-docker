@@ -18,10 +18,15 @@ test("native instruction targets respect provider environment overrides", () => 
     { provider: "claude", path: "/home/t3/.claude/CLAUDE.md" },
     { provider: "codex", path: "/home/t3/.codex/AGENTS.md" },
     { provider: "opencode", path: "/home/t3/.config/opencode/AGENTS.md" },
+    { provider: "cursor", path: "/home/t3/.cursor/t3-instructions/AGENTS.md" },
+    { provider: "grok", path: "/home/t3/.grok/rules/t3-instructions.md" },
+    { provider: "muse", path: "/home/t3/.config/muse/AGENTS.md" },
+    { provider: "antigravity", path: "/home/t3/.gemini/config/AGENTS.md" },
+    { provider: "pi", path: "/home/t3/.pi/agent/AGENTS.md" },
   ]);
-  assert.deepEqual(agentsMdTargets({ CLAUDE_CONFIG_DIR: "/claude", CODEX_HOME: "/codex", XDG_CONFIG_HOME: "/config" }).map((t) => t.path),
+  assert.deepEqual(agentsMdTargets({ CLAUDE_CONFIG_DIR: "/claude", CODEX_HOME: "/codex", XDG_CONFIG_HOME: "/config" }).slice(0, 3).map((t) => t.path),
     ["/claude/CLAUDE.md", "/codex/AGENTS.md", "/config/opencode/AGENTS.md"]);
-  assert.deepEqual(agentsMdTargets({ OPENCODE_CONFIG_DIR: "/state/opencode" }, "/home/t3").map((t) => t.path),
+  assert.deepEqual(agentsMdTargets({ OPENCODE_CONFIG_DIR: "/state/opencode" }, "/home/t3").slice(0, 3).map((t) => t.path),
     ["/home/t3/.claude/CLAUDE.md", "/home/t3/.codex/AGENTS.md", "/state/opencode/AGENTS.md"]);
   assert.equal(agentsMdTargets({ OPENCODE_CONFIG_DIR: ".custom/opencode" }, "/home/t3")[2].path, "/home/t3/.custom/opencode/AGENTS.md");
   assert.equal(agentsMdTargets({ XDG_CONFIG_HOME: ".cfg" }, "/home/t3")[2].path, "/home/t3/.cfg/opencode/AGENTS.md");
@@ -36,7 +41,7 @@ test("validation rejects blank and oversized UTF-8 content", () => {
 test("oversized shared files and provider symlink targets are never opened, including on repeated polls", async (t) => {
   const f = await fixture(t);
   const shared = agentsMdPathFor(f.baseDir);
-  const targets = agentsMdTargets({}, f.home);
+  const targets = agentsMdTargets({}, f.home).slice(0, 3);
   await fs.mkdir(path.dirname(shared), { recursive: true });
   await fs.writeFile(shared, 'x'.repeat(65537));
   for (const target of targets) await fs.mkdir(path.dirname(target.path), { recursive: true });
@@ -53,8 +58,8 @@ test("oversized shared files and provider symlink targets are never opened, incl
     assert.equal(status.agentsMd.present, true);
     assert.equal(status.agentsMd.bytes, 65537);
     assert.match(status.agentsMd.error, /too large to edit/);
-    assert.deepEqual(status.providers.map((p) => p.mode), ['shared', 'separate', 'separate']);
-    assert.ok(status.providers.every((p) => /too large to edit/.test(p.error) && p.sourceRevision === null));
+    assert.deepEqual(status.providers.slice(0, 3).map((p) => p.mode), ['shared', 'separate', 'separate']);
+    assert.ok(status.providers.slice(0, 3).every((p) => /too large to edit/.test(p.error) && p.sourceRevision === null));
     assert.ok(!JSON.stringify(status).includes('content'));
   }
   const read = await readAgentsMd(guarded, f.baseDir);
@@ -146,7 +151,7 @@ test("saving twice updates existing provider links without replacing them", asyn
   const f = await fixture(t);
   assert.equal((await readAgentsMd(fs, f.baseDir)).present, false);
   await writeAgentsMd(fs, f.baseDir, "# First\n");
-  assert.equal((await reconcileAgentsMd(fs, f.baseDir, f)).linked.length, 3);
+  assert.equal((await reconcileAgentsMd(fs, f.baseDir, f)).linked.length, 8);
   await writeAgentsMd(fs, f.baseDir, "# Second\n", (await readAgentsMd(fs, f.baseDir)).revision);
   const again = await reconcileAgentsMd(fs, f.baseDir, f);
   assert.ok(again.linked.every((target) => target.state === "exists"));
@@ -163,7 +168,7 @@ test("saving twice updates existing provider links without replacing them", asyn
   } }, f);
   assert.equal(reads, 1, "shared provider files are read once per status snapshot");
   assert.deepEqual(Object.keys(status), ["agentsMd", "providers"]);
-  assert.deepEqual(status.providers.map((entry) => entry.mode), ['shared', 'shared', 'shared']);
+  assert.deepEqual(status.providers.map((entry) => entry.mode), Array(8).fill('shared'));
   assert.equal(status.agentsMd.bytes, 9);
   assert.ok(!("content" in status.agentsMd));
 });
@@ -180,7 +185,7 @@ test("global reconciliation preserves real files and absolute, relative and dang
       else await fs.symlink(kind === "relative" ? path.relative(path.dirname(target.path), userFile) : kind === "dangling" ? path.join(f.root, "missing.md") : userFile, target.path);
     }
     const result = await reconcileAgentsMd(fs, f.baseDir, f);
-    assert.equal(result.skipped.length, 3, kind);
+    assert.equal(result.skipped.length, 8, kind);
     assert.ok(result.skipped.every((entry) => entry.preserved));
     for (const target of agentsMdTargets({}, f.home)) {
       if (kind === "file") assert.equal(await fs.readFile(target.path, "utf8"), "# Existing");
@@ -267,7 +272,7 @@ test("existing provider files appear in Context and edits preserve their permiss
   }
   const before = await contextStatus(fs, f);
   assert.equal(before.agentsMd.present, false);
-  assert.deepEqual(before.providers.map((p) => p.provider), ["claude", "codex", "opencode"]);
+  assert.deepEqual(before.providers.map((p) => p.provider), ["claude", "codex", "opencode", "cursor", "grok", "muse", "antigravity", "pi"]);
   assert.ok(before.providers.every((p) => !('content' in p)));
   for (const target of agentsMdTargets({}, f.home)) {
     const read = await readProviderAgentsMd(fs, target.provider, f);
@@ -292,7 +297,7 @@ test("editing an existing provider symlink writes through its chain, including w
     await fs.symlink(path.relative(path.dirname(target.path), middle), target.path);
   }
   await writeAgentsMd(fs, f.baseDir, "# Managed shared file");
-  assert.equal((await reconcileAgentsMd(fs, f.baseDir, options)).skipped.length, 3);
+  assert.equal((await reconcileAgentsMd(fs, f.baseDir, options)).skipped.length, 8);
   for (const target of agentsMdTargets(options.env, f.home)) {
     const link = await fs.readlink(target.path);
     const read = await readProviderAgentsMd(fs, target.provider, options);
@@ -354,7 +359,7 @@ test("provider view rows and palette expose each discovered file", () => {
   assert.equal(row.status.text, 'Reads its own CLAUDE.md');
   assert.equal(row.path, '/custom/CLAUDE.md');
   assert.equal(M.contextProviderRows({ context: { providers: [{ provider: 'codex', mode: 'shared' }] } })[0].status.text, 'Reads the shared AGENTS.md');
-  assert.equal(M.contextProviderRows({ context: { providers: [{ provider: 'codex', mode: null }] } })[0].status.text, 'Reads no global instructions');
+  assert.equal(M.contextProviderRows({ context: { providers: [{ provider: 'codex', mode: null }] } })[0].status.text, 'No managed global instructions');
   assert.ok(M.paletteItems(status, null, ui, Date.now()).some((i) => i.cmd.cmd === 'context.provider.edit' && i.cmd.id === 'claude'));
 });
 
@@ -407,7 +412,7 @@ test("providers can use shared instructions or detach an independent copy", asyn
   }
   await writeAgentsMd(fs, f.baseDir, '# Shared v2', (await readAgentsMd(fs, f.baseDir)).revision);
   await reconcileAgentsMd(fs, f.baseDir, f);
-  assert.deepEqual((await contextStatus(fs, f)).providers.map((p) => p.mode), ['separate', 'separate', 'separate']);
+  assert.deepEqual((await contextStatus(fs, f)).providers.map((p) => p.mode), Array(8).fill('separate'));
   for (const target of agentsMdTargets({}, f.home)) assert.equal(await fs.readFile(target.path, 'utf8'), '# Shared v1');
 });
 
@@ -455,11 +460,11 @@ test("mode changes reject stale selections and existing backups and roll back fa
   assert.equal(await fs.readFile(backup, 'utf8'), '# Existing backup');
   assert.equal(await fs.readFile(target.path, 'utf8'), '# New separate');
   await fs.unlink(backup);
-  const broken = { ...fs, rename: async (from, to) => {
-    if (from.includes('.tmp.')) throw new Error('switch rename failed');
-    return fs.rename(from, to);
+  const broken = { ...fs, link: async (from, to) => {
+    if (from.includes('.tmp.')) throw new Error('switch publish failed');
+    return fs.link(from, to);
   } };
-  await assert.rejects(setProviderInstructionMode(broken, f.baseDir, target.provider, 'shared', state.sourceRevision, f), /switch rename failed/);
+  await assert.rejects(setProviderInstructionMode(broken, f.baseDir, target.provider, 'shared', state.sourceRevision, f), /switch publish failed/);
   assert.equal(await fs.readFile(target.path, 'utf8'), '# New separate');
   await assert.rejects(fs.lstat(backup), { code: 'ENOENT' });
   assert.deepEqual(await fs.readdir(path.dirname(target.path)), ['CLAUDE.md']);
@@ -507,7 +512,7 @@ test("global deletion checks revisions, removes shared links and preserves separ
   await fs.writeFile(targets[0].path + '.t3-context-backup', '# Original');
   assert.equal((await deleteAgentsMd(fs, f.baseDir, 'stale', f)).code, 'conflict');
   const read = await readAgentsMd(fs, f.baseDir);
-  assert.equal((await deleteAgentsMd(fs, f.baseDir, read.revision, f)).unlinked, 2);
+  assert.equal((await deleteAgentsMd(fs, f.baseDir, read.revision, f)).unlinked, 7);
   assert.equal((await readAgentsMd(fs, f.baseDir)).present, false);
   assert.equal(await fs.readFile(targets[1].path, 'utf8'), '# Shared');
   assert.equal(await fs.readFile(targets[0].path + '.t3-context-backup', 'utf8'), '# Original');

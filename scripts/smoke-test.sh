@@ -1083,10 +1083,21 @@ native_skill_controls_work() {
 }
 check "native skill controls work with the installed Claude, Codex and OpenCode" "native_skill_controls_work >>\"$UI_AUDIT_LOG\" 2>&1"
 
+native_agent_resources_work() {
+  local id executable
+  docker cp scripts/agent-resources-native-smoke.mjs "$NAME:/tmp/agent-resources-native-smoke.mjs" >/dev/null 2>&1 || return 1
+  for id in grok muse pi; do
+    executable="$(status_json | jq -r --arg id "$id" '.harnesses[] | select(.id == $id) | .executable')"
+    [ -n "$executable" ] && [ "$executable" != null ] || return 1
+    docker exec -u t3 -e T3_SETUP_DIR=file:///opt/t3-setup/ "$NAME" node /tmp/agent-resources-native-smoke.mjs "$id" "$executable" || return 1
+  done
+}
+check "Grok, Muse and Pi load managed instructions, skills and native skill settings" "native_agent_resources_work >>\"$UI_AUDIT_LOG\" 2>&1"
+
 native_mcp_controls_work() {
   local id executable
   docker cp scripts/mcp-native-smoke.mjs "$NAME:/tmp/mcp-native-smoke.mjs" >/dev/null 2>&1 || return 1
-  for id in claude codex opencode cursor; do
+  for id in claude codex opencode cursor grok muse pi; do
     executable="$(status_json | jq -r --arg id "$id" '.harnesses[] | select(.id == $id) | .executable')"
     [ -n "$executable" ] && [ "$executable" != null ] || return 1
     docker exec -u t3 -e T3_SETUP_MODULE=/opt/t3-setup/mcp.mjs \
@@ -1094,7 +1105,7 @@ native_mcp_controls_work() {
       "$NAME" node /tmp/mcp-native-smoke.mjs "$id" "$executable" || return 1
   done
 }
-check "native MCP local and HTTP settings work in Claude, Codex, OpenCode and Cursor" "native_mcp_controls_work >>\"$UI_AUDIT_LOG\" 2>&1"
+check "native MCP local and HTTP settings work in all seven standalone agents" "native_mcp_controls_work >>\"$UI_AUDIT_LOG\" 2>&1"
 
 native_gateways_work() {
   local id executable

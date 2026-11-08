@@ -1,7 +1,7 @@
 // Import data, never shell code. All formats converge on the same validator.
 import Command from '../client/mcp-command.js';
 import { parseMcpToml } from './toml.mjs';
-import { jsonDocument, containerFor, fromCursorEntry, fromCodexEntry, fromOpenCodeEntry, extraMcpOptions } from './adapters.mjs';
+import { jsonDocument, containerFor, fromCursorEntry, fromCodexEntry, fromOpenCodeEntry, fromAdditionalEntry, extraMcpOptions } from './adapters.mjs';
 import { validateMcpServer } from './store.mjs';
 
 export const SSE_MESSAGE = 'SSE-only servers aren’t portable. Use the server’s Streamable HTTP address.';
@@ -85,27 +85,40 @@ export function parseMcpSnippet(text) {
       }
     } catch (error) { result.errors.push((label ? label + ': ' : '') + (error instanceof TypeError ? 'Use a valid HTTP server URL.' : error.message)); }
   };
+  const jsonEntry = (name, entry, provider) => {
+    provider ||= entry?.serverUrl !== undefined || entry?.disabled !== undefined ? 'antigravity'
+      : entry?.enabled !== undefined || entry?.type === 'streamable-http' ? 'pi' : 'cursor';
+    add(provider === 'cursor' ? fromCursorEntry(name, entry) : fromAdditionalEntry(provider, name, entry), name, entry, provider);
+  };
   try {
     if (/^\s*\[\s*mcp_servers[.\s]/m.test(text)) {
       result.format = 'codex-toml';
       let entries; try { entries = parseMcpToml(text); } catch { fail('Couldn’t read that as Codex TOML. Check that it’s complete.'); }
       if (entries.size > 128) fail('Import at most 128 servers at a time.');
-      for (const [name, entry] of entries) add(fromCodexEntry(name, entry), name, entry, 'codex');
+      for (const [name, entry] of entries) {
+        const grok = entry.headers !== undefined;
+        add(grok ? fromAdditionalEntry('grok', name, entry) : fromCodexEntry(name, entry), name, entry, grok ? 'grok' : 'codex');
+      }
     } else if (/^[{[]/.test(text)) {
       result.format = 'json';
       let value; try { value = jsonDocument(text, false); } catch { fail('Couldn’t read that as JSON. Check that it’s complete.'); }
-      if (object(value.mcpServers)) {
-        result.format = 'claude-json';
-        if (Object.keys(value.mcpServers).length > 128) fail('Import at most 128 servers at a time.');
-        for (const [name, entry] of Object.entries(value.mcpServers)) add(fromCursorEntry(name, entry), name, entry, 'cursor');
+      if (value.mcpServers !== undefined || value.mcp_servers !== undefined) {
+        const muse = value.mcp_servers !== undefined;
+        result.format = muse ? 'muse-json' : 'claude-json';
+        const { entries } = containerFor('muse', value);
+        if (Object.keys(entries).length > 128) fail('Import at most 128 servers at a time.');
+        for (const [name, entry] of Object.entries(entries)) jsonEntry(name, entry, muse ? 'muse' : undefined);
       } else if (object(value.mcp)) {
         result.format = 'opencode-json';
         const { entries, v2 } = containerFor('opencode', value);
         if (Object.keys(entries).length > 128) fail('Import at most 128 servers at a time.');
         for (const [name, entry] of Object.entries(entries)) add(fromOpenCodeEntry(name, entry, v2), name, entry, 'opencode', v2);
+      } else if (Object.keys(value).length && Object.values(value).every(object)) {
+        if (Object.keys(value).length > 128) fail('Import at most 128 servers at a time.');
+        for (const [name, entry] of Object.entries(value)) jsonEntry(name, entry);
       } else {
-        const name = suggestMcpName(value.url || [value.command || 'server', ...(Array.isArray(value.args) ? value.args : [])]);
-        add(fromCursorEntry(name, value), '', value, 'cursor');
+        const name = suggestMcpName(value.serverUrl || value.url || [value.command || 'server', ...(Array.isArray(value.args) ? value.args : [])]);
+        jsonEntry(name, value);
       }
     } else if (/^https?:\/\/\S+$/.test(text)) {
       result.format = 'url'; add({ name: suggestMcpName(text), type: 'remote', url: text, headers: {} });

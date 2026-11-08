@@ -1332,7 +1332,7 @@ html.tc-locked { overflow: hidden; }
 
 
 .tc-wizard-rail-wrap { display: flex; flex-direction: column; }
-.tc-wizard-rail { flex: 1; min-height: 0; }
+.tc-wizard-rail { flex: 1 0 auto; min-height: 0; }
 .tc-wizard-rail > * { flex-shrink: 0; }
 .tc-dest-name { font-weight: 500; }
 .tc-wizard-rail-toggle { border: 0; background: transparent; color: var(--fg); font: inherit; text-align: left; }

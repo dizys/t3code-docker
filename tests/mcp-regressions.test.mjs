@@ -132,7 +132,8 @@ test("URLs, headers, unsupported providers and extra provider options are honest
   assert.equal(JSON.stringify(status).includes('private-secret-path'), false);
   assert.equal(JSON.stringify(status).includes('token=secret'), false);
   assert.deepEqual(status.providers.find(p=>p.provider==='codex').diverged,['probe']);
-  await assert.rejects(f.svc.setLink('antigravity','probe',true,c.revision), {code:'unsupported'});
+  await f.svc.setLink('antigravity','probe',true,c.revision);
+  assert.deepEqual((await f.svc.list('antigravity')).linked, ['probe']);
 });
 
 test("Claude override roots are honored and duplicate JSON keys cannot be changed", async (t) => {

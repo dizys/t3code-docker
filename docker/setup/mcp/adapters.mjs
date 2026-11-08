@@ -4,7 +4,9 @@ import path from "node:path";
 import { parse, parseTree, modify, applyEdits } from "../vendor/jsonc.mjs";
 import { parseMcpToml, applyMcpToml } from "./toml.mjs";
 import { readConfig, changeConfig } from "./files.mjs";
-import { validateMcpServer } from "./store.mjs";
+import { validateMcpServer, SUPPORTED_MCP_PROVIDERS } from "./store.mjs";
+import { agentResourcePaths } from "../agent-resources.mjs";
+import { parse as parseToml, patch as patchToml } from "../vendor/toml-patch.mjs";
 import { opencodeConfigRoot } from "../opencode-config.mjs";
 
 const problem = (code, message) => Object.assign(new Error(message), { code });
@@ -13,7 +15,7 @@ const homeOf = (home, env) => path.resolve(home || env.HOME || "/home/t3");
 export const claudeMcpPath = (home, env) => env.CLAUDE_CONFIG_DIR?.trim()
   ? path.join(path.resolve(homeOf(home, env), env.CLAUDE_CONFIG_DIR), ".claude.json") : path.join(homeOf(home, env), ".claude.json");
 export const codexMcpPath = (home, env) => path.join(path.resolve(homeOf(home, env), env.CODEX_HOME || ".codex"), "config.toml");
-export const cursorMcpPath = (home, env) => path.join(homeOf(home, env), ".cursor", "mcp.json");
+export const cursorMcpPath = (home, env) => path.join(agentResourcePaths(homeOf(home, env), env).cursor, "mcp.json");
 export const openCodeConfigPath = async (io, home, env) => {
   const root = opencodeConfigRoot(homeOf(home, env), env);
   const jsonc = path.join(root, "opencode.jsonc");
@@ -64,7 +66,28 @@ export function fromCursorEntry(name, entry) {
   if (!object(entry) || (entry.type !== undefined && !["http", "stdio"].includes(entry.type))) return null;
   return fromClaudeEntry(name, entry.type === undefined && typeof entry.url === "string" ? { ...entry, type: "http" } : entry);
 }
-export const isSupportedMcpProvider = (provider) => ["claude", "codex", "opencode", "cursor"].includes(provider);
+// These native formats infer transport from command/url and keep their own
+// per-server enabled flags. Antigravity names the remote endpoint serverUrl.
+export function toAdditionalEntry(provider, server, enabled = true) {
+  const entry = toClaudeEntry(server);
+  delete entry.type;
+  if (provider === "antigravity") {
+    if (entry.url) { entry.serverUrl = entry.url; delete entry.url; }
+    if (!enabled) entry.disabled = true;
+  } else if (!enabled) entry.enabled = false;
+  return entry;
+}
+export function fromAdditionalEntry(provider, name, entry) {
+  if (!object(entry)) return null;
+  if (entry.command !== undefined && (entry.url !== undefined || entry.serverUrl !== undefined)) return null;
+  if (entry.type !== undefined && !["stdio", "http", "streamable-http"].includes(entry.type)) return null;
+  const url = provider === "antigravity" ? entry.serverUrl ?? entry.url : entry.url;
+  const canonical = typeof url === "string" ? { name, type: "remote", url, headers: { ...(entry.headers ?? {}) }, enabled: true }
+    : typeof entry.command === "string" && entry.command ? { name, type: "local", command: [entry.command, ...(Array.isArray(entry.args) ? entry.args : [])], env: { ...(entry.env ?? {}) }, enabled: true } : null;
+  if (canonical) canonical.enabled = provider === "antigravity" ? entry.disabled !== true : entry.enabled !== false;
+  return canonical;
+}
+export const isSupportedMcpProvider = (provider) => SUPPORTED_MCP_PROVIDERS.includes(provider);
 
 export function jsonDocument(raw, strict) {
   const errors = [];
@@ -82,7 +105,11 @@ export function jsonDocument(raw, strict) {
 }
 
 export function containerFor(provider, value) {
-  const key = provider === "opencode" ? "mcp" : "mcpServers";
+  // The Antigravity loader accepts both a wrapped dictionary and the older
+  // direct server map. Keep the existing format instead of shadowing it.
+  if (provider === "antigravity" && value.mcpServers === undefined && Object.keys(value).length) return { v2: false, keys: [], entries: value };
+  if (provider === "muse" && value.mcp_servers !== undefined && value.mcpServers !== undefined) throw problem("unsupported", "Muse has both mcpServers and mcp_servers. Keep one server section before changing servers.");
+  const key = provider === "opencode" ? "mcp" : provider === "muse" && value.mcp_servers !== undefined ? "mcp_servers" : "mcpServers";
   const root = value[key];
   if (root !== undefined && !object(root)) throw problem("unsupported", "The MCP configuration has an unsupported server section.");
   // V1 may contain a real server named 'servers'. Its transport distinguishes
@@ -101,16 +128,21 @@ async function fileFor(io, provider, home, env) {
   if (provider === "codex") return codexMcpPath(home, env);
   if (provider === "claude") return claudeMcpPath(home, env);
   if (provider === "cursor") return cursorMcpPath(home, env);
+  const roots = agentResourcePaths(homeOf(home, env), env);
+  if (provider === "grok") return path.join(roots.grok, "config.toml");
+  if (provider === "muse") return path.join(roots.muse, "settings.json");
+  if (provider === "pi") return path.join(roots.pi, "mcp.json");
+  if (provider === "antigravity") return path.join(roots.antigravity, "mcp_config.json");
   throw problem("unsupported", "MCP management is not supported for this provider.");
 }
 
 // Unknown provider options must be shown as differing, rather than implying
 // that cwd/auth/tool-policy differences are represented by the shared entry.
 export function extraMcpOptions(provider, entry, v2 = false) {
-  const remote = typeof entry?.url === "string";
+  const remote = typeof entry?.url === "string" || typeof entry?.serverUrl === "string";
   const keys = provider === "codex" ? [...(remote ? ["url", "http_headers"] : ["command", "args", "env"]), "enabled"]
     : provider === "opencode" ? [...(remote ? ["url", "headers"] : ["command", "environment"]), "type", v2 ? "disabled" : "enabled"]
-      : [...(remote ? ["url", "headers"] : ["command", "args", "env"]), "type"];
+      : [...(remote ? ["url", "headers", ...(provider === "antigravity" ? ["serverUrl"] : [])] : ["command", "args", "env"]), "type", ...(["grok", "muse", "pi"].includes(provider) ? ["enabled"] : provider === "antigravity" ? ["disabled"] : [])];
   return object(entry) ? Object.keys(entry).filter((k) => !keys.includes(k)) : [];
 }
 export const hasExtraMcpOptions = (provider, entry, v2 = false) => !object(entry) || extraMcpOptions(provider, entry, v2).length > 0;
@@ -119,15 +151,21 @@ export async function readProviderMcp(io, provider, { home, env = {} }) {
   const file = await fileFor(io, provider, home, env);
   const snapshot = await readConfig(io, file);
   let entries, v2 = false;
-  if (provider === "codex") entries = [...parseMcpToml(snapshot.content)];
+  if (["codex", "grok"].includes(provider)) entries = [...parseMcpToml(snapshot.content)];
   else {
-    const container = containerFor(provider, jsonDocument(snapshot.content, provider !== "opencode"));
+    const value = jsonDocument(snapshot.content, provider !== "opencode");
+    if (provider === "muse" && value.schema_version !== undefined && value.schema_version !== 1) throw problem("unsupported", "This Muse settings schema is not supported. Existing settings were preserved.");
+    const container = containerFor(provider, value);
     entries = Object.entries(container.entries); v2 = container.v2;
   }
-  const from = provider === "codex" ? fromCodexEntry : provider === "opencode" ? (name, entry) => fromOpenCodeEntry(name, entry, v2) : provider === "cursor" ? fromCursorEntry : fromClaudeEntry;
+  const from = provider === "codex" ? fromCodexEntry : provider === "opencode" ? (name, entry) => fromOpenCodeEntry(name, entry, v2) : provider === "cursor" ? fromCursorEntry : provider === "claude" ? fromClaudeEntry : (name, entry) => fromAdditionalEntry(provider, name, entry);
+  // Grok keeps a personal disable list in addition to per-entry switches.
+  const disabled = provider === "grok" ? parseToml(snapshot.content || "").disabled_mcp_servers ?? [] : [];
+  if (!Array.isArray(disabled) || !disabled.every(name => typeof name === "string")) throw problem("unsupported", "Grok disabled_mcp_servers must be a list of names.");
   return { provider, path: file, present: snapshot.exists, revision: snapshot.revision,
     servers: entries.map(([name, entry]) => {
       const canonical = from(name, entry);
+      if (canonical && disabled.includes(name)) canonical.enabled = false;
       const malformed = !object(entry)
         || ['enabled', 'disabled'].some(k => entry[k] !== undefined && typeof entry[k] !== 'boolean')
         || (entry.args !== undefined && (!Array.isArray(entry.args) || !entry.args.every(a => typeof a === 'string')))
@@ -144,8 +182,22 @@ export async function writeProviderMcpEntry(io, provider, { home, env = {} }, na
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) throw problem("invalid", "Invalid MCP server name.");
   const file = await fileFor(io, provider, home, env);
   return changeConfig(io, file, revision, (raw) => {
-    if (provider === "codex") return applyMcpToml(raw, name, entry);
+    if (["codex", "grok"].includes(provider)) {
+      if (provider === "grok" && !/^[a-z]/.test(name)) throw problem("unsupported", "Grok Build server names must start with a letter.");
+      let next = applyMcpToml(raw, name, entry);
+      if (provider === "grok") {
+        const value = parseToml(next), disabled = value.disabled_mcp_servers;
+        if (disabled !== undefined) {
+          if (!Array.isArray(disabled) || !disabled.every(name => typeof name === "string")) throw problem("unsupported", "Grok disabled_mcp_servers must be a list of names.");
+          // An explicit on/off save owns this server's personal state only.
+          next = patchToml(next, { ...value, disabled_mcp_servers: disabled.filter(item => item !== name) });
+        }
+      }
+      return next;
+    }
+    if (provider === "pi" && name === "t3-code") throw problem("unsupported", "The t3-code server is owned by T3. Choose a different server name.");
     const value = jsonDocument(raw, provider !== "opencode");
+    if (provider === "muse" && value.schema_version !== undefined && value.schema_version !== 1) throw problem("unsupported", "This Muse settings schema is not supported. Existing settings were preserved.");
     const container = containerFor(provider, value);
     let nextEntry = entry;
     if (entry && container.v2) {
@@ -154,7 +206,9 @@ export async function writeProviderMcpEntry(io, provider, { home, env = {} }, na
     }
     if (!entry && !Object.hasOwn(container.entries, name)) return raw;
     const eol = (raw || "").includes("\r\n") ? "\r\n" : "\n";
-    return applyEdits(raw || "{}\n", modify(raw || "{}\n", [...container.keys, name], nextEntry ?? undefined,
-      { formattingOptions: { insertSpaces: true, tabSize: 2, eol } }));
+    const formattingOptions = { insertSpaces: true, tabSize: 2, eol };
+    let text = raw || "{}\n";
+    if (provider === "muse" && value.schema_version === undefined) text = applyEdits(text, modify(text, ["schema_version"], 1, { formattingOptions }));
+    return applyEdits(text, modify(text, [...container.keys, name], nextEntry ?? undefined, { formattingOptions }));
   });
 }

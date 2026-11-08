@@ -17,7 +17,7 @@ async function fixture(t, io = fs) {
 
 test("creation uses native user folders, validates Markdown and never overwrites an installation", async (t) => {
   const f = await fixture(t);
-  for (const provider of ["claude", "codex", "opencode", "cursor", "grok", "muse", "antigravity"]) {
+  for (const provider of ["claude", "codex", "opencode", "cursor", "grok", "muse", "antigravity", "pi"]) {
     assert.equal((await f.service.list(provider)).canCreate, true);
     const result = await f.service.create(provider, "local-one", markdown("local-one"));
     assert.equal(await fs.readFile(result.path, "utf8"), markdown("local-one"));

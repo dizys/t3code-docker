@@ -297,11 +297,11 @@ register_projects
 # everything there already survives a recreate. Shared skills stay
 # discoverable through ~/.agents/skills natively. ensure_opencode_config()
 # below owns that layout.
-AGENT_DIRS=".claude .codex .cursor .grok .pi .local/share/opencode .config/muse .local/share/muse .agents/skills .local/state/skills .gemini/config/skills .gemini/antigravity-cli/skills"
+AGENT_DIRS=".claude .codex .cursor .grok .pi .local/share/opencode .config/muse .local/share/muse .agents/skills .local/state/skills .gemini/config/skills .gemini/config .gemini/antigravity-cli/skills"
 AGENT_DIRS="$AGENT_DIRS .config/gh .config/glab-cli .config/tea .local/share/forgejo-cli .azure"
 # And git's own settings, plus Claude's global account/MCP config outside its
 # config directory. Git and Claude's native writer preserve these file links.
-AGENT_FILES=".gitconfig .agents/.skill-lock.json .claude.json"
+AGENT_FILES=".gitconfig .agents/.skill-lock.json .claude.json .gemini/AGENTS.md .gemini/GEMINI.md"
 
 persist_agent_credentials() {
   [ "$T3_PERSIST_AGENT_CREDENTIALS" = "1" ] || return 0
@@ -341,7 +341,7 @@ persist_agent_credentials() {
         if [ "$rel" = ".claude.json" ]; then
           [ -e "$dst" ] || printf '{}\n' > "$dst"
           chmod 600 "$dst"
-        elif [ "$rel" != ".agents/.skill-lock.json" ]; then
+        elif [ "$rel" != ".agents/.skill-lock.json" ] && [ "$rel" != ".gemini/AGENTS.md" ] && [ "$rel" != ".gemini/GEMINI.md" ]; then
           [ -e "$dst" ] || : > "$dst"
         fi
         ;;

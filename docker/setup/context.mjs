@@ -3,7 +3,7 @@
 // and links are preserved; existing files change only on an explicit save.
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { opencodeConfigRoot } from "./opencode-config.mjs";
+import { agentResourcePaths } from "./agent-resources.mjs";
 
 export function contextDirFor(baseDir) {
   return path.join(baseDir, "setup", "context");
@@ -13,19 +13,50 @@ export function agentsMdPathFor(baseDir) {
   return path.join(contextDirFor(baseDir), "AGENTS.md");
 }
 
-/** Native global instruction paths; other providers are deferred. */
+/** Cursor's dedicated rule workspace is loaded by the T3 SDK bridge. */
 export function agentsMdTargets(env = {}, home = "/home/t3") {
-  const claudeDir = String(env.CLAUDE_CONFIG_DIR ?? "").trim() || path.join(home, ".claude");
-  const codexHome = String(env.CODEX_HOME ?? "").trim() || path.join(home, ".codex");
-  // OpenCode reads its config dir through OPENCODE_CONFIG_DIR; the entrypoint
-  // points it at a real folder on the state volume, so instructions belong
-  // there rather than under a symlinked ~/.config/opencode.
-  const openCodeHome = opencodeConfigRoot(home, env);
-  return [
-    { provider: "claude", path: path.join(claudeDir, "CLAUDE.md") },
-    { provider: "codex", path: path.join(codexHome, "AGENTS.md") },
-    { provider: "opencode", path: path.join(openCodeHome, "AGENTS.md") },
-  ];
+  const roots = agentResourcePaths(home, env);
+  return Object.entries({
+    claude: "CLAUDE.md", codex: "AGENTS.md", opencode: "AGENTS.md",
+    cursor: "t3-instructions/AGENTS.md", grok: "rules/t3-instructions.md",
+    muse: "AGENTS.md", antigravity: "AGENTS.md", pi: "AGENTS.md",
+  }).map(([provider, name]) => ({ provider, path: path.join(roots[provider], name) }));
+}
+
+// Pi and Codex choose one context file by precedence. Edit the file they
+// actually load, preserving an existing override instead of shadowing it.
+const instructionCandidates = target => {
+  const names = target.provider === "pi" ? ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]
+    : target.provider === "codex" ? ["AGENTS.override.md", "AGENTS.md"] : null;
+  return names ? names.map(name => path.join(path.dirname(target.path), name)) : [target.path];
+};
+async function instructionEntry(fs, file) {
+  try {
+    const stat = await fs.lstat(file);
+    return { file, stat, link: stat.isSymbolicLink() ? await fs.readlink(file) : null };
+  } catch (error) { if (error.code === "ENOENT") return null; throw error; }
+}
+async function instructionEntries(fs, target) {
+  const rows = await Promise.all(instructionCandidates(target).map(async file => ({ file,
+    entry: await instructionEntry(fs, file), backup: await instructionEntry(fs, file + ".t3-context-backup") })));
+  const stamp = entry => entry && [entry.stat.dev, entry.stat.ino, entry.stat.mode, entry.stat.size, entry.stat.mtimeMs, entry.stat.ctimeMs, entry.link];
+  return { rows, fingerprint: JSON.stringify(rows.map(row => [row.file, stamp(row.entry), stamp(row.backup)])) };
+}
+async function instructionTargets(fs, env = {}, home = "/home/t3") {
+  return Promise.all(agentsMdTargets(env, home).map(async target => {
+    try {
+      const candidates = instructionCandidates(target);
+      for (const file of candidates) {
+        try { await fs.lstat(file); return { ...target, path: file }; }
+        catch (error) { if (error.code !== "ENOENT") throw error; }
+      }
+      // After disconnecting an override, its backup remembers the native path.
+      for (const file of candidates) {
+        if (await instructionEntry(fs, file + ".t3-context-backup")) return { ...target, path: file };
+      }
+      return target;
+    } catch (error) { return { ...target, error: String(error?.message ?? error) }; }
+  }));
 }
 
 const MAX_INSTRUCTION_BYTES = 64 * 1024;
@@ -94,13 +125,49 @@ const changedInstructions = () => ({ ok: false, code: "conflict", error: "Instru
 // Shared and provider editors can point at the same file. Keep their revision
 // checks and atomic writes in one queue per resolved target.
 const instructionWrites = new Map();
-async function withInstructionWrite(file, work) {
+const instructionModeWrites = new Map();
+async function withInstructionWrite(file, work, queues = instructionWrites) {
   const key = path.resolve(file);
-  const previous = instructionWrites.get(key) ?? Promise.resolve();
+  const previous = queues.get(key) ?? Promise.resolve();
   const current = previous.catch(() => {}).then(work);
-  instructionWrites.set(key, current);
+  queues.set(key, current);
   try { return await current; }
-  finally { if (instructionWrites.get(key) === current) instructionWrites.delete(key); }
+  finally { if (queues.get(key) === current) queues.delete(key); }
+}
+
+// Link exclusively before removing an entry, including a relative symlink.
+// Backups and restoration must never replace an occupied destination.
+async function moveInstructionEntry(fs, source, destination) {
+  const before = await fs.lstat(source);
+  try { await fs.link(source, destination); }
+  catch (error) {
+    if (error.code === "EEXIST") throw Object.assign(new Error("The instruction destination already exists: " + destination + ". Refresh before trying again."), { code: "conflict" });
+    throw error;
+  }
+  try {
+    const current = await fs.lstat(source);
+    if (current.ino !== before.ino || current.dev !== before.dev) throw new Error("The instruction entry changed before it could be moved.");
+    await fs.unlink(source);
+  } catch (error) {
+    const created = await fs.lstat(destination).catch(() => null);
+    if (created?.ino === before.ino && created.dev === before.dev) await fs.unlink(destination);
+    throw error;
+  }
+}
+async function moveInstructionEntries(fs, moves, temporary) {
+  const completed = [];
+  try {
+    for (const move of moves) { await moveInstructionEntry(fs, ...move); completed.push(move); }
+  } catch (error) {
+    const failed = [];
+    for (const [source, destination] of completed.reverse()) {
+      try { await moveInstructionEntry(fs, destination, source); }
+      catch { failed.push(destination); }
+    }
+    if (failed.length) throw new Error("Instruction changes could not be rolled back. Preserved files: " + failed.join(", ") + ". " + error.message);
+    throw error;
+  }
+  for (const file of temporary) await fs.rm(file, { force: true });
 }
 
 export async function readAgentsMd(fs, baseDir) {
@@ -154,7 +221,7 @@ export async function deleteAgentsMd(fs, baseDir, revision = null, { home = "/ho
     const canonical = path.resolve(file);
     await fs.rm(file, { force: true });
     let unlinked = 0;
-    for (const target of agentsMdTargets(env, home)) {
+    for (const target of await instructionTargets(fs, env, home)) {
       try {
         const stat = await fs.lstat(target.path);
         if (!stat.isSymbolicLink()) continue;
@@ -179,7 +246,7 @@ export async function reconcileAgentsMd(fs, baseDir, { home = "/home/t3", env = 
   const allowed = only ? new Set(only) : null;
   const linked = [];
   const skipped = [];
-  for (const target of agentsMdTargets(env, home)) {
+  for (const target of await instructionTargets(fs, env, home)) {
     if (allowed && !allowed.has(target.provider)) continue;
     try {
       try {
@@ -205,8 +272,9 @@ export async function reconcileAgentsMd(fs, baseDir, { home = "/home/t3", env = 
 
 /** Read a known provider's existing file, following its symlinks. */
 export async function readProviderAgentsMd(fs, provider, { home = "/home/t3", env = {} } = {}) {
-  const target = agentsMdTargets(env, home).find((entry) => entry.provider === provider);
+  const target = (await instructionTargets(fs, env, home)).find((entry) => entry.provider === provider);
   if (!target) return { ok: false, code: "invalid", error: "Unknown instruction provider" };
+  if (target.error) return { ok: false, ...target, code: "unavailable" };
   let resolvedPath;
   try {
     resolvedPath = await fs.realpath(target.path);
@@ -238,12 +306,17 @@ export async function writeProviderAgentsMd(fs, provider, content, revision, opt
 
 /** The native file itself records whether a provider uses shared or separate instructions. */
 export async function providerInstructionState(fs, baseDir, provider, options = {}) {
-  const target = agentsMdTargets(options.env, options.home).find((entry) => entry.provider === provider);
+  const target = (await instructionTargets(fs, options.env, options.home)).find((entry) => entry.provider === provider);
   if (!target) return { ok: false, code: "invalid", error: "Unknown instruction provider" };
+  if (target.error) return { ok: false, ...target, mode: null };
+  let entries;
+  try { entries = await instructionEntries(fs, target); }
+  catch (error) { return { ok: false, ...target, mode: null, error: String(error?.message ?? error) }; }
+  const fallbackPaths = entries.rows.filter(row => row.entry && row.file !== target.path).map(row => row.file);
   let entry;
   try { entry = await fs.lstat(target.path); }
   catch (error) {
-    if (error?.code === "ENOENT") return { ok: true, ...target, mode: null, sourceRevision: revisionFor(target.path, "missing"), error: null };
+    if (error?.code === "ENOENT") return { ok: true, ...target, mode: null, fallbackPaths, sourceRevision: revisionFor(target.path, "missing\0" + entries.fingerprint), error: null };
     return { ok: false, ...target, error: String(error?.message ?? error) };
   }
   const read = await readProviderAgentsMd(fs, provider, options);
@@ -254,7 +327,7 @@ export async function providerInstructionState(fs, baseDir, provider, options = 
   const link = entry.isSymbolicLink() ? await fs.readlink(target.path) : "regular";
   return {
     ok: true, ...target, mode,
-    sourceRevision: revisionFor(target.path, link + "\0" + read.revision),
+    sourceRevision: revisionFor(target.path, link + "\0" + read.revision + "\0" + entries.fingerprint), fallbackPaths,
     resolvedPath: read.resolvedPath, bytes: read.bytes, modifiedAt: read.modifiedAt, error: null,
   };
 }
@@ -266,7 +339,8 @@ export async function setProviderInstructionMode(fs, baseDir, provider, mode, so
   if (!initial.ok) return initial;
   // Clearing an already-absent provider is a no-op, but still checks the
   // revision so a stale selector cannot hide a file created elsewhere.
-  return withInstructionWrite(initial.resolvedPath || initial.path, async () => {
+  const sourceLock = path.join(path.dirname(initial.path), ".t3-instruction-source");
+  return withInstructionWrite(sourceLock, () => withInstructionWrite(initial.resolvedPath || initial.path, async () => {
     const state = await providerInstructionState(fs, baseDir, provider, options);
     if (!state.ok) return state;
     if (!sourceRevision || state.sourceRevision !== sourceRevision) return changedInstructions();
@@ -276,18 +350,20 @@ export async function setProviderInstructionMode(fs, baseDir, provider, mode, so
     const backup = state.path + ".t3-context-backup";
     const temporary = state.path + ".tmp." + randomBytes(6).toString("hex");
     if (mode === "none") {
-      // Remove the provider file so no instructions apply. A separate file is
-      // kept in the backup slot so Separate can restore it later; a shared
-      // link is simply unlinked and any existing backup is left for Separate.
-      if (state.mode === "separate") {
-        try {
-          await fs.lstat(backup);
-          return { ok: false, code: "conflict", error: "A previous instruction backup already exists: " + backup };
-        } catch (error) { if (error?.code !== "ENOENT") throw error; }
-        await fs.rename(state.path, backup);
-      } else {
-        await fs.rm(state.path, { force: true });
+      const snapshot = await instructionEntries(fs, state), moves = [], cleanup = [];
+      const sharedPath = await fs.realpath(shared.path).catch(() => path.resolve(shared.path));
+      // Preflight every native fallback before moving anything. Otherwise
+      // removing an override silently activates a lower-priority file.
+      for (const row of snapshot.rows.filter(row => row.entry)) {
+        await readInstructionFile(fs, row.file);
+        const isShared = row.entry.stat.isSymbolicLink() && await fs.realpath(row.file) === sharedPath;
+        if (!isShared && row.backup) return { ok: false, code: "conflict", error: "A previous instruction backup already exists: " + row.file + ".t3-context-backup" };
+        const destination = row.file + (isShared ? ".tmp." + randomBytes(6).toString("hex") : ".t3-context-backup");
+        moves.push([row.file, destination]);
+        if (isShared) cleanup.push(destination);
       }
+      if ((await providerInstructionState(fs, baseDir, provider, options)).sourceRevision !== sourceRevision) return changedInstructions();
+      await moveInstructionEntries(fs, moves, cleanup);
       return { ok: true, provider, mode: null };
     }
     if (mode === "shared") {
@@ -302,29 +378,30 @@ export async function setProviderInstructionMode(fs, baseDir, provider, mode, so
             await fs.lstat(backup);
             return { ok: false, code: "conflict", error: "A previous instruction backup already exists: " + backup };
           } catch (error) { if (error?.code !== "ENOENT") throw error; }
-          await fs.rename(state.path, backup);
+          await moveInstructionEntry(fs, state.path, backup);
           backedUp = true;
         }
-        try { await fs.rename(temporary, state.path); }
+        try { await fs.link(temporary, state.path); }
         catch (error) {
-          if (backedUp) await fs.rename(backup, state.path);
+          if (backedUp) await moveInstructionEntry(fs, backup, state.path);
           throw error;
         }
       } finally { await fs.rm(temporary, { force: true }); }
     } else {
-      let restore = false;
-      try { await fs.lstat(backup); restore = true; }
-      catch (error) { if (error?.code !== "ENOENT") throw error; }
-      if (restore) {
-        // Renaming restores even relative symlinks verbatim at their original location.
-        await fs.rename(backup, state.path);
+      const snapshot = await instructionEntries(fs, state);
+      const restore = snapshot.rows.filter(row => row.backup && (!row.entry || row.file === state.path));
+      if (restore.length) {
+        const moves = [], cleanup = [];
+        if (state.mode === "shared") { moves.push([state.path, temporary]); cleanup.push(temporary); }
+        for (const row of restore) moves.push([row.file + ".t3-context-backup", row.file]);
+        await moveInstructionEntries(fs, moves, cleanup);
       } else {
         const content = shared.content || "# " + provider + " instructions\n";
         await writeFileAtomic(fs, state.path, content);
       }
     }
     return { ok: true, provider, mode };
-  });
+  }), instructionModeWrites);
 }
 
 /** Return metadata only; instruction text stays server-side until the editor opens. */
@@ -333,9 +410,9 @@ export async function contextStatus(fs, { baseDir, home = "/home/t3", env = {} }
   const snapshotFs = { ...fs, [instructionReads]: new Map() };
   const read = await readAgentsMd(snapshotFs, baseDir);
   const providers = [];
-  for (const target of agentsMdTargets(env, home)) {
+  for (const target of await instructionTargets(fs, env, home)) {
     const state = await providerInstructionState(snapshotFs, baseDir, target.provider, { home, env });
-    providers.push({ ...target, mode: state.mode, sourceRevision: state.sourceRevision, bytes: state.bytes, modifiedAt: state.modifiedAt, error: state.error ?? null });
+    providers.push({ ...target, mode: state.mode, fallbackPaths: state.fallbackPaths, sourceRevision: state.sourceRevision, bytes: state.bytes, modifiedAt: state.modifiedAt, error: state.error ?? null });
   }
   return { agentsMd: { present: read.present, path: read.path, bytes: read.bytes, revision: read.revision, modifiedAt: read.modifiedAt, error: read.error }, providers };
 }

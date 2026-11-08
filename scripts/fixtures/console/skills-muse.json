@@ -18,18 +18,31 @@
       "description": "Read this skill before the first step that uses the built-in browser, the browser pane inside the Claude desktop app: sign-ins, tabs and site approvals.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 2048,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -46,18 +59,31 @@
       "description": "Read this skill before the first step that uses Claude in Chrome, the browser extension that acts in your real Chrome with your own sign-ins.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 2135,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -74,18 +100,31 @@
       "description": "Read before any request to do something in an app on your own computer, or to look at your screen. Covers access, picking the right tool and safety rules.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 2222,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -102,18 +141,31 @@
       "description": "Use when a prompt needs research across many sources, a comparison of options or a review of studies, synthesised into a narrative report.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 4628,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -130,18 +182,31 @@
       "description": "Editable docs people share and comment on: the default for any document, report, proposal or guide to keep, share or print.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 2396,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -158,18 +223,31 @@
       "description": "Use whenever you want to create, read, edit or manipulate Word documents (.docx) or Word templates (.dotx).",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 2483,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -186,18 +264,31 @@
       "description": "Distinctive, intentional visual design when building new UI or reshaping an existing one: aesthetic direction, typography and choices that don’t read as templated.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 2570,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -214,18 +305,31 @@
       "description": "Read before the first Google Drive, Docs, Sheets or Slides connector call whenever the task creates or changes a Google file.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 2657,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -242,18 +346,31 @@
       "description": "Import a memory export from another AI assistant into Claude’s memory, conversationally and additively, with the content treated as data.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 2744,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -270,18 +387,31 @@
       "description": "Persistent memory layer using Memax: recall past context and store new learnings across sessions through the Memax tools.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 2831,
       "error": null,
       "metadataError": "Name doesn’t match folder: use memax-memory in the frontmatter name.",
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -298,18 +428,31 @@
       "description": "Render your morning brief as a styled page, or set it up as a recurring weekday task. Use only when you ask for the brief.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 2918,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -326,18 +469,31 @@
       "description": "Anything with PDF files: read or extract text and tables, merge or split, rotate, watermark, fill forms and OCR scanned pages.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 3005,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -354,18 +510,31 @@
       "description": "Any time a .pptx or .potx file is involved, as input, output or both: decks, templates, speaker notes and layouts.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 3092,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -382,18 +551,31 @@
       "description": "Create new skills, improve existing ones and measure how reliably they trigger, with evals and benchmark variance.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 3179,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -410,18 +592,31 @@
       "description": "Any task where a spreadsheet file is the main input or output: open, fix, build, chart or convert .xlsx, .csv and .tsv files.",
       "source": "Claude compatibility",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 3266,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -438,18 +633,31 @@
       "description": "Helps discover and install agent skills when you ask how to do something, look for a skill, or want to extend what an agent can do.",
       "source": "Shared .agents",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 3353,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": false,
       "canRemove": false,
@@ -466,18 +674,31 @@
       "description": "House rules for commit messages: an imperative subject under 72 characters, a wrapped body that says why, and no trailers.",
       "source": "Shared .agents",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 3440,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-muse",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": true,
       "canRemove": true,
@@ -494,18 +715,31 @@
       "description": "A reusable workflow in this agent’s native folder.",
       "source": "Provider",
       "scope": "user",
-      "state": "unknown",
+      "state": "on",
       "native": false,
       "bytes": 3527,
       "error": null,
       "metadataError": null,
       "canToggle": false,
-      "canSetState": false,
-      "stateOptions": [],
+      "canSetState": true,
+      "stateOptions": [
+        {
+          "value": "on",
+          "label": "On"
+        },
+        {
+          "value": "user-invocable-only",
+          "label": "Manual only"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ],
       "stateRevision": "fixture-state-cursor",
-      "stateAuthority": "files",
-      "statePath": null,
-      "effectiveStateText": null,
+      "stateAuthority": "user-policy",
+      "statePath": "/home/t3/.config/muse/settings.json",
+      "effectiveStateText": "Saved user setting. Native project, package and session settings can further restrict availability.",
       "stateReadOnlyReason": null,
       "canEdit": true,
       "canRemove": true,
@@ -541,7 +775,7 @@
       "scope": "user"
     }
   ],
-  "coverage": "files",
+  "coverage": "settings",
   "warnings": [],
   "nativeError": null,
   "scannedAt": 1792575000000

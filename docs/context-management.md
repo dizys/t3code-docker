@@ -30,6 +30,22 @@ missing native files:
 | Claude Code | `~/.claude/CLAUDE.md` | `CLAUDE_CONFIG_DIR` |
 | Codex | `~/.codex/AGENTS.md` | `CODEX_HOME` |
 | OpenCode | `$OPENCODE_CONFIG_DIR/AGENTS.md` | `OPENCODE_CONFIG_DIR`; native fallback uses `XDG_CONFIG_HOME` |
+| Cursor | `~/.cursor/t3-instructions/AGENTS.md` | Loaded as an additional workspace by T3's Cursor SDK bridge |
+| Grok Build | `~/.grok/rules/t3-instructions.md` | `GROK_HOME` |
+| Muse Code | `~/.config/muse/AGENTS.md` | `XDG_CONFIG_HOME` |
+| Antigravity | `~/.gemini/config/AGENTS.md` | Linked into T3's private `GEMINI_HOME` |
+| Pi | `~/.pi/agent/AGENTS.md` | `PI_CODING_AGENT_DIR` |
+
+Codex and Pi use an existing `AGENTS.override.md` before `AGENTS.md`. Pi also
+recognizes existing `AGENTS.MD`, `CLAUDE.md` and `CLAUDE.MD` fallbacks. Setup
+edits the file selected by that precedence instead of creating a shadowed file.
+Cursor's bridge preserves the primary project, other workspace directories and
+the SDK's native system prompt. Its instruction workspace applies to T3 sessions.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="media/agent-resources/instructions-dark.png">
+  <img src="media/agent-resources/instructions-light.png" alt="Shared and separate instruction choices for all eight agents" width="1440">
+</picture>
 
 The shared file's header says which agents read it. Its actions menu offers
 upload, download and delete; the preview refreshes when its revision changes or
@@ -41,16 +57,23 @@ reads**, each agent has one choice of three:
   that agent. **Edit** opens the shared editor. Switching an existing own file to it
   asks for confirmation and backs up its directory entry next to the native file,
   with the suffix `.t3-context-backup`. Existing backups are never overwritten.
-- **Its own** `CLAUDE.md` or `AGENTS.md` uses the agent's own file, with its path
+- **Own file** uses the agent's native instruction file, with its path
   under the agent's name. Switching back restores its previous
   file, including the original permissions or relative symlink. If there is no
   previous file, it starts with a copy of the shared instructions; before shared
   instructions exist, it starts with a Markdown heading. Its editor opens after
   switching. Later shared edits leave its own file alone.
-- **Nothing** removes the native link or parks its own file in its backup slot,
+- **No managed global instructions** removes the native link or parks its own file in its backup slot,
   after asking. Later global edits leave it disconnected; choosing its own file
   again restores the backup.
+  For Codex and Pi, native fallback files are also backed up so removing an
+  override cannot activate a lower-priority file. The confirmation lists those
+  additional paths. Choosing Own file restores the original set, including
+  relative symlinks and permissions. Backup conflicts are checked before any
+  file moves, and a failed change rolls completed moves back without replacing
+  an occupied destination.
   Deleting the global file disconnects shared providers and keeps backups.
+  Existing native fallback and project instructions may still apply after deletion.
   Creating the global file again bootstraps missing native links.
 
 Source choices are inferred from the native files and links; there is no new
@@ -83,14 +106,15 @@ Start a new agent session after saving: an existing session may retain the
 instructions it loaded at startup. Project instructions and provider-specific
 precedence still apply.
 
-Only these three native instruction integrations are included. Project
-instruction editing, saved setups and Cursor rule translation are outside this page.
+All eight agents support global instructions. Project instruction editing,
+saved setups and conversion to provider-specific rule formats are outside this page.
+Other native rules and project instructions may still apply when no global file is managed here.
 Skills and source imports are described below.
 
 ## Global skill inventory
 
 The **Skills** tab is one library across installed Claude Code, Codex,
-OpenCode, Cursor, Grok Build, Muse Code and Antigravity agents. Each physical
+OpenCode, Cursor, Grok Build, Muse Code, Antigravity and Pi agents. Each physical
 `SKILL.md` is one row, joined by resolved path, with one column per installed
 agent. A name appearing in two different folders remains two installations.
 The **View** menu offers **Unified view · one row per skill name** for the
@@ -151,8 +175,10 @@ fall back to the local list with a reason. Custom T3 provider binaries,
 environments and project/session overrides may produce different inventories.
 
 Claude and OpenCode supplement known-folder discovery with native user policies
-and runtime metadata, as described below. Cursor, Grok, Muse and Antigravity show
-**Found** with a discovery-only explanation. Plugin inventories and configured extra locations
+and runtime metadata, as described below. Grok, Muse and Pi expose saved native
+user settings. Cursor and Antigravity can park ordinary local installations
+outside discovery. These controls do not claim effective session availability.
+Plugin inventories and configured extra locations
 are outside the basic known-folder inventory.
 
 **View → Show bundled skills** controls entries identified as system skills,
@@ -185,7 +211,7 @@ startup may maintain its own system-skill cache as usual.
 
 ### Add, edit and remove local skills
 
-All seven providers' own user skill folders support **New skill**,
+All eight providers' own user skill folders support **New skill**,
 **Edit** and **Remove**. Add accepts a portable folder name and raw Markdown,
 including upload/paste. The frontmatter name must match the new folder name.
 Existing installation names are never overwritten; new files use mode `0600`.
@@ -278,7 +304,7 @@ The three steps keep one reviewed snapshot throughout:
    **Review again** reviews a failed destination using the same snapshot, without
    repeating successful writes. **Show in library** highlights the installed names.
 
-**Fewest copies** checks all subsets of at most seven writable, installed agents'
+**Fewest copies** checks all subsets of the writable, installed agents'
 own folders. It minimizes physical folders, then agents reading duplicate copies,
 then prefers agents' own folders. With Claude, Codex, OpenCode, Cursor and Grok
 selected, it uses Claude's and Codex's folders; Cursor can find both identical
@@ -291,7 +317,7 @@ the planner retains the handoff's ordering rather than guessing runtime behavior
 New skills use each agent's defaults; the result does not claim Codex enabled them.
 
 The reach map comes from authenticated `GET /context/skills/reach`. It uses the
-same seven-provider roots and environment overrides as discovery, joins aliases
+same eight-provider roots and environment overrides as discovery, joins aliases
 by resolved path, and reports readers and writable owning providers. It grants
 no write authority: the plan/install APIs still validate every destination.
 Closing discards the snapshot; a late response is discarded too. Snapshots expire
@@ -315,6 +341,7 @@ Imports create independent local copies in these native global locations:
 | Grok Build | `~/.grok/skills` | `GROK_HOME` |
 | Muse Code | `~/.config/muse/skills` | `XDG_CONFIG_HOME` |
 | Antigravity | `~/.gemini/config/skills` | — |
+| Pi | `~/.pi/agent/skills` | `PI_CODING_AGENT_DIR` |
 
 The Antigravity inventory also includes `~/.gemini/antigravity-cli/skills`;
 T3 links both native roots into its private provider profile. Its CLI folder
@@ -494,7 +521,46 @@ filesystem checks; this is not a cross-application transaction.
 
 All native default locations, including both scoped Antigravity skills directories,
 participate in agent persistence when `T3_PERSIST_AGENT_CREDENTIALS` is enabled.
-Custom paths require their own mounts. The rest of `.gemini` is left in place.
+Antigravity's global config, parked skills and optional standalone instruction
+files also persist. Existing scoped skill links are retained during migration.
+Custom paths require their own mounts. Unrelated `.gemini` resources stay in place.
+
+### Grok, Muse and Pi skill settings
+
+Grok writes the skill name to `[skills].disabled` in `config.toml`. Muse writes
+On, Manual only or Off under `skills.activation.user` in `settings.json`, using
+native display paths such as `$CONFIG_DIR/skills/name/SKILL.md`. Pi writes exact
+`+absolute-path` or `-absolute-path` entries to `settings.json.skills`, preserving
+other paths, globs and package settings. Writes preserve unrelated settings,
+share the MCP configuration queue and reject stale revisions or retargeted links.
+Grok changes also refresh connected gateway profiles without interrupting turns.
+Muse's native `null` activation is shown as Off and can be changed explicitly.
+
+These states report the saved user setting. Project, package, enterprise and
+session overrides can affect actual availability. The console does not verify
+every configured extra skill path or run a model turn to infer availability.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="media/agent-resources/skills-dark.png">
+  <img src="media/agent-resources/skills-light.png" alt="Muse skill inspector showing its native Manual only user setting" width="1440">
+</picture>
+
+### Cursor and Antigravity skill placement
+
+These agents do not expose a verified native per-skill Off setting. For an
+ordinary local installation in the provider's own folder, Off moves its complete
+directory into the adjacent `skills.t3-disabled` folder. On restores it. Scripts,
+references and permissions are retained; directory links keep their target.
+Parked skills remain visible and can be restored, but cannot be edited in place.
+An open inspector follows the moved installation, refreshes its path and file
+revisions, and preserves unsaved drafts. Discovery is refreshed for other agents
+that read the same folder.
+
+Shared, package, system and plugin installations remain managed through their
+source. Duplicate active names must be resolved before moving a copy. A move
+affects every agent reading that folder, so the control explains its scope.
+Destinations are checked before moving; an occupied destination is a conflict.
+Start a new session after changing placement or native settings.
 
 ### Native Codex availability
 
@@ -696,7 +762,10 @@ checks install supporting files, change a native policy, update the complete
 folder without changing that policy, verify discovery in a fresh process and
 remove the installation. Claude 2.1.302, Codex 0.163.0 and OpenCode 1.19.3/2.0.32 passed
 this lifecycle without a model turn. Browser images also
-run the Skills UI audit. Cursor/Grok/Muse/Antigravity native activation remains later work.
+run the Skills UI audit. Grok, Muse and Pi native user settings can be checked with
+`node scripts/agent-resources-native-smoke.mjs PROVIDER /absolute/path/to/executable`.
+It uses disposable homes without external inference. Cursor and Antigravity
+placement and runtime bridges have separate source and filesystem regressions.
 
 Runtime discovery was checked on 2026-10-15 with Claude Code 2.1.300,
 Codex 0.162.1 and OpenCode 2.0.29. Each CLI ran in a temporary home, with its

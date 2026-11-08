@@ -18,7 +18,10 @@ fs.mkdirSync(output, {recursive:true});
  for (const [width, height, embedded] of [[360, 720], [390, 844], [820, 900], [1280, 900], [1198, 878, true]]) {
  const page = await browser.newPage({viewport:{width,height},colorScheme:theme,reducedMotion:'reduce'});
  await page.addInitScript(mode => localStorage.setItem('t3-console-theme', mode), theme);
- const providerModes = {claude:'separate',codex:'separate',opencode:'separate'};
+ const agentIds = ['claude','codex','opencode','cursor','grok','muse','antigravity','pi'];
+ const instructionFiles = {claude:'CLAUDE.md',codex:'AGENTS.override.md',grok:'t3-instructions.md',pi:'CLAUDE.MD'};
+ const agentNames = {claude:'Claude Code',codex:'Codex',opencode:'OpenCode',cursor:'Cursor',grok:'Grok Build',muse:'Muse Code',antigravity:'Antigravity',pi:'Pi'};
+ const providerModes = Object.fromEntries(agentIds.map(id => [id, 'separate']));
  let oversizedStatus = false, emptyStatus = true, unreadableStatus = false;
  let previewFail = true;
  let previewContent = '# Preview instructions';
@@ -31,7 +34,7 @@ fs.mkdirSync(output, {recursive:true});
    const response = await route.fetch();
    const status = await response.json();
    status.context.agentsMd = {present:true,bytes:12,path:'/home/t3/.t3/setup/context/AGENTS.md'};
-   status.context.providers = ['claude', 'codex', 'opencode'].map(provider => ({provider, mode:providerModes[provider],sourceRevision:provider+'-'+providerModes[provider],path:'/home/t3/a-very-long-existing-configuration-directory-for-' + provider + '/AGENTS.md', bytes:12}));
+   status.context.providers = agentIds.map(provider => ({provider, mode:providerModes[provider],sourceRevision:provider+'-'+providerModes[provider],path:'/home/t3/a-very-long-existing-configuration-directory-for-' + provider + '/' + (instructionFiles[provider] || 'AGENTS.md'), fallbackPaths:provider === 'codex' ? ['/home/t3/.codex/AGENTS.md'] : [], bytes:12}));
    if (emptyStatus) { status.context.agentsMd = {present:false,bytes:0,...(unreadableStatus ? {error:'Fixture instructions read failure'} : {})}; }
    if (oversizedStatus) {
      status.context.agentsMd = {present:true,bytes:65537,error:oversizedError};
@@ -52,6 +55,7 @@ fs.mkdirSync(output, {recursive:true});
  }
  await page.goto(base + (embedded ? '?embed=t3&theme=' + theme : '') + '#instructions');
  await page.locator('.tc-ins-empty').waitFor();
+ assert.equal(await page.locator('.tc-reads-path').count(), 8, 'All eight agents expose their global instruction path');
  const emptyLayout = await page.locator('.tc-ins-empty').evaluate(card => {
    const box = card.getBoundingClientRect(), center = box.x + box.width / 2;
    return [...card.children].map(child => { const r=child.getBoundingClientRect();return {center:Math.abs(r.x+r.width/2-center),width:r.width}; });
@@ -64,6 +68,15 @@ fs.mkdirSync(output, {recursive:true});
    assert(metadata.every(item => item.height <= item.lineHeight + 1),'file sizes stay together beside long paths');
    if(width<1024)assert((await row.getByRole('button',{name:/Edit/}).boundingBox()).height>=44,'own-file edits keep a 44px touch target');
  }
+ for (const button of await page.locator('[data-cmd="context.provider.mode"]').all()) {
+   assert(await button.evaluate(el => {
+     const text = document.createRange(); text.selectNodeContents(el);
+     const label = text.getBoundingClientRect(), box = el.getBoundingClientRect();
+     return label.left >= box.left - 1 && label.right <= box.right + 1;
+   }), 'instruction source labels fit inside their button with native and override filenames');
+ }
+ assert.equal(await page.locator('[data-id="grok"][data-mode="separate"]').getAttribute('aria-label'),'Own t3-instructions.md');
+ assert.equal(await page.locator('[data-id="codex"][data-mode="separate"]').getAttribute('title'),'Use AGENTS.override.md');
  await page.locator('#page-instructions').screenshot({path:path.join(output,`${theme}-${width}${embedded?'-embedded':''}-empty.png`)});
  unreadableStatus = true; await page.reload();
  await page.getByText('Shared instructions unavailable',{exact:true}).waitFor();
@@ -211,14 +224,15 @@ fs.mkdirSync(output, {recursive:true});
    providerSaves++;
    await route.fulfill({status:conflict ? 409 : 200,json:conflict ? {ok:false,error:'Instructions changed since you opened them.'} : {ok:true}});
  });
- assert.equal(await page.locator('[data-cmd="context.provider.edit"]').count(),3);
- for (const provider of ['claude','codex','opencode']) {
+ assert.equal(await page.locator('[data-cmd="context.provider.edit"]').count(),8);
+ for (const provider of agentIds) {
    expectedProvider = provider;
    await page.locator('[data-cmd="context.provider.edit"][data-id="' + provider + '"]').click();
    await page.waitForFunction(text => document.querySelector('#cx-input')?.value === text,'# Existing ' + provider);
+   await page.getByRole('heading',{name:agentNames[provider] + '’s ' + (instructionFiles[provider] || 'AGENTS.md'),exact:true}).waitFor();
    await checkCentered();
    await page.locator('#cx-input').fill('# Edited ' + provider);
-   await checkDownload(provider === 'claude' ? 'CLAUDE.md' : 'AGENTS.md','# Edited ' + provider);
+   await checkDownload(instructionFiles[provider] || 'AGENTS.md','# Edited ' + provider);
    if (provider === 'codex') {
      conflict = true;
      await page.getByRole('button',{name:'Save',exact:true}).click();
@@ -229,7 +243,7 @@ fs.mkdirSync(output, {recursive:true});
    await page.getByRole('button',{name:'Save',exact:true}).click();
    await page.waitForFunction(() => !document.querySelector('[role="dialog"]'));
  }
- assert.equal(providerSaves,4);
+ assert.equal(providerSaves,9);
  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),false);
  // What each agent reads is one choice, and it says what is in effect: a
  // cancelled or failed change shows the old choice again.
@@ -242,6 +256,13 @@ fs.mkdirSync(output, {recursive:true});
  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  assert.equal(modeSaves,0);
  assert.equal(await modeValue(),'separate','a cancelled change shows the choice in effect');
+ await chooseMode('none');
+ const disconnect = page.getByRole('alertdialog');
+ await disconnect.waitFor();
+ await disconnect.getByText('/home/t3/.codex/AGENTS.md',{exact:true}).waitFor();
+ assert.match(await disconnect.innerText(), /other global instruction files are also backed up/);
+ await disconnect.getByRole('button',{name:'Cancel',exact:true}).click();
+ assert.equal(modeSaves,0,'reviewing fallback files does not disconnect instructions');
  await chooseMode('shared');
  await page.getByRole('button',{name:'Use shared',exact:true}).click();
  await page.waitForFunction(() => document.querySelector('[data-cmd="context.provider.mode"][data-id="codex"][data-mode="shared"]')?.getAttribute('aria-pressed') === 'true' && !document.querySelector('[data-cmd="context.provider.mode"][data-id="codex"]').disabled);

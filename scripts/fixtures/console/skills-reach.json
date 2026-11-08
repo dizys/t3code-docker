@@ -162,7 +162,8 @@
         "opencode",
         "cursor",
         "grok",
-        "muse"
+        "muse",
+        "pi"
       ],
       "writableOwners": [],
       "writable": true,
@@ -215,6 +216,26 @@
       "writableOwners": [],
       "writable": false,
       "source": "Antigravity CLI",
+      "scope": "user"
+    },
+    {
+      "path": "/home/t3/.pi/agent/skills",
+      "resolvedPath": "/home/t3/.t3/agents/.pi/agent/skills",
+      "paths": [
+        "/home/t3/.pi/agent/skills"
+      ],
+      "owner": "pi",
+      "owners": [
+        "pi"
+      ],
+      "readers": [
+        "pi"
+      ],
+      "writableOwners": [
+        "pi"
+      ],
+      "writable": true,
+      "source": "Provider",
       "scope": "user"
     }
   ]

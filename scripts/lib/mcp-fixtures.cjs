@@ -75,7 +75,7 @@ function createMcpFixtures(initial) {
       }
       if (route === '/context/mcp/link') {
         if (!p || input.sharedRevision !== data.shared.revision || input.providerRevision !== p.revision) return failure(409, 'Settings changed elsewhere.');
-        if (input.enabled === false && !['codex', 'opencode'].includes(p.provider)) return failure(403, 'This agent has no global off switch.');
+        if (input.enabled === false && !['codex', 'opencode', 'grok', 'muse', 'pi', 'antigravity'].includes(p.provider)) return failure(403, 'This agent has no global off switch.');
         if (input.linked) entries[p.provider][name] = { server: clone(definitions[name]), enabled: input.enabled ?? entries[p.provider][name]?.enabled ?? true, extra: [] };
         else delete entries[p.provider][name];
         p.revision = p.provider + '-fixture-' + ++revision; rebuild(); return body({ provider: p.provider, name, linked: input.linked, revision: p.revision });

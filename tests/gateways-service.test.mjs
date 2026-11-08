@@ -10,6 +10,8 @@ import test from 'node:test';
 import { createGatewayService, gatewayFailure } from '../docker/setup/gateways.mjs';
 import { createGatewayT3 } from '../docker/setup/gateways/t3.mjs';
 import { parse as parseToml } from '../docker/setup/vendor/toml-patch.mjs';
+import { createMcpService } from '../docker/setup/mcp.mjs';
+import { createSkillsService } from '../docker/setup/skills.mjs';
 
 const REDACTED = { redacted: true };
 const redacted = instance => ({ ...instance, environment: instance.environment?.map(row => row.sensitive ? { ...row, value: '', valueRedacted: true } : row) });
@@ -90,7 +92,14 @@ async function harness(t, options = {}) {
 }
 const add = (h, agents = ['claude', 'codex', 'opencode'], over = {}) => h.service.create({ gateway: { name: 'My Proxy', preset: 'cliproxyapi', url: h.gateway.url, agents, ...over }, key: 'sk-one' });
 const turn = async (h, id, agent, connected, more = {}) => { const { revision } = await h.service.status(); return h.service.setAgent({ id, agent, connected, revision, ...more }); };
-const settled = () => new Promise(resolve => setTimeout(resolve, 30));
+const settled = async h => {
+  if (!h) return new Promise(resolve => setTimeout(resolve, 30));
+  const deadline = Date.now() + 5000;
+  while ((await h.service.status()).gateways.some(row => row.settling)) {
+    assert.ok(Date.now() < deadline, 'Gateway model discovery must settle before external edits.');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+};
 
 test('adding a gateway creates one instance per agent and leaves default instances alone', async t => {
   const h = await harness(t), before = structuredClone(h.t3.state.instances);
@@ -191,6 +200,32 @@ test('invalid Grok user TOML fails only Grok without overwriting user files', as
   assert.match(results.find(row => row.agent === 'grok').error, /not valid TOML/);
   assert.equal(h.t3.state.instances['grok_gw_my-proxy'], undefined);
   assert.equal(await fs.readFile(path.join(source, 'config.toml'), 'utf8'), '[invalid');
+});
+
+test('native Grok resource saves refresh connected gateway homes without rewriting instances or keys', async t => {
+  const h = await harness(t, { gatewayModels: ['grok-custom'], instances: { grok: { driver: 'grok', config: {} } } });
+  const { id, results } = await add(h, ['grok']); assert.equal(results[0].ok, true);
+  await settled();
+  const before = structuredClone(h.t3.state.instances), writes = h.t3.writes.length, reads = h.vault.reads, stopped = h.stopped.length;
+  const configFile = path.join(h.root, `state/setup/gateways/agents/${id}.grok/config.toml`);
+  const routing = parseToml(await fs.readFile(configFile, 'utf8')).models;
+  const options = { home: h.home, env: {}, io: fs, baseDir: path.join(h.root, 'state'), onNativeChange: h.service.syncNativeResources };
+  const mcp = createMcpService(options), created = await mcp.create({ name: 'resource-probe', type: 'local', command: ['fixture'], env: { PRIVATE_FIXTURE: 'preserved' } });
+  await mcp.setLink('grok', 'resource-probe', true, created.revision);
+  let config = parseToml(await fs.readFile(configFile, 'utf8'));
+  assert.equal(config.mcp_servers['resource-probe'].env.PRIVATE_FIXTURE, 'preserved');
+  const skills = createSkillsService(options);
+  await skills.create('grok', 'resource-probe', '---\nname: resource-probe\ndescription: Probe native propagation\n---\n# Probe\n');
+  const row = (await skills.list('grok')).skills[0];
+  await skills.setState('grok', row.id, row.stateRevision, undefined, 'disabled');
+  config = parseToml(await fs.readFile(configFile, 'utf8'));
+  assert.deepEqual(config.skills.disabled, ['resource-probe']);
+  await mcp.setLink('grok', 'resource-probe', false, created.revision, (await mcp.list('grok')).revision);
+  config = parseToml(await fs.readFile(configFile, 'utf8'));
+  assert.equal(config.mcp_servers?.['resource-probe'], undefined);
+  assert.deepEqual(config.models, routing);
+  assert.deepEqual(h.t3.state.instances, before);
+  assert.equal(h.t3.writes.length, writes); assert.equal(h.vault.reads, reads); assert.equal(h.stopped.length, stopped);
 });
 
 test('CLIProxyAPI catalog discovery feeds every supported gateway adapter', async t => {
@@ -420,11 +455,13 @@ test('a key deleted from the Vault is flagged, and working agents are left runni
 });
 
 test('an owned setting changed in T3 Code is flagged, and additions are kept when restored', async t => {
-  const h = await harness(t), { id } = await add(h, ['claude']);
-  await settled();
+  let clock = Date.now();
+  const h = await harness(t, { now: () => clock }), { id } = await add(h, ['claude']);
+  await settled(h);
   const instance = h.t3.state.instances['claudeAgent_gw_my-proxy'];
   instance.environment = instance.environment.map(row => row.name === 'ANTHROPIC_BASE_URL' ? { ...row, value: 'http://elsewhere' } : row);
   instance.environment.push({ name: 'MY_FLAG', value: '1', sensitive: false });
+  clock += 1001; // External changes become visible after the status cache expires.
   const view = await h.service.status();
   assert.equal(view.gateways[0].agents[0].state, 'drift');
   await h.service.reapply({ id, revision: view.revision });
@@ -435,9 +472,11 @@ test('an owned setting changed in T3 Code is flagged, and additions are kept whe
 });
 
 test('renaming an instance in T3 Code is not drift, and survives a later apply', async t => {
-  const h = await harness(t), { id } = await add(h, ['claude']);
-  await settled();
+  let clock = Date.now();
+  const h = await harness(t, { now: () => clock }), { id } = await add(h, ['claude']);
+  await settled(h);
   h.t3.state.instances['claudeAgent_gw_my-proxy'].displayName = 'Work Claude';
+  clock += 1001;
   const view = await h.service.status();
   assert.equal(view.gateways[0].agents[0].state, 'ready');
   assert.equal(view.gateways[0].agents[0].displayName, 'Work Claude');

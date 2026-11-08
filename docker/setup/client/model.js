@@ -2094,6 +2094,7 @@ const T3Model = (() => {
         note: file.error ? null : file.mode === 'separate' ? file.path || null
           : file.mode === 'shared' && !(status?.context?.agentsMd || {}).present ? 'The shared file isn’t written yet' : null,
         path: file.path || null,
+        fallbackPaths: file.fallbackPaths || [],
         badge: file.error ? { tone: 'warn', text: 'Unavailable' } : null,
         mode: file.mode || null, bytes: file.bytes, modifiedAt: file.modifiedAt, sourceRevision: file.sourceRevision, error: file.error || null,
       };

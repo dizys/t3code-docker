@@ -43,7 +43,10 @@ export function createAdditionalSkillPolicies({ home, env, io, invalidate, onNat
     if (provider === 'muse') {
       const activation = config.skills?.activation?.user;
       if (activation !== undefined && !object(activation)) throw fail('unsupported', 'Muse user skill activation must be an object.');
-      return activation?.[museKey(row.path)] ?? (row.invocation === 'manual' ? 'user-invocable-only' : 'on');
+      const key = museKey(row.path);
+      // Muse's native null spelling disables a skill; absence uses its default.
+      return activation && Object.hasOwn(activation, key) ? activation[key] === null ? 'off' : activation[key]
+        : row.invocation === 'manual' ? 'user-invocable-only' : 'on';
     }
     // Exact Pi overrides take precedence over glob/package exclusions. Keep
     // arbitrary globs untouched and call this a user setting, not effective state.

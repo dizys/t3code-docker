@@ -460,11 +460,11 @@ test("mode changes reject stale selections and existing backups and roll back fa
   assert.equal(await fs.readFile(backup, 'utf8'), '# Existing backup');
   assert.equal(await fs.readFile(target.path, 'utf8'), '# New separate');
   await fs.unlink(backup);
-  const broken = { ...fs, rename: async (from, to) => {
-    if (from.includes('.tmp.')) throw new Error('switch rename failed');
-    return fs.rename(from, to);
+  const broken = { ...fs, link: async (from, to) => {
+    if (from.includes('.tmp.')) throw new Error('switch publish failed');
+    return fs.link(from, to);
   } };
-  await assert.rejects(setProviderInstructionMode(broken, f.baseDir, target.provider, 'shared', state.sourceRevision, f), /switch rename failed/);
+  await assert.rejects(setProviderInstructionMode(broken, f.baseDir, target.provider, 'shared', state.sourceRevision, f), /switch publish failed/);
   assert.equal(await fs.readFile(target.path, 'utf8'), '# New separate');
   await assert.rejects(fs.lstat(backup), { code: 'ENOENT' });
   assert.deepEqual(await fs.readdir(path.dirname(target.path)), ['CLAUDE.md']);

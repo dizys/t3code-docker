@@ -48,6 +48,12 @@ try {
     const row = (await skills.list(provider)).skills.find(row => row.path === file);
     await skills.setState(provider, row.id, row.stateRevision, undefined, 'off');
     result = await inspect(); assert.equal(result.skills.find(row => row.name === 'resource-probe').activation, 'off');
+    const settingsFile = path.join(home, '.config/muse/settings.json');
+    const settings = JSON.parse(await fs.readFile(settingsFile, 'utf8'));
+    settings.skills.activation.user['$CONFIG_DIR/skills/resource-probe/SKILL.md'] = null;
+    await fs.writeFile(settingsFile, JSON.stringify(settings));
+    assert.equal((await inspect()).skills.find(row => row.name === 'resource-probe').activation, 'off');
+    assert.equal((await skills.list(provider, { refresh: true })).skills.find(row => row.path === file).state, 'off', 'Muse null activation matches native Off.');
     for (const state of ['user-invocable-only', 'on']) {
       const current = (await skills.list(provider, { refresh: true })).skills.find(row => row.path === file);
       await skills.setState(provider, current.id, current.stateRevision, undefined, state);

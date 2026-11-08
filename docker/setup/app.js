@@ -4107,7 +4107,7 @@
       if (!view.present) return;
       const confirmed = await Kit.confirm({
         title: 'Delete the shared AGENTS.md?',
-        body: 'Agents set to read it read nothing until you write it again, or give them a file of their own.',
+        body: 'The shared file and its managed links are removed. Native fallback and project instructions can still apply. Backups are kept.',
         confirm: 'Delete',
       });
       if (!confirmed) return;
@@ -4144,9 +4144,11 @@
         if (a.mode === 'none') {
           const confirmed = await Kit.confirm({
             title: row.name + ': remove these global instructions?',
-            body: row.mode === 'separate'
+            body: (row.mode === 'separate'
               ? 'Its own ' + row.ownFile + ' is backed up, and comes back if you choose it again.'
-              : 'It stops reading the shared AGENTS.md. A file of its own backed up earlier is kept for later.',
+              : 'It stops reading the shared AGENTS.md. A file of its own backed up earlier is kept for later.')
+              + (row.fallbackPaths.length ? ' Its other global instruction files are also backed up so they cannot become active.' : ''),
+            consequences: row.fallbackPaths.map(file => ({ icon: 'file-text', text: file })),
             confirm: 'Disconnect instructions',
           });
           if (!confirmed) return;

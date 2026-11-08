@@ -34,7 +34,7 @@ fs.mkdirSync(output, {recursive:true});
    const response = await route.fetch();
    const status = await response.json();
    status.context.agentsMd = {present:true,bytes:12,path:'/home/t3/.t3/setup/context/AGENTS.md'};
-   status.context.providers = agentIds.map(provider => ({provider, mode:providerModes[provider],sourceRevision:provider+'-'+providerModes[provider],path:'/home/t3/a-very-long-existing-configuration-directory-for-' + provider + '/' + (instructionFiles[provider] || 'AGENTS.md'), bytes:12}));
+   status.context.providers = agentIds.map(provider => ({provider, mode:providerModes[provider],sourceRevision:provider+'-'+providerModes[provider],path:'/home/t3/a-very-long-existing-configuration-directory-for-' + provider + '/' + (instructionFiles[provider] || 'AGENTS.md'), fallbackPaths:provider === 'codex' ? ['/home/t3/.codex/AGENTS.md'] : [], bytes:12}));
    if (emptyStatus) { status.context.agentsMd = {present:false,bytes:0,...(unreadableStatus ? {error:'Fixture instructions read failure'} : {})}; }
    if (oversizedStatus) {
      status.context.agentsMd = {present:true,bytes:65537,error:oversizedError};
@@ -256,6 +256,13 @@ fs.mkdirSync(output, {recursive:true});
  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  assert.equal(modeSaves,0);
  assert.equal(await modeValue(),'separate','a cancelled change shows the choice in effect');
+ await chooseMode('none');
+ const disconnect = page.getByRole('alertdialog');
+ await disconnect.waitFor();
+ await disconnect.getByText('/home/t3/.codex/AGENTS.md',{exact:true}).waitFor();
+ assert.match(await disconnect.innerText(), /other global instruction files are also backed up/);
+ await disconnect.getByRole('button',{name:'Cancel',exact:true}).click();
+ assert.equal(modeSaves,0,'reviewing fallback files does not disconnect instructions');
  await chooseMode('shared');
  await page.getByRole('button',{name:'Use shared',exact:true}).click();
  await page.waitForFunction(() => document.querySelector('[data-cmd="context.provider.mode"][data-id="codex"][data-mode="shared"]')?.getAttribute('aria-pressed') === 'true' && !document.querySelector('[data-cmd="context.provider.mode"][data-id="codex"]').disabled);

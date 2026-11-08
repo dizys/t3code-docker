@@ -153,7 +153,9 @@ export async function readProviderMcp(io, provider, { home, env = {} }) {
   let entries, v2 = false;
   if (["codex", "grok"].includes(provider)) entries = [...parseMcpToml(snapshot.content)];
   else {
-    const container = containerFor(provider, jsonDocument(snapshot.content, provider !== "opencode"));
+    const value = jsonDocument(snapshot.content, provider !== "opencode");
+    if (provider === "muse" && value.schema_version !== undefined && value.schema_version !== 1) throw problem("unsupported", "This Muse settings schema is not supported. Existing settings were preserved.");
+    const container = containerFor(provider, value);
     entries = Object.entries(container.entries); v2 = container.v2;
   }
   const from = provider === "codex" ? fromCodexEntry : provider === "opencode" ? (name, entry) => fromOpenCodeEntry(name, entry, v2) : provider === "cursor" ? fromCursorEntry : provider === "claude" ? fromClaudeEntry : (name, entry) => fromAdditionalEntry(provider, name, entry);

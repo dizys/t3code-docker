@@ -66,7 +66,14 @@ reads**, each agent has one choice of three:
 - **No managed global instructions** removes the native link or parks its own file in its backup slot,
   after asking. Later global edits leave it disconnected; choosing its own file
   again restores the backup.
+  For Codex and Pi, native fallback files are also backed up so removing an
+  override cannot activate a lower-priority file. The confirmation lists those
+  additional paths. Choosing Own file restores the original set, including
+  relative symlinks and permissions. Backup conflicts are checked before any
+  file moves, and a failed change rolls completed moves back without replacing
+  an occupied destination.
   Deleting the global file disconnects shared providers and keeps backups.
+  Existing native fallback and project instructions may still apply after deletion.
   Creating the global file again bootstraps missing native links.
 
 Source choices are inferred from the native files and links; there is no new
@@ -527,6 +534,7 @@ native display paths such as `$CONFIG_DIR/skills/name/SKILL.md`. Pi writes exact
 other paths, globs and package settings. Writes preserve unrelated settings,
 share the MCP configuration queue and reject stale revisions or retargeted links.
 Grok changes also refresh connected gateway profiles without interrupting turns.
+Muse's native `null` activation is shown as Off and can be changed explicitly.
 
 These states report the saved user setting. Project, package, enterprise and
 session overrides can affect actual availability. The console does not verify

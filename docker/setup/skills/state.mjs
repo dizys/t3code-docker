@@ -25,11 +25,12 @@ export async function configSnapshot(file, io, includeContent = false) {
       bytes += read.bytesRead;
     }
     if (bytes > limit || stamp(before) !== stamp(await handle.stat()) || stamp(before) !== stamp(await io.stat(file)) || resolved !== await io.realpath(file)) {
-      throw new Error("Native settings changed while being read. Refresh the list.");
+      throw Object.assign(new Error("Native settings changed while being read. Refresh the list."), { code: "conflict" });
     }
     const revision = digest(JSON.stringify([file, resolved, stamp(before), digest(buffer.subarray(0, bytes))]));
     return includeContent ? { revision, content: buffer.toString("utf8", 0, bytes), resolvedPath: resolved, mode: before.mode & 0o777, exists: true } : revision;
   } catch (error) {
+    if (error.code === "conflict") throw error;
     if (error.code === "ENOENT" && !handle) {
       // A dangling settings link must not be mistaken for an absent file.
       try { await io.lstat(file); } catch (missing) { if (missing.code === "ENOENT") {

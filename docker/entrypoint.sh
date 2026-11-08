@@ -140,11 +140,13 @@ if [ "$(id -u)" -eq 0 ]; then
 
   # A resumed migration traverses both trees: the previous attempt may have
   # stopped anywhere between them. A fresh one only walks what is not writable.
+  # --no-dereference (-P is already the default): symlinks planted inside the
+  # home tree must not redirect root ownership changes at their targets.
   for dir in "$T3_HOME" "$T3CODE_HOME"; do
     mkdir -p "$dir"
     if [ "$resumed" -eq 1 ] || [ "$remap" -eq 1 ] || ! gosu "$T3_USER" test -w "$dir"; then
       log "taking ownership of ${dir}"
-      chown -R "$PUID:$PGID" "$dir"
+      chown -R --no-dereference "$PUID:$PGID" "$dir"
     fi
   done
 
@@ -331,10 +333,15 @@ persist_agent_credentials() {
         mkdir -p "$dst"
         if [ -d "$src" ]; then
           # Anything signed in before this existed comes along rather than being
-          # silently orphaned behind the new link.
-          cp -a "$src/." "$dst/" 2>/dev/null || true
-          rm -rf "$src"
-          log "moved ${rel} onto the state volume"
+          # silently orphaned behind the new link. The original stays if the
+          # copy fails: deleting it unconditionally would lose sign-ins on a
+          # full or failing volume.
+          if cp -a "$src/." "$dst/" 2>/dev/null; then
+            rm -rf "$src"
+            log "moved ${rel} onto the state volume"
+          else
+            log "WARNING: could not copy ${rel} onto the state volume; leaving the original in place"
+          fi
         fi
         ;;
     esac

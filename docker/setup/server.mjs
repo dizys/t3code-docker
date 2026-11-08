@@ -1793,13 +1793,20 @@ const send = (res, code, body, headers = {}) => {
 const sendJson = (res, code, value, headers = {}) =>
   send(res, code, JSON.stringify(value), { "content-type": "application/json", ...headers });
 
-const cookieFrom = (req) =>
-  Object.fromEntries(
-    (req.headers.cookie ?? "")
-      .split(";")
-      .map((part) => part.trim().split("="))
-      .filter((pair) => pair.length === 2),
-  )[COOKIE];
+const cookieFrom = (req) => {
+  for (const part of String(req.headers.cookie ?? "").split(";")) {
+    const eq = part.indexOf("=");
+    if (eq <= 0) continue;
+    if (part.slice(0, eq).trim() !== COOKIE) continue;
+    const raw = part.slice(eq + 1).trim();
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  }
+  return undefined;
+};
 
 const readBody = async (req, maxBytes = 64 * 1024) => {
   const chunks = [];
@@ -2622,7 +2629,9 @@ const forwardedPrefix = (req) => {
   const raw = req?.headers?.["x-forwarded-prefix"];
   if (typeof raw !== "string") return "";
   const trimmed = raw.trim().replace(/\/+$/, "");
-  return /^\/[\w\-./~]*$/.test(trimmed) ? trimmed : "";
+  if (!/^\/[\w\-./~]*$/.test(trimmed)) return "";
+  if (trimmed.split("/").some((segment) => segment === "." || segment === "..")) return "";
+  return trimmed;
 };
 
 const resolve = (pathname) => {
@@ -2654,6 +2663,9 @@ const server = createServer(async (req, res) => {
   // A browser signed in to T3 Code may come in on that session instead.
   const viewer = await viewerOf(req).catch(() => null);
   const authed = Boolean(viewer);
+  // A right key resets the guessing delay, however it arrived: the page sends
+  // a cookie, the in-container CLIs a header, and only /login cleared it.
+  if (viewer?.via === "key") failures.delete(ip);
   // Opened inside T3 Code's settings rather than on its own.
   const embed = raw.searchParams.get("embed") === "t3";
   const host = embed && raw.searchParams.get("host") === "tab" ? "tab" : undefined;

@@ -6,10 +6,12 @@ import { normalizePrefix, setupStarts } from "./router.mjs";
 
 export async function checkHealth(env = process.env, { timeoutMs = 4000 } = {}) {
   const singlePort = env.T3_SINGLE_PORT?.trim();
-  const port = singlePort || String(env.T3CODE_PORT ?? "3773").trim();
+  const port = singlePort || String(env.T3CODE_PORT || "3773").trim();
   if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) return false;
   const paths = ["/.well-known/t3/environment"];
-  if (singlePort && setupStarts(env.T3_SETUP_ENABLED)) {
+  // Docker sees the original environment, before entrypoint.sh defaults
+  // empty values with :=. Apply those defaults here too.
+  if (singlePort && setupStarts(env.T3_SETUP_ENABLED || "1")) {
     const prefix = normalizePrefix(env.T3_SETUP_BASE_PATH);
     if (!prefix) return false;
     paths.push(`${prefix}/hello`);

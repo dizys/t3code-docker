@@ -32,10 +32,23 @@ test("an unavailable setup service fails one-port health but disabled Setup and 
   assert.equal(await checkHealth({ T3_SINGLE_PORT: port, T3_SETUP_ENABLED: "0" }), true);
   assert.equal(await checkHealth({ T3CODE_PORT: port }), true);
   assert.deepEqual(paths, ["/.well-known/t3/environment", "/.well-known/t3/environment"]);
-  for (const disabled of ["", "false", "2"]) {
+  for (const disabled of ["false", "2"]) {
     assert.equal(await checkHealth({ T3_SINGLE_PORT: port, T3_SETUP_ENABLED: disabled }), true);
   }
   assert.equal(await checkHealth({ T3_SINGLE_PORT: port, T3_SETUP_ENABLED: " 1 " }), false);
+  assert.equal(await checkHealth({ T3_SINGLE_PORT: port, T3_SETUP_ENABLED: "" }), false, "an empty flag defaults Setup to on at boot");
+});
+
+test("an empty runtime port uses the same default as the entrypoint", async (t) => {
+  const port = await server(t, (_req, res) => res.end("healthy"));
+  const get = http.get, ports = [];
+  // Route the default-port request to our fixture instead of a real service.
+  t.mock.method(http, "get", (options, callback) => {
+    ports.push(options.port);
+    return get({ ...options, port }, callback);
+  });
+  assert.equal(await checkHealth({ T3CODE_PORT: "" }), true);
+  assert.deepEqual(ports, ["3773"]);
 });
 
 test("both probes share a deadline, including a server that never sends headers", async (t) => {

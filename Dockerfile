@@ -326,7 +326,7 @@ EXPOSE 3773 3774
 # On that one port a dead setup page would otherwise stay green, so check it
 # too (unless setup is disabled entirely).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-    CMD curl -fsS --max-time 4 "http://127.0.0.1:${T3_SINGLE_PORT:-${T3CODE_PORT}}/.well-known/t3/environment" >/dev/null || exit 1; if [ -n "${T3_SINGLE_PORT}" ] && [ "${T3_SETUP_ENABLED:-1}" != "0" ]; then curl -fsS --max-time 4 "http://127.0.0.1:${T3_SINGLE_PORT}${T3_SETUP_BASE_PATH:-/__setup}/hello" >/dev/null || exit 1; fi
+    CMD ["/usr/local/bin/node", "/opt/t3-router/healthcheck.mjs"]
 
 # Stamped last so a version change reuses every layer above it. IMAGE_VERSION is
 # the release tag in CI and "dev" for a local build; the setup page shows both so

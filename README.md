@@ -228,6 +228,9 @@ the only boundary.
   and `t3 auth session revoke <id>`.
 - **Don't publish port 3773, 3774 or `T3_SINGLE_PORT` unencrypted.** The
   examples above bind to localhost for that reason; use TLS or a tunnel.
+- **SSH is disabled by default.** If enabled for VS Code Remote-SSH, mount a
+  trusted `authorized_keys` file, use key-only access, and expose port 2222
+  only on a trusted network. See [Configuration](docs/configuration.md#vs-code-remote-ssh).
 - **A browser paired with T3 Code can open the setup page without the key**
   when both share a hostname, because T3 Code already gives it a terminal.
   `T3_SETUP_ACCEPT_T3_SESSIONS=0` turns this off.

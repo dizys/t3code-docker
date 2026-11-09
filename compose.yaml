@@ -25,6 +25,9 @@ services:
       PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
       T3_ALLOW_SUDO: ${T3_ALLOW_SUDO:-0}
+      # Optional key-only SSH access for VS Code Remote-SSH.
+      T3_SSH_ENABLED: ${T3_SSH_ENABLED:-0}
+      T3_SSH_PORT: ${T3_SSH_PORT:-2222}
       # T3's server-hosted Chrome uses the container's isolation by default.
       # Set 1 only when the host and container allow Chrome's own sandbox.
       T3CODE_SERVER_BROWSER_SANDBOX: ${T3CODE_SERVER_BROWSER_SANDBOX:-0}
@@ -59,6 +62,8 @@ services:
     volumes:
       # State, provider credentials, shell history - everything under ~.
       - t3-home:/home/t3
+      # Persist the SSH host identity separately from the writable t3 home.
+      - t3-ssh-host-keys:/var/lib/t3code/ssh-host-keys
       # Your repositories. Each git checkout directly inside becomes a project.
       - ${T3_WORKSPACE_HOST:-./workspace}:/workspace
     ports:
@@ -106,5 +111,6 @@ services:
 
 volumes:
   t3-home:
+  t3-ssh-host-keys:
   caddy-data:
   caddy-config:

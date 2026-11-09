@@ -57,7 +57,7 @@ RUN set -eux; \
     apt-get -o Acquire::Retries=8 update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl wget gnupg \
-        git git-lfs openssh-client \
+        git git-lfs openssh-client openssh-server \
         build-essential python3 python3-dev python3-venv pipx \
         tini gosu \
         jq ripgrep fd-find bat sqlite3 \
@@ -262,6 +262,7 @@ RUN set -eux; \
 # installs mise-managed executables into the persistent home at runtime.
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/start-ssh-server.sh /usr/local/bin/start-ssh-server.sh
 # T3 Code's supervisor: restarts it when the setup page asks, and otherwise
 # ends the container when it exits, as `exec` did.
 COPY docker/run-t3.sh /usr/local/lib/t3code/run-t3.sh
@@ -286,7 +287,7 @@ RUN "$T3_INFRA_NODE" /usr/local/share/t3-client/patch.mjs
 # `t3` is the same immutable launcher under its user-facing name, for root's
 # shell and anyone typing it. Nothing in the image resolves it by name: the
 # entrypoint, the setup service and the helpers all use T3_INFRA_LAUNCHER.
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/lib/t3code/run-t3.sh /usr/local/bin/t3-* \
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-ssh-server.sh /usr/local/lib/t3code/run-t3.sh /usr/local/bin/t3-* \
     /opt/t3-setup/credentials/askpass.sh \
     && ln -sfn t3-admin /usr/local/bin/t3
 
@@ -315,11 +316,14 @@ ENV T3CODE_HOME=/home/t3/.t3 \
     PUID=1000 \
     PGID=1000
 
-RUN mkdir -p /workspace /home/t3/.t3 /home/t3/go && chown -R t3:t3 /workspace /home/t3
+RUN mkdir -p /workspace /home/t3/.t3 /home/t3/go /var/lib/t3code/ssh-host-keys \
+    && chown -R t3:t3 /workspace /home/t3 \
+    && chown root:root /var/lib/t3code/ssh-host-keys \
+    && chmod 0700 /var/lib/t3code/ssh-host-keys
 
 VOLUME ["/home/t3", "/workspace"]
 WORKDIR /workspace
-EXPOSE 3773 3774
+EXPOSE 3773 3774 2222
 
 # With one port, asked through it: that is the way in, so a router that is not
 # answering is an unhealthy container even while T3 Code itself is fine.

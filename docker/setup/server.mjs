@@ -46,7 +46,7 @@ import { createGatewayVault } from "./gateways/vault.mjs";
 import { createSessionStore, TERMINAL_STATES } from "./signin-sessions.mjs";
 import { clientAddress } from "./client-address.mjs";
 import { cookieValue, forwardedPrefix } from "./request-auth.mjs";
-import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
+import { newKey, readKeyFile, validKey, writeKeyFile } from "./setup-key.mjs";
 import { createCredentialStore, credentialFailure, CredentialError, credentialDirectory } from "./credentials.mjs";
 import { createCredentialsService, CREDENTIAL_ROUTES } from "./credentials/service.mjs";
 import { installVaultSkill } from "./credentials/skill.mjs";
@@ -109,7 +109,8 @@ const WORKSPACE = process.env.T3_WORKSPACE || "/workspace";
 // restarts, which inherit the key the container started with.
 const keySourceOf = (source) => (source === "env" || source === "boot" ? source : source ? "volume" : "env");
 let KEY_SOURCE = keySourceOf(process.env.T3_SETUP_KEY_SOURCE);
-let KEY = (KEY_SOURCE === "volume" && readKeyFile(STATE_DIR)) || process.env.T3_SETUP_KEY || "";
+const envKey = String(process.env.T3_SETUP_KEY ?? "").trim();
+let KEY = (KEY_SOURCE === "volume" && readKeyFile(STATE_DIR)) || (validKey(envKey) ? envKey : "");
 // Keep the credential in this process's auth state, never in the environment
 // inherited by sign-in commands, installers or other helpers Setup launches.
 delete process.env.T3_SETUP_KEY;
@@ -1178,6 +1179,15 @@ const t3StartedAt = () => {
 const restartT3 = (why = null) => {
   const pid = t3Pid();
   if (!pid) {
+    return { http: 409, body: { ok: false, code: "unsupervised", error: "T3 Code is not running under the image's supervisor, so this page cannot restart it. Restart the container instead." } };
+  }
+  // The pid file alone does not prove the supervisor is alive: after a
+  // supervisor exit the OS can reuse the pid. Refuse to signal strangers.
+  try {
+    const supervisor = JSON.parse(readFileSync(`${RUN_DIR}/supervisor.json`, "utf8"));
+    if (supervisor.protocol !== 3 || !Number.isInteger(supervisor.pid) || supervisor.pid < 2) throw new Error("unsupervised");
+    process.kill(supervisor.pid, 0);
+  } catch {
     return { http: 409, body: { ok: false, code: "unsupervised", error: "T3 Code is not running under the image's supervisor, so this page cannot restart it. Restart the container instead." } };
   }
   const request = `${RUN_DIR}/restart`;

@@ -81,6 +81,9 @@ export const normalizePrefix = (value) => {
   const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   if (!/^(\/[\w\-.~]+)+$/.test(prefixed)) return null;
   if (prefixed.split("/").some((segment) => segment === "." || segment === "..")) return null;
+  // A prefix that swallows the health check or the API hides T3 Code behind
+  // the setup page on the one-port router, and the container never goes green.
+  if (prefixed === "/.well-known" || prefixed.startsWith("/.well-known/") || prefixed === "/api" || prefixed.startsWith("/api/")) return null;
   return prefixed;
 };
 

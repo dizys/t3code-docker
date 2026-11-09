@@ -71,6 +71,12 @@ test("setup prefixes are made canonical, and a prefix that is not a path is refu
   assert.equal(normalizePrefix("/a/./b"), null);
   assert.equal(normalizePrefix("/..."), "/...", "three dots is a name, not a dot segment");
   assert.equal(normalizePrefix("/a..b"), "/a..b");
+  for (const prefix of ["/.well-known", "/.well-known/t3/environment", "api", "/api/", "/api/v1"]) {
+    assert.equal(normalizePrefix(prefix), null, prefix);
+  }
+  for (const prefix of ["/.well-known-tools", "/api-tools", "/admin/api"]) {
+    assert.equal(normalizePrefix(prefix), prefix, "only reserved path segments are refused");
+  }
 });
 
 test("routing decodes percent-encoding once before the prefix compare", () => {

@@ -161,6 +161,8 @@ done
 [ "$health_status" = healthy ] \
   && ok "docker healthcheck reports healthy" \
   || no "docker healthcheck reports $health_status"
+check "the healthcheck defaults an empty T3 Code port as boot does" \
+  "docker exec -e T3CODE_PORT= $NAME /usr/local/bin/node /opt/t3-router/healthcheck.mjs"
 
 printf '\nHarnesses (variant %s)\n' "$VARIANT"
 check "t3 runs" "docker exec $NAME t3 --version"
@@ -1998,6 +2000,12 @@ one_healthy() {
   return 1
 }
 check "the docker healthcheck asks through it and reports healthy" one_healthy
+check "the healthcheck defaults an empty Setup flag as boot does" \
+  "docker exec -e T3_SETUP_ENABLED= ${NAME}-one /usr/local/bin/node /opt/t3-router/healthcheck.mjs"
+check "the healthcheck normalizes the setup prefix as the router does" \
+  "docker exec -e 'T3_SETUP_BASE_PATH= /__setup/ ' ${NAME}-one /usr/local/bin/node /opt/t3-router/healthcheck.mjs"
+check "the router refuses a setup prefix that hides T3's health endpoint" \
+  "docker exec ${NAME}-one /usr/local/bin/node --input-type=module -e \"import { normalizePrefix } from '/opt/t3-router/router.mjs'; process.exit(normalizePrefix('/.well-known/t3') === null ? 0 : 1)\""
 check "the router did not crash-loop" "! output_has 'docker logs ${NAME}-one' 'router exited'"
 
 # The public URL without T3_PUBLIC_URL: the platform's, then one saved on the

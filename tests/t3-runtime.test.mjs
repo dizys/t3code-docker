@@ -327,9 +327,23 @@ async function requestTrial(paths, version, channel = "nightly", database = {}) 
   const request = { id: randomUUID(), version, channel, fromVersion: (await selectedRuntime(paths)).version, phase: "stopping", previous: await readSelection(paths), ...database };
   await writeJson(paths.request, request);
   await fs.writeFile(path.join(paths.run, "restart"), "requested");
-  process.kill(Number(await fs.readFile(path.join(paths.run, "t3.pid"), "utf8")), "SIGTERM");
   return request;
 }
+
+test("the supervisor handles restart requests without signaling a PID read from disk", async (t) => {
+  const { env, paths } = await world(t);
+  await fakeRuntime(paths, "0.0.45", "ready", true);
+  const sup = await supervisor(t, env);
+  const first = await fs.readFile(path.join(paths.run, "t3.pid"), "utf8");
+  // A stale file naming a different live process cannot redirect the signal.
+  await fs.writeFile(path.join(paths.run, "t3.pid"), String(process.pid));
+  await fs.writeFile(path.join(paths.run, "restart"), "requested");
+  await waitFor(async () => {
+    const next = Number((await fs.readFile(path.join(paths.run, "t3.pid"), "utf8")).trim());
+    return Number.isInteger(next) && next > 1 && next !== Number(first) && next !== process.pid;
+  });
+  assert.doesNotThrow(() => process.kill(sup.child.pid, 0));
+});
 
 test("the workspace is the New project default across native release changes", async (t) => {
   const { paths, env, root } = await world(t);

@@ -166,12 +166,7 @@ const runtimeModule = await import(process.env.T3_RUNTIME_MODULE || (existsSync(
   ? "/opt/t3-runtime/manager.mjs" : new URL("../runtime/manager.mjs", import.meta.url).href));
 const runtimeManager = runtimeModule.createRuntimeManager({
   supervised: () => {
-    try {
-      const supervisor = JSON.parse(readFileSync(`${process.env.T3_RUN_DIR || `${process.env.T3CODE_HOME || `${process.env.HOME || "/home/t3"}/.t3`}/run`}/supervisor.json`, "utf8"));
-      if (supervisor.protocol !== 3 || !Number.isInteger(supervisor.pid) || supervisor.pid < 2 || !t3Pid()) return false;
-      process.kill(supervisor.pid, 0);
-      return true;
-    } catch { return false; }
+    return runtimeModule.supervisedChild(RUN_DIR, t3Pid());
   },
   restart: async () => {
     // The durable stopping phase blocks new CLI work. Let calls which already
@@ -1134,7 +1129,7 @@ const setPublicUrl = async (value, { check: shouldCheck = true } = {}) => {
 // --- restarting T3 Code ---------------------------------------------------
 //
 // T3 Code runs under docker/run-t3.sh, which starts it again when asked: a
-// request file, then SIGTERM, so it shuts down exactly as for `docker stop`.
+// request file; its parent sends SIGTERM, exactly as for `docker stop`.
 // Anything T3 Code only reads on a start (T3 Connect's link) then applies
 // without anyone restarting the container.
 const resolveRunDir = () => {
@@ -1178,16 +1173,7 @@ const t3StartedAt = () => {
 
 const restartT3 = (why = null) => {
   const pid = t3Pid();
-  if (!pid) {
-    return { http: 409, body: { ok: false, code: "unsupervised", error: "T3 Code is not running under the image's supervisor, so this page cannot restart it. Restart the container instead." } };
-  }
-  // The pid file alone does not prove the supervisor is alive: after a
-  // supervisor exit the OS can reuse the pid. Refuse to signal strangers.
-  try {
-    const supervisor = JSON.parse(readFileSync(`${RUN_DIR}/supervisor.json`, "utf8"));
-    if (supervisor.protocol !== 3 || !Number.isInteger(supervisor.pid) || supervisor.pid < 2) throw new Error("unsupervised");
-    process.kill(supervisor.pid, 0);
-  } catch {
+  if (!runtimeModule.supervisedChild(RUN_DIR, pid)) {
     return { http: 409, body: { ok: false, code: "unsupervised", error: "T3 Code is not running under the image's supervisor, so this page cannot restart it. Restart the container instead." } };
   }
   const request = `${RUN_DIR}/restart`;
@@ -1198,7 +1184,6 @@ const restartT3 = (why = null) => {
     writeFileSync(fd, `${new Date().toISOString()}\n`);
     closeSync(fd);
     fd = null;
-    process.kill(pid, "SIGTERM");
   } catch (error) {
     if (fd !== null) try { closeSync(fd); } catch {}
     try { rmSync(request, { force: true }); } catch {}

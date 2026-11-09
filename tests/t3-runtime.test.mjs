@@ -623,6 +623,86 @@ test("recovery requires the committed integration identity as well as its native
   assert.equal(await fs.readFile(database, "utf8"), "committed data");
 });
 
+test("failed snapshot promotion keeps the previous backup and can be retried", async (t) => {
+  const { paths } = await world(t);
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "old data");
+  await snapshotDatabase(paths, "old");
+  const rename = fs.rename;
+  const fault = t.mock.method(fs, "rename", async (source, target) => {
+    if (source === `${paths.backup}.staging`) throw Object.assign(new Error("promotion failed"), { code: "EIO" });
+    return rename(source, target);
+  });
+  await assert.rejects(snapshotDatabase(paths, "new"), { code: "EIO" });
+  assert.equal((await readJson(path.join(paths.backup, "complete.json"))).id, "old");
+  fault.mock.restore();
+  await snapshotDatabase(paths, "new");
+  assert.equal((await readJson(path.join(paths.backup, "complete.json"))).id, "new");
+});
+
+test("a crash between backup renames recovers the previous snapshot before another copy or restore", async (t) => {
+  const { paths } = await world(t);
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "original");
+  await snapshotDatabase(paths, "old");
+  await fs.rename(paths.backup, `${paths.backup}.previous`);
+  await fs.writeFile(database, "trial data");
+  await restoreDatabase(paths, "old");
+  assert.equal(await databaseContent(database), "original");
+  await fs.rename(paths.backup, `${paths.backup}.previous`);
+  const mkdir = fs.mkdir;
+  const fault = t.mock.method(fs, "mkdir", async (file, ...args) => {
+    if (file === `${paths.backup}.staging`) throw new Error("copy interrupted");
+    return mkdir(file, ...args);
+  });
+  // Recovery of the canonical snapshot happens before building the next one.
+  await assert.rejects(snapshotDatabase(paths, "new"), /copy interrupted/);
+  assert.equal((await readJson(path.join(paths.backup, "complete.json"))).id, "old");
+  fault.mock.restore();
+});
+
+test("the previous backup survives a failed directory sync after promotion", async (t) => {
+  const { paths } = await world(t);
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "original");
+  await snapshotDatabase(paths, "old");
+  const open = fs.open;
+  const fault = t.mock.method(fs, "open", async (file, ...args) => {
+    const handle = await open(file, ...args);
+    if (file === paths.root && (await readJson(path.join(paths.backup, "complete.json")))?.id === "new") {
+      handle.sync = async () => { throw Object.assign(new Error("directory sync failed"), { code: "EIO" }); };
+    }
+    return handle;
+  });
+  await assert.rejects(snapshotDatabase(paths, "new"), { code: "EIO" });
+  assert.equal((await readJson(path.join(`${paths.backup}.previous`, "complete.json"))).id, "old");
+  fault.mock.restore();
+  // Model the unsynced new directory entry being lost in a power failure.
+  await fs.rm(paths.backup, { recursive: true });
+  await fs.writeFile(database, "trial data");
+  await restoreDatabase(paths, "old");
+  assert.equal(await databaseContent(database), "original");
+});
+
+test("retrying a promoted snapshot syncs its name before removing the previous copy", async (t) => {
+  const { paths } = await world(t);
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "original");
+  await snapshotDatabase(paths, "new");
+  await fs.cp(paths.backup, `${paths.backup}.previous`, { recursive: true });
+  const open = fs.open;
+  const fault = t.mock.method(fs, "open", async (file, ...args) => {
+    const handle = await open(file, ...args);
+    if (file === paths.root) handle.sync = async () => { throw new Error("sync interrupted"); };
+    return handle;
+  });
+  await assert.rejects(snapshotDatabase(paths, "new"), /sync interrupted/);
+  assert.ok(await fs.stat(`${paths.backup}.previous`));
+  fault.mock.restore();
+  await snapshotDatabase(paths, "new");
+  await assert.rejects(fs.access(`${paths.backup}.previous`), { code: "ENOENT" });
+});
+
 test("a SQLite snapshot includes committed WAL data and needs no disappearing sidecars", async (t) => {
   const { paths } = await world(t);
   const { DatabaseSync } = await import("node:sqlite");

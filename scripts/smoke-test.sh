@@ -179,6 +179,41 @@ check "no harness executable is baked, only the root-owned dispatcher" only_the_
 check "mise ships" "docker exec $NAME mise --version"
 check "harness installer ships" "docker exec $NAME t3-harness --help"
 check "storage CLI ships" "docker exec $NAME t3-storage --help"
+boot_rejects_invalid_owner_ids() {
+  local output status
+  for setting in PUID=invalid PGID=-1 PUID=4294967295; do
+    status=0
+    output="$(docker run --rm --network none --read-only -e "$setting" "$IMAGE" 2>&1)" || status=$?
+    [ "$status" -eq 1 ] || return 1
+    case "$output" in *"ERROR: ${setting%%=*} must be"*) ;; *) return 1 ;; esac
+  done
+}
+check "boot rejects invalid owner ids before changing accounts or volumes" boot_rejects_invalid_owner_ids
+snapshot_rotation_recovers() {
+  docker exec -i -u t3 "$NAME" /usr/local/bin/node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { snapshotDatabase, restoreDatabase } from '/opt/t3-runtime/supervisor.mjs';
+const root = await fs.mkdtemp(path.join(os.tmpdir(), 't3-backup-smoke-'));
+const paths = { home: path.join(root, 'home'), root: path.join(root, 'runtime'), backup: path.join(root, 'runtime/backup') };
+try {
+  await fs.mkdir(path.join(paths.home, 'userdata'), { recursive: true });
+  const file = path.join(paths.home, 'userdata/statev2.sqlite');
+  const db = new DatabaseSync(file);
+  db.exec("CREATE TABLE content (body TEXT); INSERT INTO content VALUES ('original')"); db.close();
+  await snapshotDatabase(paths, 'fixture');
+  await fs.rename(paths.backup, `${paths.backup}.previous`);
+  await fs.writeFile(file, 'trial data');
+  await restoreDatabase(paths, 'fixture');
+  const restored = new DatabaseSync(file, { readOnly: true });
+  try { assert.equal(restored.prepare('SELECT body FROM content').get().body, 'original'); } finally { restored.close(); }
+} finally { await fs.rm(root, { recursive: true, force: true }); }
+NODE
+}
+check "database recovery keeps an interrupted backup rotation usable" snapshot_rotation_recovers
 check "Vault CLI ships" "docker exec $NAME t3-vault --help"
 check "old credential helpers are gone" "! docker exec $NAME sh -c 'command -v t3-ssh || command -v t3-api'"
 credentials_roundtrip() {

@@ -2030,14 +2030,12 @@ one_restarts_t3() {
 }
 check "the setup page restarts T3 Code, and the container keeps running" one_restarts_t3
 restart_identity_matches_child() {
-  docker exec -i -u t3 "${NAME}-one" /usr/local/bin/node --input-type=module <<'NODE'
+  docker exec -i -u t3 "${NAME}-one" /usr/local/bin/node --input-type=module >> "$UI_AUDIT_LOG" 2>&1 <<'NODE'
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { supervisedChild } from '/opt/t3-runtime/supervision.mjs';
-// docker exec inherits the container configuration, not the entrypoint's
-// exports, and this container sets no explicit T3_RUN_DIR - so fall back to
-// the default run dir exactly as one_t3_pid does.
-const runDir = process.env.T3_RUN_DIR || `${process.env.T3CODE_HOME || `${process.env.HOME || "/home/t3"}/.t3`}/run`;
+import { runtimePaths } from '/opt/t3-runtime/state.mjs';
+const { run: runDir } = runtimePaths();
 const pid = Number(readFileSync(`${runDir}/t3.pid`, 'utf8').trim());
 assert.equal(supervisedChild(runDir, pid), true);
 assert.equal(supervisedChild(runDir, process.pid), false);

@@ -345,6 +345,27 @@ test("the supervisor handles restart requests without signaling a PID read from 
   assert.doesNotThrow(() => process.kill(sup.child.pid, 0));
 });
 
+for (const location of ["home", "state", "explicit"]) test(`the shipping supervision smoke resolves the ${location} run directory`, async (t) => {
+  const { root, env } = await world(t);
+  const home = path.join(root, "user");
+  env.HOME = home;
+  env.T3CODE_HOME = location === "state" ? path.join(root, "separate-state") : path.join(home, ".t3");
+  env.T3_RUN_DIR = location === "explicit" ? path.join(root, "custom-run") : path.join(env.T3CODE_HOME, "run");
+  const paths = runtimePaths(env);
+  await fs.mkdir(path.join(paths.home, "userdata"), { recursive: true });
+  await fakeRuntime(paths, "0.0.45", "ready", true);
+  await supervisor(t, env);
+  const smoke = await fs.readFile(new URL("../scripts/smoke-test.sh", import.meta.url), "utf8");
+  const body = smoke.split("restart_identity_matches_child() {", 2)[1].split("<<'NODE'\n", 2)[1].split("\nNODE\n", 1)[0];
+  // Docker exec sees the container configuration, not variables exported
+  // only by entrypoint.sh. Keep the shipping assertion otherwise verbatim.
+  const probeEnv = { PATH: process.env.PATH, HOME: home };
+  if (location === "state") probeEnv.T3CODE_HOME = env.T3CODE_HOME;
+  if (location === "explicit") probeEnv.T3_RUN_DIR = env.T3_RUN_DIR;
+  const source = body.replaceAll("/opt/t3-runtime/", new URL("../docker/runtime/", import.meta.url).href);
+  await promisify(execFile)(process.execPath, ["--input-type=module", "-e", source], { env: probeEnv, timeout: 5000 });
+});
+
 test("the workspace is the New project default across native release changes", async (t) => {
   const { paths, env, root } = await world(t);
   env.T3_WORKSPACE = path.join(root, "Work spaces 世界");

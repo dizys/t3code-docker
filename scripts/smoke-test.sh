@@ -2034,7 +2034,10 @@ restart_identity_matches_child() {
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { supervisedChild } from '/opt/t3-runtime/supervision.mjs';
-const runDir = process.env.T3_RUN_DIR;
+// docker exec inherits the container configuration, not the entrypoint's
+// exports, and this container sets no explicit T3_RUN_DIR - so fall back to
+// the default run dir exactly as one_t3_pid does.
+const runDir = process.env.T3_RUN_DIR || `${process.env.T3CODE_HOME || `${process.env.HOME || "/home/t3"}/.t3`}/run`;
 const pid = Number(readFileSync(`${runDir}/t3.pid`, 'utf8').trim());
 assert.equal(supervisedChild(runDir, pid), true);
 assert.equal(supervisedChild(runDir, process.pid), false);

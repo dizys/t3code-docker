@@ -70,9 +70,25 @@ export async function measureStorage(roots, { timeout = 120_000 } = {}) {
       timeout, maxBuffer: 8 * 1024 * 1024, encoding: "utf8", env: { ...process.env, LC_ALL: "C" },
     }));
   } catch (error) {
-    // Permission errors still produce useful totals. A timeout or truncated
-    // output has no reliable root totals and must not replace the last scan.
-    if (error.killed || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || !error.stdout) throw new Error("Storage measurement did not finish. Try again later.");
+    // Permission errors still produce useful totals. A timeout has no
+    // reliable root totals and must not replace the last scan. A truncated
+    // (maxBuffer) deep listing falls back to one cheap total per top-level
+    // target instead of failing the whole scan.
+    if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" && !error.killed) {
+      const sizes = {};
+      for (const target of existing) {
+        try {
+          const { stdout: single } = await exec("du", ["-x", "-B1", "-s", "--", target], {
+            timeout, maxBuffer: 256 * 1024, encoding: "utf8", env: { ...process.env, LC_ALL: "C" },
+          });
+          const match = /^(\d+)\t/.exec(single);
+          if (match) sizes[target] = Number(match[1]);
+        } catch { /* leave this target out; still partial, not failed */ }
+      }
+      if (Object.keys(sizes).length) return { sizes, partial: true };
+      throw new Error("Storage measurement did not finish. Try again later.");
+    }
+    if (error.killed || !error.stdout) throw new Error("Storage measurement did not finish. Try again later.");
     stdout = error.stdout; partial = true;
   }
   const sizes = {};

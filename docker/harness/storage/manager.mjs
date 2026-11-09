@@ -330,6 +330,18 @@ export function createStorageManager(options = {}) {
 
   async function maintain() {
     await ready;
+    // A kill between ticks leaves {running} on disk and in memory; the
+    // minute timer never calls status(), so heal here too or auto-clean
+    // stalls until the next manual refresh or restart.
+    try {
+      const saved = JSON.parse(await io.readFile(operationFile, "utf8"));
+      if (saved?.id && saved.id === facts.operation?.id && saved.state !== "running") facts.operation = saved;
+      else if (saved?.id && (!facts.operation || saved.startedAt > facts.operation.startedAt)) facts.operation = saved;
+    } catch { /* no operation */ }
+    if (facts.operation?.state === "running" && (!ctx.isAlive(facts.operation.pid)
+      || (facts.operation.startTime && ctx.startTimeOf(facts.operation.pid) !== facts.operation.startTime))) {
+      facts.operation = { ...facts.operation, state: "interrupted", finishedAt: now(), error: "Cleanup was interrupted. Refresh before trying again." };
+    }
     if (stopped || facts.operation?.state === "running") return;
     await readPreferences();
     if (!facts.policy.automatic || facts.policyError || facts.partial || !facts.at) return;

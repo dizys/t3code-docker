@@ -2398,8 +2398,9 @@ const autoTick = async () => {
       } catch { /* next tick retries */ }
     }
     // T3 Code: ask the registry when due.
-    if (autoPolicy.t3.enabled && AutoUpdate.checkDue({ checkMinutes: autoPolicy.t3.checkMinutes, lastCheckAt: autoState.lastT3CheckAt, now })) {
+    if (autoPolicy.t3.enabled && AutoUpdate.checkDue({ checkMinutes: autoPolicy.t3.checkMinutes, lastCheckAt: autoState.lastT3AttemptAt ?? autoState.lastT3CheckAt, now })) {
       try {
+        await persist({ lastT3AttemptAt: Date.now() });
         const result = await runtimeManager.check();
         if (!result.error) await persist({ lastT3CheckAt: Date.now() });
       } catch { /* next tick retries */ }

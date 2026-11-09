@@ -46,7 +46,7 @@ import { createGatewayVault } from "./gateways/vault.mjs";
 import { createSessionStore, TERMINAL_STATES } from "./signin-sessions.mjs";
 import { clientAddress } from "./client-address.mjs";
 import { cookieValue, forwardedPrefix } from "./request-auth.mjs";
-import { newKey, readKeyFile, writeKeyFile } from "./setup-key.mjs";
+import { newKey, readKeyFile, validKey, writeKeyFile } from "./setup-key.mjs";
 import { createCredentialStore, credentialFailure, CredentialError, credentialDirectory } from "./credentials.mjs";
 import { createCredentialsService, CREDENTIAL_ROUTES } from "./credentials/service.mjs";
 import { installVaultSkill } from "./credentials/skill.mjs";
@@ -109,7 +109,8 @@ const WORKSPACE = process.env.T3_WORKSPACE || "/workspace";
 // restarts, which inherit the key the container started with.
 const keySourceOf = (source) => (source === "env" || source === "boot" ? source : source ? "volume" : "env");
 let KEY_SOURCE = keySourceOf(process.env.T3_SETUP_KEY_SOURCE);
-let KEY = (KEY_SOURCE === "volume" && readKeyFile(STATE_DIR)) || process.env.T3_SETUP_KEY || "";
+const envKey = String(process.env.T3_SETUP_KEY ?? "").trim();
+let KEY = (KEY_SOURCE === "volume" && readKeyFile(STATE_DIR)) || (validKey(envKey) ? envKey : "");
 // Keep the credential in this process's auth state, never in the environment
 // inherited by sign-in commands, installers or other helpers Setup launches.
 delete process.env.T3_SETUP_KEY;
@@ -165,12 +166,7 @@ const runtimeModule = await import(process.env.T3_RUNTIME_MODULE || (existsSync(
   ? "/opt/t3-runtime/manager.mjs" : new URL("../runtime/manager.mjs", import.meta.url).href));
 const runtimeManager = runtimeModule.createRuntimeManager({
   supervised: () => {
-    try {
-      const supervisor = JSON.parse(readFileSync(`${process.env.T3_RUN_DIR || `${process.env.T3CODE_HOME || `${process.env.HOME || "/home/t3"}/.t3`}/run`}/supervisor.json`, "utf8"));
-      if (supervisor.protocol !== 3 || !Number.isInteger(supervisor.pid) || supervisor.pid < 2 || !t3Pid()) return false;
-      process.kill(supervisor.pid, 0);
-      return true;
-    } catch { return false; }
+    return runtimeModule.supervisedChild(RUN_DIR, t3Pid());
   },
   restart: async () => {
     // The durable stopping phase blocks new CLI work. Let calls which already
@@ -1133,7 +1129,7 @@ const setPublicUrl = async (value, { check: shouldCheck = true } = {}) => {
 // --- restarting T3 Code ---------------------------------------------------
 //
 // T3 Code runs under docker/run-t3.sh, which starts it again when asked: a
-// request file, then SIGTERM, so it shuts down exactly as for `docker stop`.
+// request file; its parent sends SIGTERM, exactly as for `docker stop`.
 // Anything T3 Code only reads on a start (T3 Connect's link) then applies
 // without anyone restarting the container.
 const resolveRunDir = () => {
@@ -1177,7 +1173,7 @@ const t3StartedAt = () => {
 
 const restartT3 = (why = null) => {
   const pid = t3Pid();
-  if (!pid) {
+  if (!runtimeModule.supervisedChild(RUN_DIR, pid)) {
     return { http: 409, body: { ok: false, code: "unsupervised", error: "T3 Code is not running under the image's supervisor, so this page cannot restart it. Restart the container instead." } };
   }
   const request = `${RUN_DIR}/restart`;
@@ -1188,7 +1184,6 @@ const restartT3 = (why = null) => {
     writeFileSync(fd, `${new Date().toISOString()}\n`);
     closeSync(fd);
     fd = null;
-    process.kill(pid, "SIGTERM");
   } catch (error) {
     if (fd !== null) try { closeSync(fd); } catch {}
     try { rmSync(request, { force: true }); } catch {}

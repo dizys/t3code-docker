@@ -2,10 +2,11 @@
 // prepared over T3's launcher protocol before it may accept commands.
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { promises as fs } from "node:fs";
+import { promises as fs, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { refreshSetupBridge } from "./client-shell.mjs";
+import { supervisorRecord } from "./supervision.mjs";
 import { CHANNELS, exactVersion, databaseName, validScopes, validPatchRevision, runtimePaths, readJson, writeJson, readSelection, selectedRuntime } from "./state.mjs";
 
 const sqlite = /\.(?:sqlite3?|db)(?:-wal|-shm|-journal)?$/;
@@ -309,12 +310,22 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
   await fs.rm(restartFile, { force: true });
   await fs.rm(path.join(paths.run, "hold"), { force: true });
   await recoverUpdate(paths);
-  await writeJson(path.join(paths.run, "supervisor.json"), { pid: process.pid, protocol: 3 });
+  await writeJson(path.join(paths.run, "supervisor.json"), supervisorRecord());
   let child = null;
   let launching = null;
   let stopping = false;
   const stop = () => { stopping = true; (child || launching)?.process.kill("SIGTERM"); };
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, stop);
+  // Setup only writes a request. The parent that owns the ChildProcess
+  // handle sends SIGTERM, so a stale PID file can never signal a stranger.
+  const restartTimer = setInterval(() => {
+    const target = child || launching;
+    if (!stopping && !target?.restartRequested && existsSync(restartFile) && target?.process.exitCode === null && target.process.signalCode === null) {
+      target.restartRequested = true;
+      target.process.kill("SIGTERM");
+    }
+  }, 250);
+  restartTimer.unref();
 
   const launch = async (runtime, update = null) => {
     if (stopping) throw new Error("The container is stopping.");
@@ -440,6 +451,7 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
     }
     return 143;
   } finally {
+    clearInterval(restartTimer);
     for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.off(signal, stop);
     await terminate(child);
     await fs.rm(pidFile, { force: true });

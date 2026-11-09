@@ -2083,6 +2083,19 @@ one_restarts_t3() {
   [ "$(docker inspect -f '{{.State.StartedAt}}' "${NAME}-one")" = "$started" ]
 }
 check "the setup page restarts T3 Code, and the container keeps running" one_restarts_t3
+restart_identity_matches_child() {
+  docker exec -i -u t3 "${NAME}-one" /usr/local/bin/node --input-type=module >> "$UI_AUDIT_LOG" 2>&1 <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { supervisedChild } from '/opt/t3-runtime/supervision.mjs';
+import { runtimePaths } from '/opt/t3-runtime/state.mjs';
+const { run: runDir } = runtimePaths();
+const pid = Number(readFileSync(`${runDir}/t3.pid`, 'utf8').trim());
+assert.equal(supervisedChild(runDir, pid), true);
+assert.equal(supervisedChild(runDir, process.pid), false);
+NODE
+}
+check "restart supervision recognizes its child and refuses another live process" restart_identity_matches_child
 check "the log says it was asked for" \
   "output_has 'docker logs ${NAME}-one' 'restarting T3 Code, as asked on the setup page'"
 check "status reports T3 Connect off, with its relay client ready" \

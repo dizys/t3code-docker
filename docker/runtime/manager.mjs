@@ -15,6 +15,7 @@ const [{ compareVersions }, { acquireLock, liveHolder }, { createFs }] = await P
   import(new URL("version.mjs", harnessBase)), import(new URL("lock.mjs", harnessBase)), import(new URL("io.mjs", harnessBase)),
 ]);
 export { databaseBusy, operationBusy } from "./state.mjs";
+export { supervisedChild } from "./supervision.mjs";
 
 const execute = promisify(execFile);
 export { executableVersion } from "./releases.mjs";

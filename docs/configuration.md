@@ -23,8 +23,8 @@ Environment variables (all optional except where noted):
 | `T3_SETUP_ACCEPT_T3_SESSIONS` | `1` | Let a browser signed in to T3 Code with terminal access open the setup page without the key. `0` always asks for the key. |
 | `T3_ALLOW_SUDO` | `0` | Give agents passwordless sudo in the container |
 | `T3_SSH_ENABLED` | `0` | Start the image's OpenSSH server for VS Code Remote-SSH (`1` to enable; public-key authentication only) |
-| `T3_SSH_PORT` | `2222` | SSH port inside the container; also the Compose host port by default |
-| `T3_SSH_BIND_ADDR` | `127.0.0.1` | Compose host interface for SSH; keep private and use a VPN or firewall for remote access |
+| `T3_SSH_PORT` | `2222` | SSH port inside the container; the optional Compose port mapping example uses it as the host port too |
+| `T3_SSH_BIND_ADDR` | `127.0.0.1` | Host interface used by the optional Compose port mapping example; not read by the image |
 | `DEEPSEEK_API_KEY` | — | Used by the DeepSeek-through-OpenCode example |
 | `PUID` / `PGID` | `1000` | Owner of files in the workspace bind mount |
 
@@ -37,8 +37,9 @@ Volumes:
 
 ### VS Code Remote-SSH
 
-SSH is disabled by default. For Compose, add these lines to the `t3code`
-service's `volumes` and `environment`, then recreate the container:
+SSH is disabled and its port is unpublished by default. For Compose, add these
+lines to the `t3code` service's `volumes`, `environment` and `ports`, then
+recreate the container:
 
 ```yaml
 environment:
@@ -50,8 +51,9 @@ ports:
 ```
 
 Add these entries to the corresponding existing `t3code` service sections.
-The port mapping is deliberately opt-in; set `T3_SSH_BIND_ADDR` to an
-interface reachable only through your trusted network (or publish the port
+`T3_SSH_PORT` is passed to the container; `T3_SSH_BIND_ADDR` and the host-side
+port are used only by this optional Compose mapping. Keep the bind address on
+an interface reachable only through your trusted network (or publish the port
 through your VPN/firewall configuration).
 Connect VS Code to `t3@<host>` on the configured SSH port (default `2222`).
 The `t3` account uses the same

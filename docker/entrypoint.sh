@@ -20,6 +20,8 @@ T3_HOME=/home/t3
 
 : "${PUID:=1000}"
 : "${PGID:=1000}"
+case "$PUID" in ''|*[!0-9]*) log "ERROR: PUID must be a numeric user id, got '$PUID'"; exit 1 ;; esac
+case "$PGID" in ''|*[!0-9]*) log "ERROR: PGID must be a numeric group id, got '$PGID'"; exit 1 ;; esac
 : "${T3CODE_HOME:=${T3_HOME}/.t3}"
 : "${T3CODE_HOST:=0.0.0.0}"
 : "${T3CODE_PORT:=3773}"

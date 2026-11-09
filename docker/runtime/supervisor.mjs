@@ -61,8 +61,18 @@ export async function snapshotDatabase(paths, id) {
     await syncFile(target);
   }
   await writeJson(path.join(stage, "complete.json"), { id, files });
-  await fs.rm(paths.backup, { recursive: true, force: true });
-  await fs.rename(stage, paths.backup);
+  // Keep the previous backup until the new one is in place: a crash between
+  // rm and rename used to lose both copies.
+  const previous = `${paths.backup}.previous`;
+  await fs.rm(previous, { recursive: true, force: true });
+  try { await fs.rename(paths.backup, previous); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  try {
+    await fs.rename(stage, paths.backup);
+  } catch (error) {
+    try { await fs.rename(previous, paths.backup); } catch { /* keep original error */ }
+    throw error;
+  }
+  await fs.rm(previous, { recursive: true, force: true });
   const directory = await fs.open(paths.root, "r");
   try { await directory.sync(); } finally { await directory.close(); }
 }

@@ -59,14 +59,7 @@ export function createStorageManager(options = {}) {
         facts = { ...facts, ...saved.facts, cachePolicies, policy: preferences.policy, policyError: preferences.error, refreshing: false, operation: null };
       }
     } catch { /* no cached inventory */ }
-    try {
-      const saved = JSON.parse(await io.readFile(operationFile, "utf8"));
-      if (saved && typeof saved.id === "string" && ["running", ...TERMINAL].includes(saved.state)) {
-        const alive = ctx.isAlive(saved.pid) && (!saved.startTime || ctx.startTimeOf(saved.pid) === saved.startTime);
-        facts.operation = saved.state === "running" && !alive
-          ? { ...saved, state: "interrupted", finishedAt: now(), error: "Cleanup was interrupted. Refresh storage before trying again." } : saved;
-      }
-    } catch { /* no prior operation */ }
+    await reconcileOperation();
   })();
 
   const snapshot = () => structuredClone({ ...facts, policyRevision: policyRevision(facts.policy, facts.policyError) });
@@ -328,20 +321,47 @@ export function createStorageManager(options = {}) {
     }
   }
 
-  async function maintain() {
-    await ready;
-    // A kill between ticks leaves {running} on disk and in memory; the
-    // minute timer never calls status(), so heal here too or auto-clean
-    // stalls until the next manual refresh or restart.
+  const interrupted = (operation) => !ctx.isAlive(operation.pid)
+    || (operation.startTime && ctx.startTimeOf(operation.pid) !== operation.startTime);
+
+  async function reconcileOperation() {
     try {
       const saved = JSON.parse(await io.readFile(operationFile, "utf8"));
-      if (saved?.id && saved.id === facts.operation?.id && saved.state !== "running") facts.operation = saved;
-      else if (saved?.id && (!facts.operation || saved.startedAt > facts.operation.startedAt)) facts.operation = saved;
+      if (!saved || typeof saved.id !== "string" || !["running", ...TERMINAL].includes(saved.state)) return;
+      if (saved?.id && saved.id !== facts.operation?.id && (!facts.operation || saved.startedAt > facts.operation.startedAt)) facts.operation = saved;
+      else if (saved?.id === facts.operation?.id && saved.state !== "running") facts.operation = saved;
+      if (facts.operation?.state === "running" && interrupted(facts.operation)) {
+        // Use the cleanup lock and re-read before writing, so a new CLI job
+        // cannot be overwritten by reconciliation of an older operation.
+        const held = await lock.acquireLock(ctx, { id: "storage", operation: "reconcile" });
+        if (held.acquired) {
+          try {
+            const current = JSON.parse(await io.readFile(operationFile, "utf8"));
+            if (current?.id === facts.operation.id && current.state === "running" && interrupted(current)) {
+              const completed = { ...current, state: "interrupted", finishedAt: now(), error: "Cleanup was interrupted. Refresh before trying again." };
+              await persistOperation(completed);
+              facts.operation = completed;
+            } else if (current?.id) facts.operation = current;
+          } finally { await held.release(); }
+        }
+      }
+      // A CLI operation can finish between console scans. Its measured cache
+      // results update those rows without starting another traversal on a poll.
+      const completions = [...(facts.operation?.recent || []), facts.operation].filter((op) => op?.finishedAt > (facts.at || 0))
+        .sort((a, b) => a.finishedAt - b.finishedAt);
+      if (completions.length) {
+        for (const completion of completions) for (const [id, bytes] of Object.entries(completion.cacheResults || {})) {
+          const row = facts.categories.find((item) => item.id === id);
+          if (row && CACHE_IDS.includes(id) && Number.isFinite(bytes) && bytes >= 0) row.bytes = bytes;
+        }
+        facts.cleanableBytes = facts.categories.filter((item) => item.cleanable).reduce((sum, item) => sum + item.bytes, 0);
+      }
     } catch { /* no operation */ }
-    if (facts.operation?.state === "running" && (!ctx.isAlive(facts.operation.pid)
-      || (facts.operation.startTime && ctx.startTimeOf(facts.operation.pid) !== facts.operation.startTime))) {
-      facts.operation = { ...facts.operation, state: "interrupted", finishedAt: now(), error: "Cleanup was interrupted. Refresh before trying again." };
-    }
+  }
+
+  async function maintain() {
+    await ready;
+    await reconcileOperation();
     if (stopped || facts.operation?.state === "running") return;
     await readPreferences();
     if (!facts.policy.automatic || facts.policyError || facts.partial || !facts.at) return;
@@ -401,26 +421,7 @@ export function createStorageManager(options = {}) {
     await ready;
     await readPreferences();
     await refreshDisk();
-    try {
-      const saved = JSON.parse(await io.readFile(operationFile, "utf8"));
-      if (saved?.id && saved.id !== facts.operation?.id && (!facts.operation || saved.startedAt > facts.operation.startedAt)) facts.operation = saved;
-      else if (saved?.id === facts.operation?.id && saved.state !== "running") facts.operation = saved;
-      if (facts.operation?.state === "running" && (!ctx.isAlive(facts.operation.pid)
-        || (facts.operation.startTime && ctx.startTimeOf(facts.operation.pid) !== facts.operation.startTime))) {
-        facts.operation = { ...facts.operation, state: "interrupted", finishedAt: now(), error: "Cleanup was interrupted. Refresh before trying again." };
-      }
-      // A CLI operation can finish between console scans. Its measured cache
-      // results update those rows without starting another traversal on a poll.
-      const completions = [...(facts.operation?.recent || []), facts.operation].filter((op) => op?.finishedAt > (facts.at || 0))
-        .sort((a, b) => a.finishedAt - b.finishedAt);
-      if (completions.length) {
-        for (const completion of completions) for (const [id, bytes] of Object.entries(completion.cacheResults || {})) {
-          const row = facts.categories.find((item) => item.id === id);
-          if (row && CACHE_IDS.includes(id) && Number.isFinite(bytes) && bytes >= 0) row.bytes = bytes;
-        }
-        facts.cleanableBytes = facts.categories.filter((item) => item.cleanable).reduce((sum, item) => sum + item.bytes, 0);
-      }
-    } catch { /* no operation */ }
+    await reconcileOperation();
     return snapshot();
   }
 

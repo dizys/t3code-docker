@@ -2398,13 +2398,9 @@ const autoTick = async () => {
       } catch { /* next tick retries */ }
     }
     // T3 Code: ask the registry when due.
-    if (autoPolicy.t3.enabled && AutoUpdate.checkDue({ checkMinutes: autoPolicy.t3.checkMinutes, lastCheckAt: autoState.lastT3AttemptAt ?? autoState.lastT3CheckAt, now })) {
-      try {
-        await persist({ lastT3AttemptAt: Date.now() });
-        const result = await runtimeManager.check();
-        if (!result.error) await persist({ lastT3CheckAt: Date.now() });
-      } catch { /* next tick retries */ }
-    }
+    try {
+      await AutoUpdate.checkT3Updates({ policy: autoPolicy, state: autoState, check: () => runtimeManager.check(), persist });
+    } catch { /* the saved attempt keeps retries on schedule */ }
     if (busy) return;
     // Providers and toolchains install independently: either can be enabled,
     // checked and installed on its own schedule while the other stays manual.

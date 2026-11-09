@@ -197,6 +197,25 @@ assert disk["availableBytes"] >= 0
 '
 }
 check "storage CLI reads filesystem space" storage_cli_has_disk
+background_checks_keep_attempts() {
+  docker exec -i -u t3 "$NAME" /usr/local/bin/node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { normalizePolicy, checkT3Updates, readUpdateState, writeUpdateState } from '/opt/t3-setup/auto-update.mjs';
+let saved = '{}', state = {}, calls = 0;
+const fs = { readFile: async () => saved, mkdir: async () => {}, writeFile: async (_file, text) => { saved = text; } };
+const policy = normalizePolicy({ t3: { enabled: true } });
+const persist = async patch => { state = await writeUpdateState(fs, '/fixture', patch); };
+const check = async () => { calls++; return { error: 'offline fixture' }; };
+await checkT3Updates({ policy, state, check, persist });
+await persist({ lastSkillsRunAt: Date.now() });
+state = await readUpdateState(fs, '/fixture');
+await checkT3Updates({ policy, state, check, persist });
+assert.equal(calls, 1);
+assert.equal(state.lastT3CheckAt, null);
+assert.ok(state.lastT3AttemptAt);
+NODE
+}
+check "failed runtime checks keep their retry schedule across state reloads" background_checks_keep_attempts
 storage_cache_paths_protect_tools() {
   docker exec -i -u t3 "$NAME" node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';

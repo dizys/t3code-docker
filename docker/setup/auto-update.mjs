@@ -123,6 +123,7 @@ export async function readUpdateState(fs, stateDir) {
       lastToolchainAttemptAt: Number(raw.lastToolchainAttemptAt) || lastToolchainCheckAt,
       lastSkillsAttemptAt: Number(raw.lastSkillsAttemptAt) || Number(raw.lastSkillsCheckAt) || null,
       lastT3CheckAt: Number(raw.lastT3CheckAt) || null,
+      lastT3AttemptAt: Number(raw.lastT3AttemptAt) || Number(raw.lastT3CheckAt) || null,
       lastProviderRunAt: Number(raw.lastProviderRunAt) || null,
       lastToolchainRunAt: Number(raw.lastToolchainRunAt) || null,
       lastSkillsRunAt: Number(raw.lastSkillsRunAt) || null,
@@ -130,7 +131,7 @@ export async function readUpdateState(fs, stateDir) {
       lastResult: typeof raw.lastResult === "string" ? raw.lastResult.slice(0, 300) : null,
     };
   } catch {
-    return { lastProviderCheckAt: null, lastToolchainCheckAt: null, lastSkillsCheckAt: null, lastProviderAttemptAt: null, lastToolchainAttemptAt: null, lastSkillsAttemptAt: null, lastT3CheckAt: null, lastProviderRunAt: null, lastToolchainRunAt: null, lastSkillsRunAt: null, lastT3RunAt: null, lastResult: null };
+    return { lastProviderCheckAt: null, lastToolchainCheckAt: null, lastSkillsCheckAt: null, lastProviderAttemptAt: null, lastToolchainAttemptAt: null, lastSkillsAttemptAt: null, lastT3CheckAt: null, lastT3AttemptAt: null, lastProviderRunAt: null, lastToolchainRunAt: null, lastSkillsRunAt: null, lastT3RunAt: null, lastResult: null };
   }
 }
 
@@ -140,6 +141,14 @@ export async function writeUpdateState(fs, stateDir, patch) {
   await fs.mkdir(`${stateDir}/setup`, { recursive: true });
   await fs.writeFile(statePath(stateDir), `${JSON.stringify(next, null, 2)}\n`);
   return next;
+}
+
+/** Failed registry checks consume the same scheduled interval as successes. */
+export async function checkT3Updates({ policy, state, check, persist, now = Date.now }) {
+  if (!policy.t3.enabled || !checkDue({ checkMinutes: policy.t3.checkMinutes, lastCheckAt: state.lastT3AttemptAt ?? state.lastT3CheckAt, now: now() })) return;
+  await persist({ lastT3AttemptAt: now() });
+  const result = await check();
+  if (!result.error) await persist({ lastT3CheckAt: now() });
 }
 
 /** Minutes since `at`, or null when never. */

@@ -187,6 +187,8 @@ test("interrupted jobs are recovered without clearing files", async (t) => {
   const f = await fixture(t);
   await writeStorageJson(path.join(f.home, ".t3/setup/storage-operation.json"), { id: "lost", state: "running", pid: 98765, startedAt: 1 });
   const restarted = createStorageManager({ ...f.base, isAlive: () => false }); t.after(() => restarted.stop());
+  await restarted.ready;
+  assert.equal(restarted.snapshot().operation.state, "interrupted");
   assert.equal((await restarted.status()).operation.state, "interrupted");
   assert.equal(f.calls.length, 0);
 });
@@ -233,6 +235,64 @@ test("opt-in budget maintenance waits for ten quiet minutes and stops for build 
   busy = true; clock++; await f.manager.maintain(); assert.equal(f.calls.length, 0);
   busy = false; clock += 600000; await f.manager.maintain(); assert.equal(f.calls.length, 2);
   assert.equal(f.manager.snapshot().operation.automatic, true);
+});
+
+for (const reused of [false, true]) test(`maintenance heals a ${reused ? "recycled" : "dead"} PID without a status poll`, async (t) => {
+  let clock = 1000;
+  const f = await fixture(t, { now: () => clock, isAlive: (pid) => pid === process.pid || (reused && pid === 424242),
+    startTimeOf: (pid) => pid === 424242 ? "new-start" : "self",
+    measure: async (roots) => ({ sizes: Object.fromEntries(roots.map((p) => [p, GB])), partial: false }) });
+  await f.manager.refresh();
+  const operationFile = path.join(path.dirname(f.manager.paths.policyFile), "storage-operation.json");
+  const stale = { id: "interrupted-cli", state: "running", pid: 424242, startTime: "old-start", startedAt: clock, completedIds: ["go"], remainingIds: ["npm"] };
+  await writeStorageJson(operationFile, stale);
+  await f.manager.maintain();
+  assert.equal(f.manager.snapshot().operation.state, "interrupted");
+  assert.equal(JSON.parse(await fs.readFile(operationFile, "utf8")).state, "interrupted");
+  await f.manager.setPolicy({ ...DEFAULT_POLICY, automatic: true, goBudgetBytes: GB / 4, npmBudgetBytes: GB / 4 });
+  clock += 11 * 60_000;
+  await f.manager.maintain();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.manager.snapshot().operation.recent[0].id, stale.id);
+  assert.deepEqual(f.manager.snapshot().operation.recent[0].remainingIds, ["npm"]);
+});
+
+test("maintenance imports a CLI completion before deciding whether caches exceed their budget", async (t) => {
+  let clock = 1000;
+  const f = await fixture(t, { now: () => clock,
+    measure: async (roots) => ({ sizes: Object.fromEntries(roots.map((p) => [p, GB])), partial: false }) });
+  await f.manager.refresh();
+  await f.manager.setPolicy({ ...DEFAULT_POLICY, automatic: true, goBudgetBytes: GB / 4, npmBudgetBytes: GB / 4 });
+  clock += 11 * 60_000;
+  await writeStorageJson(path.join(path.dirname(f.manager.paths.policyFile), "storage-operation.json"), {
+    id: "finished-cli", state: "succeeded", startedAt: clock - 100, finishedAt: clock, cacheResults: { go: 0, npm: 0 },
+  });
+  await f.manager.maintain();
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.manager.snapshot().cleanableBytes, 0);
+});
+
+test("reconciliation re-reads under the cleanup lock and preserves a newer live CLI job", async (t) => {
+  const f = await fixture(t, { isAlive: (pid) => pid === process.pid, startTimeOf: () => "self" });
+  const file = path.join(path.dirname(f.manager.paths.policyFile), "storage-operation.json");
+  const stale = { id: "old-cli", state: "running", pid: 424242, startedAt: 1000 };
+  const newer = { id: "new-cli", state: "running", pid: process.pid, startTime: "self", startedAt: 2000 };
+  let armed = false;
+  const io = { ...fs, readFile: async (target, ...args) => {
+    const text = await fs.readFile(target, ...args);
+    if (armed && target === file) { armed = false; await writeStorageJson(file, newer); }
+    return text;
+  } };
+  const manager = createStorageManager({ ...f.base, fs: io });
+  t.after(() => manager.stop());
+  await manager.ready;
+  await writeStorageJson(file, stale);
+  armed = true;
+  await manager.maintain();
+  assert.equal(manager.snapshot().operation.id, newer.id);
+  assert.equal(manager.snapshot().operation.state, "running");
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), newer);
+  assert.equal(f.calls.length, 0);
 });
 
 test("package commands executed through node and Go compiler processes block cleanup", () => {

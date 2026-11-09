@@ -5,6 +5,8 @@ import {
   POLICY_VERSION,
   normalizePolicy,
   readUpdateState,
+  writeUpdateState,
+  checkT3Updates,
   isIdle,
   checkDue,
   busyReason,
@@ -13,6 +15,30 @@ import {
   checkSoftwareUpdates,
 } from "../docker/setup/auto-update.mjs";
 import { createLatestCache } from "../docker/setup/latest.mjs";
+
+for (const throws of [false, true]) it(`failed T3 checks stay on schedule across restart (${throws ? "exception" : "error result"})`, async () => {
+  let clock = 1_800_000_000_000, stored = "{}", calls = 0, state = {};
+  const fs = { readFile: async () => stored, mkdir: async () => {}, writeFile: async (_file, text) => { stored = text; } };
+  const policy = normalizePolicy({ t3: { enabled: true, checkMinutes: 15 } });
+  const persist = async (patch) => { state = await writeUpdateState(fs, "/state", patch); };
+  const check = async () => { calls++; if (throws) throw new Error("offline"); return { error: "offline" }; };
+  const tick = () => checkT3Updates({ policy, state, check, persist, now: () => clock });
+  await tick().catch(() => {});
+  const attemptedAt = clock;
+  assert.equal(state.lastT3AttemptAt, attemptedAt);
+  assert.equal(state.lastT3CheckAt, null);
+  await persist({ lastSkillsRunAt: clock });
+  state = await readUpdateState(fs, "/state");
+  clock += 14 * 60_000;
+  await tick();
+  assert.equal(calls, 1, "neither restart nor another state write forgets the attempt");
+  clock += 60_000;
+  await tick().catch(() => {});
+  assert.equal(calls, 2);
+  clock += 15 * 60_000;
+  await checkT3Updates({ policy, state, check: async () => ({}), persist, now: () => clock });
+  assert.equal(state.lastT3CheckAt, clock);
+});
 
 describe("auto-update policy", () => {
   it("defaults every independent kind to off with 3h checks and 30m idle", () => {

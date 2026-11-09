@@ -3850,3 +3850,47 @@ body[data-console-route="files"]:has(.tc-layer) .tc-toaster { visibility: hidden
   :where(:root[data-compact]) .tc-gw-agent > .tc-seg { order: 3; display: flex; flex: 1 0 calc(100% - 2.125rem); margin-left: 2.125rem; }
   :where(:root[data-compact]) .tc-gw-agent > .tc-seg > button { flex: 1; min-height: 2rem; justify-content: center; text-align: center; }
 }
+
+/* Plugins reuse the Skills toolbar and native Setup sheets. */
+#plugin-library .tc-sk-toolbar { margin: 0 0 12px; }
+#plugin-library > .tc-hint { margin-bottom: 12px; }
+.tc-plugin-sheet { width: min(760px, calc(100vw - 32px)); }
+.tc-plugin-body { overflow-y: auto; min-height: 0; }
+.tc-plugin-body > * + * { margin-top: 16px; }
+.tc-plugin-facts { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 8px 16px; font-size: 13px; }
+.tc-plugin-facts dt { color: var(--fg-muted); }
+.tc-plugin-facts dd { margin: 0; overflow-wrap: anywhere; }
+.tc-plugin-components { display: flex; flex-wrap: wrap; gap: 6px; }
+.tc-plugin-code { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; }
+.tc-plugin-file-list { padding-left: 18px; font-size: 12px; overflow-wrap: anywhere; }
+.tc-plugin-file-list li { margin: 5px 0; }
+.tc-plugin-file-list span { color: var(--fg-muted); margin-left: 8px; }
+.tc-plugin-coverage { margin: 16px 0; font-size: 13px; }
+.tc-plugin-coverage > div { padding: 8px 0; }
+@media (max-width: 639.98px) {
+  .tc-plugin-sheet { width: 100%; max-height: 100dvh; inset: auto 0 0; border-radius: 16px 16px 0 0; }
+  .tc-plugin-sheet .tc-sheet-foot { flex-wrap: wrap; }
+}
+
+
+/* Use the Skills library and installer geometry for complete plugin packages. */
+.tc-plugin-chip-filters { display: contents; }
+.tc-plugin-import .tc-plugin-pick { grid-template-columns: 1.125rem minmax(0, 1fr); }
+.tc-plugin-pick .tc-pick-desc { overflow-wrap: anywhere; }
+.tc-plugin-pick .tc-plugin-components { margin-block: 0.5rem; }
+.tc-plugin-import .tc-plugin-files { margin-top: 0.75rem; }
+.tc-plugin-import .tc-route-row { grid-template-columns: 1.125rem auto minmax(0, 1fr) auto; }
+.tc-plugin-import .tc-route-row:has(input:disabled) { cursor: default; }
+.tc-plugin-import .tc-route-row:has(input:disabled) .tc-avail-name { color: var(--fg-muted); }
+.tc-plugin-import .tc-insp-section { min-width: 0; }
+.tc-plugin-agent-label { display: flex; align-items: center; gap: 0.5rem; }
+#plugin-library .tc-mx-group-toggle { min-width: 0; flex-shrink: 1; overflow-wrap: anywhere; white-space: normal; text-align: left; }
+#plugin-library .tc-mx-group { min-height: 2.5rem; height: auto; padding-block: 0.375rem; }
+#plugin-library .tc-prow-agents { flex-wrap: wrap; }
+@media (max-width: 639.98px) {
+  .tc-plugin-import .tc-route-row { grid-template-columns: 1.125rem auto minmax(0, 1fr); }
+  .tc-plugin-import .tc-route-row > .tc-badge { grid-column: 3; justify-self: start; }
+}
+.tc-plugin-pick .tc-pick-desc { display: block; -webkit-line-clamp: unset; overflow: visible; white-space: normal; }
+.tc-plugin-location { width: 100%; grid-template-columns: auto minmax(0, 1fr) auto; text-align: left; color: var(--fg); background: none; border: 0; font: inherit; cursor: pointer; }
+.tc-plugin-location code { white-space: normal; overflow-wrap: anywhere; }

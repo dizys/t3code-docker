@@ -5,7 +5,7 @@ const T3SkillsUI = (() => {
   const S = T3SkillModel, M = T3Model;
   const disabled = value => value ? raw(' disabled') : '';
   const mark = id => html`<span class="tc-tile tc-tile--mark tc-tile--xs" aria-hidden="true">${raw(T3C.agentMark(id))}</span>`;
-  const create = ({ api, getStatus, render, readMarkdown, downloadMarkdown }) => {
+  const create = ({ api, getStatus, render, readMarkdown, downloadMarkdown, viewPlugin }) => {
     const inventories = {}, errors = {}, epochs = {}, loading = new Set(), changing = new Map(), collapsed = new Map();
     let installed = [], reach = null, rows = [], started = false, scan = null, query = '', agent = '', showAll = false, view = 'all', markup = null, highlighted = new Set();
     const filterKey = 't3-console-hide-bundled-skills';
@@ -21,7 +21,7 @@ const T3SkillsUI = (() => {
     const displayRows = () => unified && view !== 'updates' ? S.unify(visibleRows()) : visibleRows();
     const library = () => ({ rows: displayRows(), physicalRows: rows, inventories, errors, roots: roots(), installed, agents: columns().map(provider => provider.id), home: reach?.home || getStatus()?.paths?.volume,
       unified,
-      install: options => importer.open(options), reviewHooks: pluginId => hooks.open(pluginId), reviewUpdate: reviewSource,
+      install: options => importer.open(options), viewPlugin, reviewHooks: pluginId => hooks.open(pluginId), reviewUpdate: reviewSource,
       checkOne: key => checkUpdates([key]), checking: key => checking && (!checkKeys || checkKeys.has(key)), hooksReady: Boolean(hookData), hookSummary: S.hooksSummary(hookData?.hooks) });
     let checkKeys = null;
     // Native hook inventory is deliberately outside /status polling. A sheet shares

@@ -10,6 +10,13 @@ installation review. The image contains their exact architecture, source,
 version and SHA-256 metadata, plus the small supervision infrastructure. It
 continues to include the outbound SSH client used by Git and Vault.
 
+**Toolchains → Service runtimes** lists installed system-service runtimes and
+links to their management in Services. They use the protected service installer,
+separately from mise. The SSH bundle contains `openssh-server`, `libwrap0`,
+`libwtmpdb0` and `libtalloc2`; inspect SSH to see the included components. Update
+or uninstall this bundle through SSH's service menu. Custom services continue
+to use exact installed mise versions selected from Toolchains.
+
 ## Storage and process ownership
 
 The supplied Compose file mounts `t3-services:/var/lib/t3code/services`. This

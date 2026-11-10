@@ -249,7 +249,7 @@
         if (state.route === 'vault' && (location.hash === shownHash || !location.hash.includes('/'))) credentialsUI.activate();
         if (state.route === 'gateways' && (location.hash === shownHash || !location.hash.includes('/'))) gatewaysUI.activate();
         if (state.route === 'files') filesUI.activate();
-        if (['services', 'access'].includes(state.route)) servicesUI.activate();
+        if (['services', 'access', 'toolchains'].includes(state.route)) servicesUI.activate();
         if (state.route === 'instructions' && state.contextTab === 'instructions') void loadInstructionsPreview();
       } else if (!locked) {
         // Name the URL and the reason. "Could not read status" sent someone
@@ -1343,6 +1343,7 @@
             : toolsEmpty()}
         ${added.length ? html`<div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>Tools added with <code class="tc-nowrap">mise use -g</code> in a terminal show up here too.</span></div>` : ''}
       </div>`, { actions: html`${filter}${addButton}` })}
+      ${servicesUI.toolchainsContent()}
       <p class="tc-page-foot">Also in the image: ${M.listOf([...IN_THE_IMAGE, ...(browserImage ? ['headless Chromium'] : [])])}.</p>`;
   };
 
@@ -2100,7 +2101,7 @@
     if (route === 'vault' && state.status) credentialsUI.activate(true);
     if (route === 'gateways' && state.status) gatewaysUI.activate(true);
     if (route === 'files' && state.status) filesUI.activate();
-    if (['services', 'access'].includes(route)) servicesUI.activate(true);
+    if (['services', 'access', 'toolchains'].includes(route)) servicesUI.activate(true);
   };
   const navigateFromHash = async focus => {
     const version = ++navigationVersion;

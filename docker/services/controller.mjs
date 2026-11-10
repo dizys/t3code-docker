@@ -9,11 +9,13 @@ import { readLogs } from "./logs.mjs";
 import { createNetwork } from "./network.mjs";
 
 const terminal = new Set(["succeeded", "failed", "rolled-back", "cancelled"]);
+const publicConnection = ({ authUrl, ...connection }) => ({ ...connection, signInPending: connection.state === 'NeedsLogin' && Boolean(authUrl) });
 export function publicResource(value) {
   const result = structuredClone(value);
   if (result.config?.token) { delete result.config.token; result.config.tokenSaved = true; }
   if (result.previous?.config?.token) delete result.previous.config.token;
   if (result.observation?.authUrl) delete result.observation.authUrl;
+  if (result.observation?.connection && Object.hasOwn(result.observation.connection, 'authUrl')) result.observation.connection = publicConnection(result.observation.connection);
   return result;
 }
 const publicOperation = value => {
@@ -126,8 +128,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
     else if (exit?.boot === boot) result.state = exit.exitCode === 0 ? "exited" : "failed";
     else result.state = "starting";
     if (store.domain === "system" && resource.id === "tailscale" && state.up) {
-      const connection = await system.tailscaleStatus(resource); delete connection.authUrl;
-      result.connection = connection;
+      result.connection = publicConnection(await system.tailscaleStatus(resource));
     }
     store.setMeta("observation:" + resource.id, result);
     return result;
@@ -288,7 +289,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
       const connection = store.get(input.configuration?.connection || route?.connection);
       return ['route-save', 'route-remove'].includes(input.action) && connection?.provider === 'tailscale';
     },
-    authentication: async id => { if (store.domain !== 'system' || id !== 'tailscale') throw new ServiceError('invalid', 'Choose the managed tailnet connector.'); const resource = store.get(id); if (!resource?.enabled || !resource.artifact) throw new ServiceError('missing', 'Enable Tailscale first.'); const state = await system.tailscaleStatus(resource); return { state: state.state, url: state.authUrl }; },
+    authentication: async id => { if (store.domain !== 'system' || id !== 'tailscale') throw new ServiceError('invalid', 'Choose the managed tailnet connector.'); const resource = store.get(id); if (!resource?.enabled || !resource.artifact) throw new ServiceError('missing', 'Enable Tailscale first.'); const state = await system.tailscaleStatus(resource); return { state: state.state, url: state.authUrl, starting: store.pending().some(op => op.target === id && op.action === 'sign-in') }; },
     references: localReferences,
     ports: () => services().filter(item => !item.uninstalled).map(item => ({ id: item.id, endpoints: item.config.endpoints })),
     events: after => store.events(after),

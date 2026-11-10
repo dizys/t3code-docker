@@ -11,6 +11,7 @@ import { publicKeys } from '../../docker/services/system.mjs';
 export async function createServicesFixtures() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 't3-services-ui-'));
   const controllers = {}, stores = {}, running = new Map();
+  let tailnet = { state: 'NeedsLogin', ips: [], authUrl: null };
   for (const domain of ['system', 'user']) {
     const store = stores[domain] = openStore(path.join(root, domain), { domain });
     const supervisor = {
@@ -18,11 +19,11 @@ export async function createServicesFixtures() {
       start: async id => { running.set(domain + id, true); const resource = store.get(id); store.setMeta('run:' + id, { revision: resource.revision, boot: 'fixture', runId: randomUUID(), payloadPid: 500, startedAt: Date.now() - 1000 }); },
       stop: async id => { running.set(domain + id, false); },
     };
-    const catalogue = { services: Object.fromEntries(['openssh', 'tailscale', 'cloudflared'].map(id => [id, { id, name: id, version: 'fixture-version', payloads: [{ bytes: 2048, name: id, sha256: 'fixture-digest', url: 'https://example.invalid/' + id }] }])) };
+    const catalogue = { services: Object.fromEntries(['openssh', 'tailscale', 'cloudflared'].map(id => [id, { id, name: id, version: 'fixture-version', payloads: (id === 'openssh' ? ['openssh-server', 'libwrap0', 'libwtmpdb0', 'libtalloc2'] : [id]).map(name => ({ bytes: 2048, name, sha256: 'fixture-digest', url: 'https://example.invalid/' + name })) }])) };
     controllers[domain] = createController({ store, supervisor, boot: 'fixture', reservedPorts: [3773, 3774],
       tools: { resolve: async config => ({ receipt: { executable: { path: config.executable, digest: 'fixture' }, installations: config.tools.map(item => ({ ...item, path: '/fixture/tools/' + item.tool })) } }) },
       artifacts: { catalogue, selection: id => catalogue.services[id], install: async (id, selection) => ({ ...selection, path: '/fixture/artifacts/' + id, arch: 'arm64' }) },
-      system: { publicKeys, configureSystem: async () => ({ hostFingerprint: 'SHA256:fixture-public-fingerprint', keys: [] }), tailscaleStatus: async () => ({ state: 'NeedsLogin', ips: [] }), paths: {} },
+      system: { publicKeys, configureSystem: async () => ({ hostFingerprint: 'SHA256:fixture-public-fingerprint', keys: [] }), tailscaleStatus: async () => ({ ...tailnet }), controlTailscale: async (_resource, action) => { tailnet = { state: 'NeedsLogin', ips: [], authUrl: action === 'sign-in' ? 'https://login.tailscale.com/a/fixture-only' : null }; return { authGeneration: Date.now() }; }, paths: {} },
       health: async () => ({ ok: true, at: Date.now(), message: 'Fixture endpoint answered.' }),
       systemSnapshot: domain === 'user' ? async () => controllers.system.snapshot() : undefined,
     });
@@ -33,7 +34,7 @@ export async function createServicesFixtures() {
     if (!controller) throw new Error('Choose a user or system service.');
     if (action === 'inventory') return { tools: [{ tool: 'python', version: '3.14.0', path: '/fixture/tools/python' }, { tool: 'node', version: '24.13.0', path: '/fixture/tools/node' }] };
     if (action === 'permissions') return { maintenance: false };
-    if (action === 'authentication') return { state: 'NeedsLogin', url: 'https://login.tailscale.com/a/fixture-only' };
+    if (action === 'authentication') return controller.authentication(input.id);
     if (action === 'snapshot') return controller.snapshot();
     if (action === 'plan') return controller.plan(input);
     if (action === 'apply') return controller.apply(input);

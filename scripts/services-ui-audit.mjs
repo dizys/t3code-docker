@@ -24,7 +24,7 @@ const checks = [];
 const geometry = () => {
   const issues = [];
   if (document.documentElement.scrollWidth > innerWidth + 1) issues.push('page overflow');
-  for (const element of document.querySelectorAll('.tc-layer [role=dialog], .tc-layer [role=alertdialog], #page-services .tc-row, #page-access .tc-service-route')) {
+  for (const element of document.querySelectorAll('.tc-layer [role=dialog], .tc-layer [role=alertdialog], .tc-layer [role=menu], #page-services .tc-row, #page-toolchains [data-key^="service-runtime-"], #page-access .tc-service-route')) {
     const rect = element.getBoundingClientRect();
     if (rect.width && (rect.left < -1 || rect.right > innerWidth + 1)) issues.push('horizontal bounds: ' + element.className);
     if (element.closest('.tc-layer') && rect.height && (rect.top < -1 || rect.bottom > innerHeight + 1)) issues.push('vertical dialog bounds');
@@ -55,14 +55,19 @@ try {
       if (dropSubmission) { dropSubmission = false; const response = await route.fetch(); assert.equal(response.ok(), true); await route.abort('failed'); }
       else await route.continue();
     });
-    let userUnavailable = false;
+    let userUnavailable = false, tailnetOverride = null, authenticationOverride = null;
     await page.route('**/__setup/services', async route => {
       const response = await route.fetch(), body = await response.json();
       if (userUnavailable) {
         body.domains = body.domains.map(domain => domain.domain === 'user' ? { ...domain, code: 'controller-unavailable', error: 'Fixture controller disconnected', services: [], operations: [], connections: [], routes: [] } : domain);
         body.services = body.services.filter(item => item.domain !== 'user'); body.operations = body.operations.filter(item => item.domain !== 'user'); body.connections = []; body.routes = [];
       }
+      if (tailnetOverride) for (const service of body.services) if (service.domain === 'system' && service.id === 'tailscale') service.observation.connection = { ...tailnetOverride };
       await route.fulfill({ json: body });
+    });
+    await page.route('**/services/authentication', async route => {
+      if (authenticationOverride || tailnetOverride) await route.fulfill({ json: { state: tailnetOverride?.state || 'NeedsLogin', url: null, starting: false, ...authenticationOverride } });
+      else await route.continue();
     });
     const shot = async name => { assert.deepEqual(await page.evaluate(geometry), [], tag + ': ' + name); await page.screenshot({ path: path.join(output, tag + '-' + name + '.png') }); };
     const button = name => page.getByRole('button', { name, exact: true });
@@ -127,12 +132,67 @@ try {
       const type = Buffer.from('ssh-ed25519'), blob = Buffer.concat([Buffer.from([0,0,0,type.length]),type,Buffer.from([0,0,0,32]),Buffer.alloc(32,11)]);
       await page.locator('#svc-keys').fill('ssh-ed25519 ' + blob.toString('base64') + ' test client');
       await page.locator('#svc-listen').selectOption('0.0.0.0'); await button('Review changes').click(); await button('Install and enable').click();
-      await page.locator('.tc-service-row').getByText('Locally ready', { exact: true }).waitFor();
+      await page.locator('#page-access .tc-service-row').getByText('Locally ready', { exact: true }).waitFor();
     }
     await button('Manage SSH').click(); await page.getByRole('menuitem', { name: 'Edit configuration', exact: true }).click();
     await page.getByRole('dialog', { name: 'Edit SSH', exact: true }).waitFor(); await shot('ssh-editor');
     await page.locator('[data-service-edit=close]').click();
     await shot('ssh');
+    await openPage('toolchains');
+    const runtimes = page.getByRole('region', { name: 'Service runtimes', exact: true });
+    await runtimes.getByRole('link', { name: 'Manage SSH in Services', exact: true }).waitFor();
+    assert.match(await runtimes.innerText(), /Managed in Services/);
+    assert.match(await runtimes.innerText(), /separate from mise tools/);
+    await shot('service-runtimes');
+    await runtimes.getByRole('link', { name: 'Manage SSH in Services', exact: true }).click();
+    const sshInspector = page.getByRole('dialog', { name: 'SSH', exact: true });
+    await sshInspector.waitFor(); assert.match(await sshInspector.innerText(), /openssh-server, libwrap0, libwtmpdb0, libtalloc2/);
+    await shot('ssh-components'); await sshInspector.getByRole('button', { name: 'Close', exact: true }).click();
+    if (width === 1440) { await page.waitForTimeout(5500); assert.equal(await sshInspector.count(), 0, 'polling must not reopen a closed service deep link'); }
+    await openPage('services');
+    let tailnet = page.locator('.tc-service-row').filter({ has: page.getByRole('button', { name: 'Tailscale', exact: true }) });
+    if (!await tailnet.count()) {
+      await tab('Available').click();
+      await page.locator('.tc-card').filter({ has: page.getByRole('heading', { name: 'Tailscale', exact: true }) }).getByRole('button', { name: 'Configure…', exact: true }).click();
+      await button('Review changes').click(); await button('Install and enable').click(); await tab('Configured').click();
+    }
+    await tailnet.getByText('Running', { exact: true }).waitFor();
+    const authMenu = async () => { await tailnet.getByRole('button', { name: 'Manage Tailscale', exact: true }).click(); return page.getByRole('menuitem').filter({ hasText: /sign.in|sign out|approval/i }); };
+    const authLabels = async () => (await (await authMenu()).allTextContents()).map(label => label.trim());
+    assert.deepEqual(await authLabels(), ['Sign in…']); await shot('tailscale-first-sign-in');
+    await page.getByRole('menuitem', { name: 'Sign in…', exact: true }).click(); await button('Start sign-in').click();
+    const authDialog = page.getByRole('dialog', { name: 'Sign in to Tailscale', exact: true });
+    await authDialog.getByRole('link', { name: 'Open Tailscale sign-in', exact: true }).waitFor();
+    await authDialog.getByRole('button', { name: 'Close', exact: true }).click();
+    const submissionsBeforeResume = submissionKeys.length;
+    assert.deepEqual(await authLabels(), ['Continue sign-in']);
+    await page.getByRole('menuitem', { name: 'Continue sign-in', exact: true }).click();
+    await authDialog.getByRole('link', { name: 'Open Tailscale sign-in', exact: true }).waitFor(); await shot('tailscale-pending-sign-in');
+    assert.equal(submissionKeys.length, submissionsBeforeResume, 'resuming browser authorization must not submit another service operation');
+    await authDialog.getByRole('button', { name: 'Close', exact: true }).click();
+    authenticationOverride = { state: 'NeedsLogin', url: null, starting: false };
+    await authMenu(); await page.getByRole('menuitem', { name: 'Continue sign-in', exact: true }).click();
+    await authDialog.getByRole('button', { name: 'Start sign-in…', exact: true }).waitFor();
+    assert.equal(await authDialog.locator('.tc-spinner').count(), 0, 'an expired link needs an explicit restart instead of an endless spinner');
+    await shot('tailscale-expired-sign-in'); await authDialog.getByRole('button', { name: 'Close', exact: true }).click(); authenticationOverride = null;
+    const refreshConnector = async () => {
+      await openPage('toolchains');
+      const response = page.waitForResponse(value => new URL(value.url()).pathname === '/__setup/services');
+      await openPage('services'); await (await response).finished(); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    };
+    tailnetOverride = { state: 'NeedsMachineAuth', signInPending: false }; await refreshConnector();
+    assert.deepEqual(await authLabels(), ['Check device approval', 'Sign out…']);
+    await page.getByRole('menuitem', { name: 'Check device approval', exact: true }).click();
+    await authDialog.getByRole('link', { name: 'Open Tailscale admin console', exact: true }).waitFor();
+    assert.equal(await authDialog.getByRole('link', { name: 'Open Tailscale sign-in', exact: true }).count(), 0);
+    await shot('tailscale-device-approval'); await authDialog.getByRole('button', { name: 'Close', exact: true }).click();
+    tailnetOverride = { state: 'Unavailable' }; await refreshConnector();
+    assert.deepEqual(await authLabels(), []); await page.keyboard.press('Escape');
+    tailnetOverride = { state: 'Running', signInPending: false }; await refreshConnector();
+    assert.deepEqual(await authLabels(), ['Sign out…']); await shot('tailscale-signed-in');
+    await page.getByRole('menuitem', { name: 'Sign out…', exact: true }).click(); tailnetOverride = null;
+    await page.getByRole('checkbox', { name: 'I have another way to reach Setup or this container.', exact: true }).check(); await button('Sign out connector').click();
+    await openPage('access/ssh');
     await tab('Connections').click(); await button('Add connection').click();
     await page.locator('[data-service-network=name]').fill('Existing LAN ' + tag); await button('Review changes').click(); await button('Save connection').click();
     await page.getByText('Existing LAN ' + tag, { exact: true }).waitFor(); await shot('connections');
@@ -148,7 +208,7 @@ try {
     await route.getByText('Client test reported', { exact: true }).waitFor();
     await route.getByRole('button', { name: 'Remove route…', exact: true }).click(); await button('Remove route').click(); await route.waitFor({ state: 'detached' });
     if (width === 1440) {
-      const sshRow = page.locator('.tc-service-row').filter({ has: page.locator('.tc-service-name').filter({ hasText: /^SSH$/ }) });
+      const sshRow = page.locator('#page-access .tc-service-row').filter({ has: page.locator('.tc-service-name').filter({ hasText: /^SSH$/ }) });
       await button('Manage SSH').click(); await page.getByRole('menuitem', { name: 'Disable at startup', exact: true }).click();
       assert.equal(await button('Disable service').isDisabled(), true);
       await page.getByRole('checkbox', { name: 'I have another way to reach Setup or this container.', exact: true }).check(); await button('Disable service').click();
@@ -163,7 +223,7 @@ try {
     await tab('Devices').focus(); await page.keyboard.press('ArrowRight'); await tab('Connections').waitFor();
     assert.equal(await tab('Connections').getAttribute('aria-selected'), 'true');
     assert.deepEqual(errors, [], tag + ': browser errors');
-    checks.push({ width, theme, embedded, fontSize, checks: ['editor close button alignment', 'create literal argv', 'environment and Vault reference forms', 'review', 'lost submission recovery', 'stale status retains last-known rows', 'observed status', 'logs', 'stop for now', 'disable', 'remove', 'draft preservation', 'SSH key privacy', 'optional SSH install', 'connection review', 'client route and instructions', 'reported client test', 'route removal', 'Access tabs', 'keyboard tabs', 'geometry', 'no browser exceptions'] });
+    checks.push({ width, theme, embedded, fontSize, checks: ['editor close button alignment', 'create literal argv', 'environment and Vault reference forms', 'review', 'lost submission recovery', 'stale status retains last-known rows', 'observed status', 'logs', 'stop for now', 'disable', 'remove', 'draft preservation', 'SSH key privacy', 'optional SSH install', 'service runtimes link to Services', 'SSH bundled components', 'closed service deep links stay closed', 'first and pending Tailscale sign-in actions', 'resuming sign-in creates no operation', 'expired sign-in recovery', 'Tailscale device approval and signed-in actions', 'unavailable Tailscale state', 'connection review', 'client route and instructions', 'reported client test', 'route removal', 'Access tabs', 'keyboard tabs', 'geometry', 'no browser exceptions'] });
     await context.close(); console.log(JSON.stringify({ ok: true, ...checks.at(-1) }));
   }
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(checks, null, 2) + '\n');

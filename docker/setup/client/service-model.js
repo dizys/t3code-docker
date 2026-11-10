@@ -12,5 +12,13 @@ const T3ServiceModel = (() => {
   const terminal = operation => ['succeeded', 'failed', 'rolled-back', 'cancelled'].includes(operation?.state);
   const operationLabel = operation => ({ committed: 'Queued', 'network-control': 'Updating connector', 'waiting-for-connector': 'Waiting for connector', preflight: 'Checking prerequisites', stage: 'Downloading and verifying', configure: 'Saving configuration', activate: 'Starting and checking', restore: 'Restoring previous configuration', stopping: 'Stopping', succeeded: 'Completed', failed: 'Needs attention', 'rolled-back': 'Previous configuration restored' })[operation?.phase] || 'Working';
   const key = row => row.domain + ':' + row.id;
-  return { STATES, state, attention, matches, command, terminal, operationLabel, key };
+  const authenticationActions = (row, operations = []) => {
+    if (row.domain !== 'system' || row.id !== 'tailscale' || !row.enabled || !row.artifact || row.uninstalled || row.observation?.lastKnown || !['running', 'ready'].includes(row.observation?.state)) return [];
+    const connection = row.observation.connection;
+    const starting = operations.some(operation => operation.domain === row.domain && operation.target === row.id && operation.action === 'sign-in' && !terminal(operation));
+    if (connection?.state === 'NeedsLogin') return [connection.signInPending === true || starting ? 'continue-sign-in' : 'sign-in'];
+    if (connection?.state === 'NeedsMachineAuth') return ['check-approval', 'sign-out'];
+    return ['Running', 'Stopped'].includes(connection?.state) ? ['sign-out'] : [];
+  };
+  return { STATES, state, attention, matches, command, terminal, operationLabel, key, authenticationActions };
 })();

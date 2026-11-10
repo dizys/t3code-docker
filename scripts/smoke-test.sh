@@ -756,6 +756,14 @@ t3_session_opens_console() {
   printf '%s' "$body" | python3 -c 'import json, sys; assert json.load(sys.stdin)["viewer"] == {"via": "t3"}'
 }
 check "the console accepts a session T3 vouches for" t3_session_opens_console
+t3_session_has_maintenance() {
+  docker exec -e T3_TEST_SESSION_COOKIE="$T3_COOKIE" "$NAME" node --input-type=module -e '
+    import { createT3Sessions } from "/opt/t3-setup/t3-session.mjs";
+    const sessions = createT3Sessions({ baseUrl: "http://127.0.0.1:3773", requiredScopes: ["terminal:operate", "environment:maintain"], ttlMs: 0, missTtlMs: 0 });
+    if (!await sessions.verify(process.env.T3_TEST_SESSION_COOKIE)) process.exitCode = 1;
+  '
+}
+check "the native session response preserves a paired browser's maintenance permission" t3_session_has_maintenance
 check "and not one T3 does not" \
   "[ \"\$(console_code -H \"cookie: \${T3_COOKIE}x\" http://127.0.0.1:3774/status)\" = 401 ]"
 revoke_code() {

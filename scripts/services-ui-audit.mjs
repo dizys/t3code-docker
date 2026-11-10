@@ -29,6 +29,13 @@ const geometry = () => {
     if (rect.width && (rect.left < -1 || rect.right > innerWidth + 1)) issues.push('horizontal bounds: ' + element.className);
     if (element.closest('.tc-layer') && rect.height && (rect.top < -1 || rect.bottom > innerHeight + 1)) issues.push('vertical dialog bounds');
   }
+  for (const header of document.querySelectorAll('.tc-service-editor > .tc-sheet-head')) {
+    const close = header.querySelector('[data-service-edit=close]'), title = header.querySelector('.tc-sheet-head-text');
+    const edge = header.getBoundingClientRect().right - parseFloat(getComputedStyle(header).paddingRight);
+    const rect = close.getBoundingClientRect();
+    if (Math.abs(rect.right - edge) > 1) issues.push('service editor close button is not at the right edge');
+    if (rect.left < title.getBoundingClientRect().right - 1) issues.push('service editor title overlaps the close button');
+  }
   return issues;
 };
 try {
@@ -64,6 +71,7 @@ try {
     await page.goto(base + (embedded ? '?embed=t3&host=tab&layout=wide' : '') + '#services/new');
     const initialEditor = page.getByRole('dialog', { name: 'Add a custom service', exact: true });
     await initialEditor.waitFor();
+    await shot('new-editor');
     assert.equal(await page.locator('#app').evaluate(element => element.inert), true, 'the editor deep link keeps the underlying console inert');
     await initialEditor.getByRole('button', { name: 'Close', exact: true }).click();
     await initialEditor.waitFor({ state: 'detached' });
@@ -113,7 +121,7 @@ try {
     await page.locator('[data-service-edit=close]').click(); await button('Discard').click();
     await openPage('access/ssh'); await tab('SSH').waitFor(); assert.equal(await tab('SSH').getAttribute('aria-selected'), 'true');
     if (await button('Set up SSH').isVisible()) {
-      await button('Set up SSH').click(); await page.locator('#svc-keys').fill('-----BEGIN PRIVATE KEY----- fixture-private-canary');
+      await button('Set up SSH').click(); await shot('ssh-setup'); await page.locator('#svc-keys').fill('-----BEGIN PRIVATE KEY----- fixture-private-canary');
       await button('Review changes').click(); await page.getByText('This is a private key. Paste only its public key.', { exact: true }).waitFor();
       assert.equal(await page.locator('#svc-keys').inputValue(), ''); assert.ok(!(await page.locator('body').innerText()).includes('fixture-private-canary'));
       const type = Buffer.from('ssh-ed25519'), blob = Buffer.concat([Buffer.from([0,0,0,type.length]),type,Buffer.from([0,0,0,32]),Buffer.alloc(32,11)]);
@@ -121,6 +129,9 @@ try {
       await page.locator('#svc-listen').selectOption('0.0.0.0'); await button('Review changes').click(); await button('Install and enable').click();
       await page.locator('.tc-service-row').getByText('Locally ready', { exact: true }).waitFor();
     }
+    await button('Manage SSH').click(); await page.getByRole('menuitem', { name: 'Edit configuration', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Edit SSH', exact: true }).waitFor(); await shot('ssh-editor');
+    await page.locator('[data-service-edit=close]').click();
     await shot('ssh');
     await tab('Connections').click(); await button('Add connection').click();
     await page.locator('[data-service-network=name]').fill('Existing LAN ' + tag); await button('Review changes').click(); await button('Save connection').click();
@@ -152,7 +163,7 @@ try {
     await tab('Devices').focus(); await page.keyboard.press('ArrowRight'); await tab('Connections').waitFor();
     assert.equal(await tab('Connections').getAttribute('aria-selected'), 'true');
     assert.deepEqual(errors, [], tag + ': browser errors');
-    checks.push({ width, theme, embedded, fontSize, checks: ['create literal argv', 'environment and Vault reference forms', 'review', 'lost submission recovery', 'stale status retains last-known rows', 'observed status', 'logs', 'stop for now', 'disable', 'remove', 'draft preservation', 'SSH key privacy', 'optional SSH install', 'connection review', 'client route and instructions', 'reported client test', 'route removal', 'Access tabs', 'keyboard tabs', 'geometry', 'no browser exceptions'] });
+    checks.push({ width, theme, embedded, fontSize, checks: ['editor close button alignment', 'create literal argv', 'environment and Vault reference forms', 'review', 'lost submission recovery', 'stale status retains last-known rows', 'observed status', 'logs', 'stop for now', 'disable', 'remove', 'draft preservation', 'SSH key privacy', 'optional SSH install', 'connection review', 'client route and instructions', 'reported client test', 'route removal', 'Access tabs', 'keyboard tabs', 'geometry', 'no browser exceptions'] });
     await context.close(); console.log(JSON.stringify({ ok: true, ...checks.at(-1) }));
   }
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(checks, null, 2) + '\n');

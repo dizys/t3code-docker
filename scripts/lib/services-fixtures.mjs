@@ -43,7 +43,12 @@ export async function createServicesFixtures() {
     throw new Error('Unsupported fixture operation.');
   };
   const api = createServicesAPI({ request });
-  const close = () => { for (const controller of Object.values(controllers)) controller.close(); };
+  const close = async () => {
+    for (const controller of Object.values(controllers)) controller.close();
+    while (Object.values(controllers).some(controller => !controller.idle())) await new Promise(resolve => setTimeout(resolve, 20));
+    for (const store of Object.values(stores)) store.close();
+    await fs.rm(root, { recursive: true, force: true });
+  };
   return {
     close,
     respond: async (method, url, input) => {

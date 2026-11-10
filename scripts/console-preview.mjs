@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The real console with in-memory data and no production API. Useful for native
+// The real console with disposable test data and no production API. Useful for native
 // browser review without installing seven agents or authorizing any writes.
 // node scripts/console-preview.mjs [--port 23785]
 import http from 'node:http';
@@ -22,7 +22,7 @@ const mcp = createMcpFixtures();
 const api = createSkillsFixtures();
 const storage = createStorageFixtures();
 const port = Number(process.argv[process.argv.indexOf('--port') + 1]) || 23785;
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/.well-known/t3/environment') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ environmentId: 'fixture-preview', serverVersion: 'fixture', label: 'Fixture preview' })); return; }
   if (url.pathname === '/__setup/' || url.pathname === '/') {
@@ -43,4 +43,13 @@ http.createServer(async (req, res) => {
   if (result.body?.etag && req.headers['if-none-match'] === result.body.etag) { res.writeHead(304, { ETag: result.body.etag }); res.end(); return; }
   res.writeHead(result.status || 200, { 'content-type': 'application/json', 'cache-control': 'no-store', ...result.headers });
   res.end(result.raw || JSON.stringify(result.body));
-}).listen(port, '127.0.0.1', () => console.log(`Fixture console: http://127.0.0.1:${port}/__setup/#instructions/skills (all writes stay in memory)`));
+}).listen(port, '127.0.0.1', () => console.log(`Fixture console: http://127.0.0.1:${port}/__setup/#instructions/skills (all writes use disposable test state)`));
+let stopping = false;
+const stop = async () => {
+  if (stopping) return;
+  stopping = true;
+  server.close(); server.closeAllConnections();
+  await services.close();
+};
+process.on('SIGTERM', () => void stop());
+process.on('SIGINT', () => void stop());

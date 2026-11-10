@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { serviceRequest } from '/opt/t3-services/client.mjs';
 const exec = promisify(execFile), phase = process.argv[2] || 'prepare';
@@ -83,8 +84,8 @@ if (phase === 'prepare') {
   await assert.rejects(fs.access('/home/t3/.t3/tools/cloudflared'));
   await apply('system', { action: 'install', id: 'tailscale', expectedRevision: 0, configuration: { hostname: 'smoke-fixture', enabled: false } });
   const tail = await saved('system', 'tailscale');
-  const help = await exec(tail.artifact.path + '/tailscale', ['serve', '--help']);
-  assert.match(help.stdout + help.stderr, /--tcp/); assert.match(help.stdout + help.stderr, /off/);
+  const { stdout: tailCli } = await exec(process.execPath, [fileURLToPath(new URL('./services-tailscale-cli-smoke.mjs', import.meta.url)), tail.artifact.path + '/tailscale'], { timeout: 30000 });
+  process.stdout.write(tailCli);
   await edit('system', 'tailscale', 'uninstall');
   const token = 'services-test-canary-'.replaceAll('-', '_').repeat(6);
   await apply('system', { action: 'install', id: 'cloudflared', expectedRevision: 0, configuration: { token, enabled: false } });

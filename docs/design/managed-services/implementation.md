@@ -87,6 +87,10 @@ closure, positive SSH login, root/password denial, public host-key sidecar
 recovery, mismatch refusal, connector archive/CLI compatibility, token privacy,
 worker credentials/capabilities, restart and offline recreation. Recreation
 changes PUID/PGID and checks a fresh SSH login with the same host identity.
+The installed Tailscale CLI is exercised against a disposable Unix socket
+LocalAPI for background TCP Serve, JSON status, targeted removal and retention
+of another route. This checks the CLI/configuration contract without a tailnet
+account; it does not establish remote forwarding or provider acceptance.
 Tampered cached bytes must fail before an offline reinstall; restoring the
 original bytes permits verified reuse. A separate rootless container tests
 custom services without protected system storage. Existing image smoke and

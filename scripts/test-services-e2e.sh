@@ -16,6 +16,7 @@ start() {
   docker run -d --name "$NAME" -e T3_PREINSTALL=none -e T3_SETUP_KEY=services-test-only \
     -v "$HOME_VOLUME:/home/t3" -v "$SYSTEM_VOLUME:/var/lib/t3code/services" "$@" "$IMAGE" >/dev/null
   docker cp "$SCRIPT_DIR/services-system-smoke.mjs" "$NAME:/tmp/services-system-smoke.mjs"
+  docker cp "$SCRIPT_DIR/services-tailscale-cli-smoke.mjs" "$NAME:/tmp/services-tailscale-cli-smoke.mjs"
 }
 start
 docker cp "$SCRIPT_DIR/services-native-smoke.mjs" "$NAME:/tmp/services-native-smoke.mjs"

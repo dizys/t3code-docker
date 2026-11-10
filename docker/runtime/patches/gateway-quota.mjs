@@ -14,20 +14,81 @@ export function patchGatewayQuota(source) {
   if (Object.hasOwn(source, quotaFile)) throw new Error("The gateway-quota module already exists. Review the upstream source before publishing this runtime.");
   const next = { ...source, [quotaFile]: quotaSource };
   const change = (file, before, after) => { next[file] = replaceOnce(next[file], before, after, file); };
+  const legacyDriver = 'driver: ProviderDriverKind.make(account.provider === "codex" ? "codex" : "claudeAgent"),';
+  const providerTable = /HUB_PROVIDERS|interface HubProvider\b|provider: HubProvider\b/.test(source[files[0]] ?? "");
+  if (providerTable && source[files[0]].includes(legacyDriver)) {
+    throw new Error(`The gateway-quota patch no longer matches ${files[0]}. Review the upstream source before publishing this runtime.`);
+  }
   change(files[0], 'import { codexPlanLabel }', 'import { makeAdditionalQuotaReader, quotaDriver } from "./cliproxyQuota.ts";\nimport { codexPlanLabel }');
-  change(files[0], '  email: Schema.optional(Schema.String),', `  email: Schema.optional(Schema.String),
+  const extraFields = `
   name: Schema.optional(Schema.String),
-  project_id: Schema.optional(Schema.String),
   runtime_only: Schema.optional(Schema.Boolean),
   supports_quota: Schema.optional(Schema.Boolean),
-  quota_plugin_id: Schema.optional(Schema.String),`);
+  quota_plugin_id: Schema.optional(Schema.String),`;
+  if (providerTable) {
+    // Nightly's native Antigravity reader already owns project_id.
+    change(files[0], '  project_id: Schema.optional(Schema.String),', '  project_id: Schema.optional(Schema.String),');
+    change(files[0], `  email: Schema.optional(Schema.String),
+  disabled: Schema.optional(Schema.Boolean),
+  project_id: Schema.optional(Schema.String),`, `  email: Schema.optional(Schema.String),${extraFields}
+  disabled: Schema.optional(Schema.Boolean),
+  project_id: Schema.optional(Schema.String),`);
+  } else {
+    change(files[0], '  email: Schema.optional(Schema.String),', `  email: Schema.optional(Schema.String),${extraFields}
+  project_id: Schema.optional(Schema.String),`);
+  }
   change(files[0], 'const AuthFiles = Schema.Struct({ files: Schema.Array(AuthFile) });', 'const AuthFiles = Schema.Struct({ files: Schema.Array(Schema.Unknown) });');
   change(files[0], '    return (yield* decodeAuthFiles(response)).files;', `    return (yield* decodeAuthFiles(response)).files.filter(Schema.is(AuthFile))
       .filter((account) => account.id.trim() && account.auth_index.trim() && account.provider.trim());`);
-  change(files[0], '    data?: unknown,\n  ) {', '    data?: unknown,\n    requestHeaders?: Record<string, string>,\n  ) {');
-  change(files[0], '      header,', '      header: requestHeaders ?? header,');
-  change(files[0], 'driver: ProviderDriverKind.make(account.provider === "codex" ? "codex" : "claudeAgent"),', 'driver: ProviderDriverKind.make(quotaDriver(account.provider)),');
-  change(files[0], '    const read = Effect.gen(function* () {', `    if (account.provider !== "codex" && account.provider !== "claude") {
+  if (providerTable) {
+    // Keep the native provider table, transport, TLS diagnostics and reset-credit
+    // calls intact. Only accounts without a native reader use our extension.
+    for (const anchor of [
+      'interface HubProvider {',
+      'const HUB_PROVIDERS = new Map<string, HubProvider>([',
+      '      apiCall(hub, account, provider.header(account, platform, architecture), url, data);',
+      `  const apiCall = Effect.fn("CliproxyApi.apiCall")(function* (
+    hub: CliproxyHub,
+    account: AuthFile,
+    header: Record<string, string>,
+    url: string,
+    data?: unknown,
+  ) {`,
+    ]) change(files[0], anchor, anchor);
+    change(files[0], `  const readAccount = Effect.fn("CliproxyApi.readAccount")(function* (
+    hub: CliproxyHub,
+    account: AuthFile,
+    provider: HubProvider,
+  ) {
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    const call: HubCall = (url, data) =>
+      apiCall(hub, account, provider.header(account, platform, architecture), url, data);`, `  const readAccount = Effect.fn("CliproxyApi.readAccount")(function* (
+    hub: CliproxyHub,
+    account: AuthFile,
+    provider: HubProvider | undefined,
+  ) {
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    if (!provider) {
+      const readAdditionalQuota = makeAdditionalQuotaReader(
+        (path, body) => management(hub, path, body),
+        (entry, url, data, headers) => apiCall(hub, { ...account, ...entry }, headers, url, data),
+      );
+      return {
+        id: account.id,
+        driver: ProviderDriverKind.make(quotaDriver(account.provider)),
+        ...listedIdentity(account),
+        ...yield* readAdditionalQuota(account, checkedAt),
+      };
+    }
+    const call: HubCall = (url, data) =>
+      apiCall(hub, account, provider.header(account, platform, architecture), url, data);`);
+    change(files[0], 'return provider && !account.disabled ? [{ account, provider }] : [];', 'return !account.disabled ? [{ account, provider }] : [];');
+    change(files[0], '// Keyed by the auth-files `provider`; accounts of any other provider are skipped.', '// Keyed by the auth-files `provider`; other providers use the additional quota reader.');
+  } else {
+    change(files[0], '    data?: unknown,\n  ) {', '    data?: unknown,\n    requestHeaders?: Record<string, string>,\n  ) {');
+    change(files[0], '      header,', '      header: requestHeaders ?? header,');
+    change(files[0], legacyDriver, 'driver: ProviderDriverKind.make(quotaDriver(account.provider)),');
+    change(files[0], '    const read = Effect.gen(function* () {', `    if (account.provider !== "codex" && account.provider !== "claude") {
       const readAdditionalQuota = makeAdditionalQuotaReader(
         (path, body) => management(hub, path, body),
         (entry, url, data, headers) => apiCall(hub, entry, url, data, headers),
@@ -35,7 +96,8 @@ export function patchGatewayQuota(source) {
       return { ...base, ...yield* readAdditionalQuota(account, checkedAt) };
     }
     const read = Effect.gen(function* () {`);
-  change(files[0], '!account.disabled && (account.provider === "codex" || account.provider === "claude"),', '!account.disabled,');
+    change(files[0], '!account.disabled && (account.provider === "codex" || account.provider === "claude"),', '!account.disabled,');
+  }
   change(files[1], `      } else if (source.accounts.length === 0) {
         notices.push(\x60${'${label(environmentLabel, source.label)}'}: No accounts reported.\x60);
       }`, `      } else if (source.accounts.length === 0) {

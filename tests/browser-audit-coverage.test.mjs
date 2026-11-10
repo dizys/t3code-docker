@@ -31,7 +31,7 @@ Module._load = function(request, ...args) {
   if (request === 'playwright' || request === 'playwright-core') return { chromium: { launch: async () => ({ close: async () => {} }) } };
   return original.call(this, request, ...args);
 };
-global.fetch = async () => ({ ok: true, json: async () => ({ harnesses: [], setup: {} }) });
+global.fetch = async () => ({ ok: true, json: async () => ({ harnesses: [{ id: 'muse' }], setup: {} }) });
 const entry = process.env.AUDIT_ENTRY;
 process.argv = ['node', entry, 'http://fixture.invalid/', 'fixture'];
 require(entry);

@@ -23,9 +23,9 @@ const freshPolicy = () => ({
 const geometry = () => {
   const issues = [];
   if (document.documentElement.scrollWidth > innerWidth + 1) issues.push(`horizontal page overflow (${document.documentElement.scrollWidth}px > ${innerWidth}px)`);
-  // The longer major-upgrade action can fit the page while leaving too little
-  // space for the agent name. Measure its row text as well as the dialogs.
-  for (const el of document.querySelectorAll('.tc-row:has([data-cmd="harness.upgrade"]) :is(.tc-row-main, .tc-row-title)')) {
+  // Actions can fit the page while leaving too little space for version
+  // comparisons. Measure their text boxes as well as the outer row/dialog.
+  for (const el of document.querySelectorAll('.tc-row:has(.tc-version) :is(.tc-row-main, .tc-row-title, .tc-version, .tc-version-target)')) {
     const rect = el.getBoundingClientRect(), style = getComputedStyle(el);
     if (rect.width && rect.height && ['visible', 'clip'].includes(style.overflowX)
       && el.scrollWidth > el.clientWidth + 1) issues.push(`${el.className} clipped (${el.scrollWidth}px > ${el.clientWidth}px)`);
@@ -59,6 +59,14 @@ const geometry = () => {
     ? { ...row, installed: false, installedVersion: null, version: null, inProgress: false, failed: true, operation: 'install', failure }
     : row);
   if (fixtureStatus.operations) delete fixtureStatus.operations['harness:opencode'];
+  // Real build suffixes made a version comparison wider than the phone's
+  // name column. Keep a long current/next pair regardless of cached releases.
+  const muse = fixtureStatus.harnesses.find(row => row.id === 'muse');
+  assert.ok(muse, 'fixture includes Muse');
+  Object.assign(muse, { supported: true, installed: true, runnable: true, signedIn: true,
+    installedVersion: '1.4.15-R8339.1', version: '1.4.15-R8339.1', latestVersion: '1.4.16-R8339.1',
+    inProgress: false, failed: false, failure: null, operation: null });
+  if (fixtureStatus.operations) delete fixtureStatus.operations['harness:muse'];
   // A finished first-start failure also has a page notice. Keep it in every
   // run: otherwise an empty scratch home misses long errors present in CI.
   fixtureStatus.setup = { ...fixtureStatus.setup, state: 'finished', items: [

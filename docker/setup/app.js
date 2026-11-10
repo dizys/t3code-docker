@@ -157,7 +157,9 @@
   const LIFECYCLE_PATH = { harness: 'harnesses', toolchain: 'toolchains', package: 'packages' };
   const storageUI = T3StorageUI.create({ api, getStatus: () => state.status, reload: () => loadStatus(), render: () => render() });
   const skillsUI = T3SkillsUI.create({ api, getStatus: () => state.status, render: () => render(),
+    viewPlugin: id => pluginsUI.openNative('codex', id),
     readMarkdown: (file) => readMarkdownFile(file, 64 * 1024), downloadMarkdown: (...args) => downloadMarkdown(...args) });
+  const pluginsUI = T3PluginsUI.create({ api, getStatus: () => state.status, render: () => render(), reviewHooks: id => skillsUI.hooks(id) });
   const mcpUI = T3McpUI.create({ api, getStatus: () => state.status, render: () => render() });
   const credentialsUI = T3CredentialsUI.create({ api, getStatus: () => state.status, render: () => render(), onChange: () => loadStatus(true) });
   const gatewaysUI = T3GatewaysUI.create({ api, getStatus: () => state.status, render: () => render(), onChange: () => loadStatus(true), go: (route) => go(route) });
@@ -240,6 +242,7 @@
         tellAttention();
         checkHere();
         if (state.route === 'instructions' && state.contextTab === 'skills') skillsUI.activate();
+        if (state.route === 'instructions' && state.contextTab === 'plugins') pluginsUI.activate();
         if (state.route === 'mcp') mcpUI.activate();
         // A link the page hasn't handled yet belongs to that navigation, which would close whatever this opened.
         if (state.route === 'vault' && (location.hash === shownHash || !location.hash.includes('/'))) credentialsUI.activate();
@@ -1752,8 +1755,8 @@
     </div>`;
   };
 
-  const CONTEXT_TABS = [['instructions', 'Instructions'], ['skills', 'Skills']];
-  /** Instructions and skills: two tabs on one page, each at an address of its own. */
+  const CONTEXT_TABS = [['instructions', 'Instructions'], ['skills', 'Skills'], ['plugins', 'Plugins']];
+  /** Instructions, skills and plugins share a page, each at its own address. */
   const instructionsPage = (s) => {
     const tab = state.contextTab;
     const rows = M.contextProviderRows(s);
@@ -1761,6 +1764,7 @@
     const previewLines = instructionsPreview.content.split('\n', 19);
     const panel = tab === 'skills'
       ? skillsUI.content()
+      : tab === 'plugins' ? pluginsUI.content()
       : html`
         ${view.error ? notice('danger', 'circle-alert', 'Couldn’t read the instructions', view.error) : ''}
         <div class="tc-ins-grid"><section class="tc-ins-section"><div class="tc-ins-section-head"><h2 class="tc-insp-label">Shared instructions</h2><span class="tc-hint">${M.contextAgentsMdRow(s).readers.length ? 'Read by ' + M.listOf(M.contextAgentsMdRow(s).readers) : 'No agents set to Shared'}</span></div><div class="tc-group">
@@ -2037,7 +2041,7 @@
     if (name === 'instructions' && sub === 'mcp') { history.replaceState(null, '', '#mcp'); return 'mcp'; }
     const route = TAB && name === 'more' ? 'overview' : T3Routes.resolve(name);
     if (route && route !== name) history.replaceState(null, '', '#' + route + (sub ? '/' + sub : ''));
-    if (route === 'instructions') { state.contextTab = sub === 'skills' ? 'skills' : 'instructions'; if (sub === 'skills') skillsUI.show(location.hash.split('/')[2] === 'updates' ? 'updates' : 'all'); }
+    if (route === 'instructions') { state.contextTab = ['skills', 'plugins'].includes(sub) ? sub : 'instructions'; if (sub === 'skills') skillsUI.show(location.hash.split('/')[2] === 'updates' ? 'updates' : 'all'); }
     return route && PAGES[route] ? route : 'overview';
   };
   const go = (route) => {
@@ -2049,6 +2053,7 @@
   const beforeLeave = async () => {
     if (contextEditor.layer && !await contextEditor.requestClose()) return false;
     if (!await skillsUI.beforeNavigate()) return false;
+    if (!await pluginsUI.beforeNavigate()) return false;
     if (!await mcpUI.beforeNavigate()) return false;
     if (!await credentialsUI.beforeNavigate()) return false;
     if (!await gatewaysUI.beforeNavigate()) return false;
@@ -2081,6 +2086,7 @@
     first = false; shownHash = location.hash;
     if (route === 'ports' && !state.ports) loadPorts();
     if (route === 'instructions' && state.contextTab === 'skills' && state.status) skillsUI.activate(true);
+    if (route === 'instructions' && state.contextTab === 'plugins' && state.status) pluginsUI.activate();
     if (route === 'instructions' && state.contextTab === 'instructions' && state.status) void loadInstructionsPreview(true);
     if (route === 'mcp' && state.status) mcpUI.activate(true);
     if (route === 'vault' && state.status) credentialsUI.activate(true);
@@ -3809,6 +3815,22 @@
     'storage.preferences': () => storageUI.preferences(),
     'storage.versions': () => storageUI.reviewVersions(),
     'storage.details': () => storageUI.toggle(),
+    'plugins.refresh': () => pluginsUI.refresh(),
+    'plugins.add': () => pluginsUI.add(),
+    'plugins.open': a => pluginsUI.open(a.id),
+    'plugins.locations': a => pluginsUI.locations(a.id, a.provider),
+    'plugins.filter': (a, el) => pluginsUI.filter(el),
+    'plugins.view-menu': (a, el) => pluginsUI.viewMenu(el),
+    'plugins.show': a => pluginsUI.show(a.id),
+    'plugins.agent': a => pluginsUI.agent(a.provider),
+    'plugins.layout': a => pluginsUI.layout(a.id),
+    'plugins.group': a => pluginsUI.group(a.id),
+    'plugins.bundled': () => pluginsUI.toggleBundled(),
+    'plugins.clear': () => pluginsUI.clear(),
+    'plugins.update': a => pluginsUI.update(a.id),
+    'plugins.state': a => pluginsUI.state(a.id),
+    'plugins.copy': a => pluginsUI.copy(a.id, a.provider),
+    'plugins.check-updates': () => pluginsUI.checkUpdates(),
     'skills.check-updates': () => skillsUI.checkUpdates(),
     'skills.refresh': () => skillsUI.refresh(),
     'skills.hooks': a => skillsUI.hooks(a.id),
@@ -4089,7 +4111,7 @@
     'link.revoke': (a) => confirmRevoke('pairing', a.id),
 
     'context.tab': (a) => {
-      const hash = '#instructions' + (a.value === 'skills' ? '/skills' : '');
+      const hash = '#instructions' + (['skills', 'plugins'].includes(a.value) ? '/' + a.value : '');
       if (location.hash !== hash) location.hash = hash;
     },
     'context.preview.retry': () => loadInstructionsPreview(true),
@@ -4216,6 +4238,7 @@
   // The added-tools filter: typing narrows the list as it goes.
   document.addEventListener('input', (e) => {
     if (e.target.id === 'pair-label') { pair.label = e.target.value; return; }
+    if (e.target.id === 'plugin-search') { pluginsUI.search(e.target.value); return; }
     if (e.target.id === 'skill-search') { skillsUI.search(e.target.value); return; }
     if (e.target.id !== 'tool-filter') return;
     state.toolFilter = e.target.value;

@@ -396,8 +396,10 @@ const SECRET = 'sk-audit-secret-value', MANAGEMENT = 'management-audit-value';
       // ---- an agent that isn't installed can't be picked --------------------------
       step('an agent that isnt installed cant be picked');
       installed = ['claude'];
-      await target.evaluate(() => location.reload());
-      await target.waitForLoadState?.('domcontentloaded');
+      await Promise.all([
+        target.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+        target.evaluate(() => location.reload()),
+      ]);
       await target.locator(`#page-gateways:not([hidden]) ${phone ? '.tc-sk-phone-list' : '.tc-gw-table'}`).waitFor();
       await visit(target, page, 'gateways');
       await add();

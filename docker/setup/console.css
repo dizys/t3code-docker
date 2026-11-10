@@ -1247,8 +1247,7 @@ html.tc-locked { overflow: hidden; }
   :where(:root[data-compact]) .tc-picklist-head .tc-input { flex: 1 1 100%; min-height: var(--touch); font-size: 1rem; }
   :where(:root[data-compact]) .tc-pick { grid-template-columns: 1.125rem minmax(0, 1fr); }
   :where(:root[data-compact]) .tc-pick-side { grid-column: 2; justify-self: start; min-height: 2.25rem; }
-  :where(:root[data-compact]) .tc-source-input > .tc-input { height: var(--touch); font-size: 1rem; }
-  :where(:root[data-compact]) .tc-source-input > .tc-btn { min-height: 2.25rem; }
+  :where(:root[data-compact]) .tc-root .tc-source-input > .tc-input { height: calc(var(--touch) + 0.5rem); font-size: 1rem; padding-right: 7rem; }
   :where(:root[data-compact]) .tc-route-row { min-height: 4rem; }
   :where(:root[data-compact]) .tc-import-step-head .tc-seg { width: 100%; display: flex; }
   :where(:root[data-compact]) .tc-import-step-head .tc-seg button { flex: 1; min-height: 2.25rem; }
@@ -3876,9 +3875,10 @@ body[data-console-route="files"]:has(.tc-layer) .tc-toaster { visibility: hidden
 /* Use the Skills library and installer geometry for complete plugin packages. */
 .tc-plugin-chip-filters { display: contents; }
 .tc-plugin-import .tc-plugin-pick { grid-template-columns: 1.125rem minmax(0, 1fr); }
+.tc-plugin-pick > div { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
 .tc-plugin-pick .tc-pick-desc { overflow-wrap: anywhere; }
-.tc-plugin-pick .tc-plugin-components { margin-block: 0.5rem; }
-.tc-plugin-import .tc-plugin-files { margin-top: 0.75rem; }
+.tc-plugin-pick .tc-plugin-components { margin-block: 0.25rem; }
+.tc-plugin-import .tc-plugin-files { margin-top: 0.5rem; }
 .tc-plugin-import .tc-route-row { grid-template-columns: 1.125rem auto minmax(0, 1fr) auto; }
 .tc-plugin-import .tc-route-row:has(input:disabled) { cursor: default; }
 .tc-plugin-import .tc-route-row:has(input:disabled) .tc-avail-name { color: var(--fg-muted); }

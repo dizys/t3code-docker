@@ -108,7 +108,7 @@ const visit = async (page, url) => {
     if (!new URL(page.url()).pathname.startsWith("/welcome")) return;
     for (let i = 0; i < 12 && new URL(page.url()).pathname.startsWith("/welcome"); i++) {
       let clicked = false;
-      for (const name of [/^Do not import projects$/, /^Skip/, /^Continue/, /^(Finish|Done|Get started)/]) {
+      for (const name of [/^Do not import projects$/, /^Start without an agent$/, /^Skip/, /^Continue/, /^(Finish|Done|Get started|Start)$/, /^Import .* and start$/]) {
         const button = page.getByRole("button", { name }).last();
         if (await button.count() && await button.isEnabled().catch(() => false)) {
           await button.click({ timeout: 5000 }).catch(() => {});

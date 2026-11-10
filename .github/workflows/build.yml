@@ -56,7 +56,7 @@ jobs:
           bash tests/setup-key-exposure.test.sh
           sh -n docker/setup/credentials/askpass.sh
           shellcheck -s sh -S warning docker/setup/credentials/askpass.sh
-          for f in docker/setup/app.js docker/setup/client/*.js docker/setup/credentials.mjs docker/setup/credentials/*.mjs docker/setup/design/ui.js docker/router/*.mjs docker/runtime/*.mjs; do
+          for f in docker/setup/app.js docker/setup/client/*.js docker/setup/credentials.mjs docker/setup/credentials/*.mjs docker/setup/plugins.mjs docker/setup/plugins/*.mjs docker/setup/design/ui.js docker/router/*.mjs docker/runtime/*.mjs; do
             node --check "$f"
           done
           node --test tests/*.test.mjs

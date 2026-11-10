@@ -5,6 +5,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 let chromium;try{({chromium}=require('playwright'));}catch{({chromium}=require('playwright-core'));}
 const {statusFor}=require('./lib/console-fixtures.cjs');
+const {createSkillsFixtures}=require('./lib/skills-fixtures.cjs');
 const base=process.argv[2]||'http://127.0.0.1:23785/__setup/';
 const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkdirSync(output,{recursive:true});
 (async()=>{
@@ -18,10 +19,13 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
    const compatible=[...providers.map(p=>({id:p.id,compatible:true,format:p.id,reason:'Native '+p.name+' package'})),{id:'opencode',detected:true,compatible:true,experimental:true,format:'local-module',reason:'Experimental local module. May reload in running sessions.'},...['cursor','grok','antigravity'].map(id=>({id,detected:true,compatible:false,experimental:true,reason:'Integration found; native setup required.'}))];
    const plan={ok:true,planId:'review',operation:'install',provider:'codex',name:'tokeneconomizer',description:rows[0].description,source:rows[0].source,version:'0.1.0',commit:'b'.repeat(40),components:rows[0].components,hooks:[{event:'SessionStart',command:'<script>window.pluginInjected=true</script> --safe-text'}],files:[{name:'.codex-plugin/plugin.json',bytes:300,text:'{"name":"tokeneconomizer"}'},{name:'scripts/run.py',bytes:400,executable:true}],effects:['Install this complete package for new sessions.','Native permissions remain separate.'],blocked:[],canApply:true};
    const posts=[];let applyAttempts=0;
+   const skillsApi=createSkillsFixtures();
    await page.addInitScript(t=>localStorage.setItem('t3-console-theme',t),theme);
    await page.route('**/*',async route=>{
     const req=route.request(),url=new URL(req.url()),suffix=url.pathname.replace(/^.*\/context\/plugins/,'');
     if(url.pathname.endsWith('/status'))return route.fulfill({json:statusFor('skills')});
+    const skillsRes=skillsApi.respond(req.method(),url,req.method()==='POST'?req.postDataJSON():{});
+    if(skillsRes)return route.fulfill({status:skillsRes.status,json:skillsRes.body});
     if(url.pathname.includes('/context/plugins')){
      let result;
      if(req.method()==='POST')posts.push({suffix,input:req.postDataJSON()});
@@ -35,12 +39,21 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
     }
     return route.continue();
    });
-   await page.goto(base+'#instructions/plugins');
+   await page.goto(base+'#instructions/skills');
    if(await page.locator('input[type=password]').count()){await page.locator('input[type=password]').fill('dev');await page.locator('button[type=submit]').click();}
+   await page.locator('#skill-library .tc-sk-card').waitFor();
+   const measureChrome=rootSelector=>page.locator(rootSelector).evaluate(el=>{
+    const box=sel=>Math.round(el.querySelector(sel).getBoundingClientRect().height);
+    const card=el.querySelector('.tc-sk-card');
+    return {toolbar:box('.tc-sk-toolbar'),lh:box('.tc-lh'),width:Math.round(card.getBoundingClientRect().width),radius:getComputedStyle(card).borderRadius};
+   });
+   const skillsChrome=await measureChrome('#skill-library');
+   await page.getByRole('tab',{name:'Plugins',exact:true}).click();
    const library=page.locator('#plugin-library');
    const visibleName=()=>library.getByRole('button',{name:'tokeneconomizer',exact:true}).filter({visible:true});
    await visibleName().waitFor();
    assert.equal(await page.getByRole('tab',{name:'Plugins',exact:true}).getAttribute('aria-selected'),'true');
+   assert.deepEqual(await measureChrome('#plugin-library'),skillsChrome,'Plugins library chrome matches sibling Skills tab');
    await page.locator('#plugin-search').fill('nothing-matches');await page.getByText('No plugins match these filters',{exact:true}).waitFor();
    await page.locator('#plugin-search').fill('');
    if(width>800){
@@ -48,6 +61,7 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
     await library.getByRole('button',{name:'Table',exact:true}).click();await library.getByRole('table',{name:'Plugins and agent settings'}).waitFor();
     await library.getByRole('button',{name:'View',exact:true}).click();await page.getByRole('menuitemradio',{name:'All agents',exact:false}).click();
     await library.getByRole('columnheader').filter({hasText:'Muse Code'}).waitFor();
+    assert(await library.locator('.tc-cell--switch').first().evaluate(el=>el.scrollWidth<=el.clientWidth+1),'state switch cell fits without truncation');
    }
    await page.screenshot({path:path.join(output,theme+'-'+width+'-library.png')});
    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'library fits viewport');
@@ -73,6 +87,7 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
    await dialog.locator('.tc-plugin-pick').first().getByText('Grok Build · Experimental',{exact:true}).waitFor();
    await dialog.locator('.tc-plugin-pick').first().getByText('Antigravity · Experimental',{exact:true}).waitFor();
    assert(await dialog.locator('.tc-plugin-pick').first().evaluate(el=>el.scrollWidth<=el.clientWidth+1),'long package description fits');
+   assert(await dialog.locator('.tc-source-input').evaluate(el=>{const input=el.querySelector('.tc-input').getBoundingClientRect(),btn=el.querySelector('.tc-btn').getBoundingClientRect();return btn.top>=input.top-1&&btn.bottom<=input.bottom+1&&btn.right<=input.right+1;}),'source Read button fits inside source input');
    assert(await dialog.getByRole('button',{name:'Choose agents',exact:true}).evaluate(el=>{const r=el.getBoundingClientRect();return r.bottom<=innerHeight&&document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('button')===el;}),'long package lists keep the next-step button visible and clickable');
    await page.screenshot({path:path.join(output,theme+'-'+width+'-packages.png')});
    await dialog.getByRole('button',{name:'Choose agents',exact:true}).click();

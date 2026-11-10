@@ -27,8 +27,11 @@ docker exec -u 0 "$NAME" node /tmp/services-system-smoke.mjs restart
 docker rm -f "$NAME" >/dev/null
 start --network none -e PUID=1201 -e PGID=1202
 docker exec -u 0 "$NAME" node /tmp/services-system-smoke.mjs recreate
-# Rootless core gets its own home; it must not need the protected volume.
+# Rootless core keeps its noexec home and gets a separate executable runtime
+# mount for s6 launchers. It must not need the protected system volume.
 docker run -d --name "${NAME}-rootless" --user 1000:1000 -e T3_PREINSTALL=none -e T3_SETUP_KEY=services-test-only \
-  --tmpfs /home/t3:uid=1000,gid=1000,mode=0700 "$IMAGE" >/dev/null
+  -e T3_RUN_DIR=/run/t3-user-services \
+  --tmpfs /home/t3:uid=1000,gid=1000,mode=0700 \
+  --tmpfs /run/t3-user-services:exec,nosuid,nodev,uid=1000,gid=1000,mode=0700 "$IMAGE" >/dev/null
 docker cp "$SCRIPT_DIR/services-system-smoke.mjs" "${NAME}-rootless:/tmp/services-system-smoke.mjs"
 docker exec -u 0 "${NAME}-rootless" node /tmp/services-system-smoke.mjs rootless

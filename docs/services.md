@@ -25,6 +25,13 @@ volume needs to be explicitly reattached when recreating the container. With
 only `.t3` persisted, custom application files and tool installations elsewhere
 in the home need their own persistent mounts.
 
+User supervision writes launchers under `$T3_RUN_DIR`, which defaults to
+`$T3CODE_HOME/run`. This directory must be writable by the container user and
+allow execution. Docker tmpfs mounts default to `noexec`. If your home or state
+storage uses `noexec`, set `T3_RUN_DIR` to a separate user-owned runtime mount
+with `exec,nosuid,nodev`. Installed mise executables also need storage that
+allows execution.
+
 Tini remains PID 1. Independent s6 supervision domains manage system services
 and user services. Custom commands start only after the worker drops its UID,
 GID, supplementary groups, capabilities and ability to gain privileges through

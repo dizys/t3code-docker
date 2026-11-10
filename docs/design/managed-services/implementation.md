@@ -80,7 +80,7 @@ the pinned browser driver and retains screenshots as `managed-services-console`.
 The image test is wired into both native architectures and both image variants.
 It creates and removes its own containers and volumes.
 
-## Native image acceptance queued in CI
+## Native image acceptance in progress
 
 The disposable image test verifies absent baked SSH, real on-demand dependency
 closure, positive SSH login, root/password denial, public host-key sidecar
@@ -93,11 +93,14 @@ of another route. This checks the CLI/configuration contract without a tailnet
 account; it does not establish remote forwarding or provider acceptance.
 Tampered cached bytes must fail before an offline reinstall; restoring the
 original bytes permits verified reuse. A separate rootless container tests
-custom services without protected system storage. Existing image smoke and
-native-runtime tests remain required.
+custom services without protected system storage. It retains a `noexec` home
+and uses an executable, user-owned runtime tmpfs for s6 launchers through
+`T3_RUN_DIR`. Existing image smoke and native-runtime tests remain required.
 
-These checks are authored and syntax-checked. They are not reported as executed
-successfully until their exact image jobs pass.
+Native ARM image evidence covers the prepare, restart and offline recreation
+phases, including changed PUID/PGID login, identity preservation, and tampered
+cache rejection. The complete image matrix remains pending until both
+architectures and variants, including the rootless phase, pass.
 
 ## Gates still requiring evidence
 

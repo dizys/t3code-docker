@@ -15,7 +15,7 @@ const T3ServicesUI = (() => {
   ];
   const create = ({ api, render, go, getStatus = () => ({}) }) => {
     let data = null, error = null, loading = false, epoch = 0, inFlight = null, timer = null, inspector = null, lastDeep = null;
-    let filter = 'configured', query = '', pending = null;
+    let filter = 'configured', query = '', pending = null, openEditorOnReady = false;
     const busy = new Set();
     const storageKey = 't3-service-submission:' + location.origin + BASE;
     try { pending = JSON.parse(sessionStorage.getItem(storageKey)); } catch { /* Storage disabled */ }
@@ -239,7 +239,17 @@ const T3ServicesUI = (() => {
     });
     return { content, sshContent, connectionsContent, accessTab,
       accessTabs: () => html`<div class="tc-tabs" role="tablist" aria-label="Access">${accessTabs.map(([id, label]) => html`<button class="tc-tab-button" type="button" role="tab" aria-controls="access-tabpanel" aria-selected="${String(accessTab() === id)}" tabindex="${accessTab() === id ? 0 : -1}" data-service-action="access-tab" data-value="${id}">${label}</button>`)}</div>`,
-      activate: () => { if (!data && !loading || !inFlight) void refresh(); const part = location.hash.split('/')[1]; if (tabs.some(([id]) => id === part)) filter = part; if (part === 'new') void editor.open(); schedule(); },
+      activate: (entered = false) => {
+        // Navigation owns the editor entry. Background status reads may refresh
+        // this page while its editor, draft or review is still open.
+        if (entered) openEditorOnReady = location.hash.split('/')[1] === 'new';
+        if (!getStatus()) return;
+        if (!data && !loading || !inFlight) void refresh();
+        const part = location.hash.split('/')[1];
+        if (tabs.some(([id]) => id === part)) filter = part;
+        if (openEditorOnReady) { openEditorOnReady = false; void editor.open(); }
+        schedule();
+      },
       beforeNavigate: () => editor.beforeNavigate(), focusSearch: () => document.getElementById('service-search')?.focus(), count: () => rows().length,
       paletteItems: () => [{ id: 'service-new', title: 'Add a custom service', route: 'services/new', meta: 'Services · foreground user command', terms: ['mise daemon service'], icon: 'server-cog' }] };
   };

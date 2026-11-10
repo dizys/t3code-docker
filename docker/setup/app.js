@@ -2098,7 +2098,7 @@
     if (route === 'vault' && state.status) credentialsUI.activate(true);
     if (route === 'gateways' && state.status) gatewaysUI.activate(true);
     if (route === 'files' && state.status) filesUI.activate();
-    if (['services', 'access'].includes(route) && state.status) servicesUI.activate();
+    if (['services', 'access'].includes(route)) servicesUI.activate(true);
   };
   const navigateFromHash = async focus => {
     const version = ++navigationVersion;

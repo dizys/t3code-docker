@@ -61,7 +61,13 @@ try {
     const button = name => page.getByRole('button', { name, exact: true });
     const tab = name => page.getByRole('tab', { name, exact: true });
     const openPage = async hash => { await page.evaluate(value => { location.hash = value; }, hash); await page.locator('#page-' + hash.split('/')[0] + ':not([hidden])').waitFor(); };
-    await page.goto(base + (embedded ? '?embed=t3&host=tab&layout=wide' : '') + '#services');
+    await page.goto(base + (embedded ? '?embed=t3&host=tab&layout=wide' : '') + '#services/new');
+    const initialEditor = page.getByRole('dialog', { name: 'Add a custom service', exact: true });
+    await initialEditor.waitFor();
+    assert.equal(await page.locator('#app').evaluate(element => element.inert), true, 'the editor deep link keeps the underlying console inert');
+    await initialEditor.getByRole('button', { name: 'Close', exact: true }).click();
+    await initialEditor.waitFor({ state: 'detached' });
+    assert.equal(await page.locator('#app').evaluate(element => element.inert), false, 'closing the editor restores console interaction');
     await page.getByRole('tab', { name: 'Configured', exact: true }).waitFor();
     await shot('configured');
     await button('Add service').first().click(); await page.getByRole('menuitem', { name: 'Custom service…', exact: true }).click();

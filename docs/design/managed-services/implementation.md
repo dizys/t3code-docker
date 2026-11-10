@@ -97,10 +97,11 @@ custom services without protected system storage. It retains a `noexec` home
 and uses an executable, user-owned runtime tmpfs for s6 launchers through
 `T3_RUN_DIR`. Existing image smoke and native-runtime tests remain required.
 
-Native ARM image evidence covers the prepare, restart and offline recreation
-phases, including changed PUID/PGID login, identity preservation, and tampered
-cache rejection. The complete image matrix remains pending until both
-architectures and variants, including the rootless phase, pass.
+The native ARM core image passes all 203 standard smoke checks and the complete
+Services image test, including prepare, restart, offline recreation, changed
+PUID/PGID login, identity preservation, tampered cache rejection and rootless
+custom services. The complete image matrix remains pending until both
+architectures and variants pass.
 
 ## Gates still requiring evidence
 

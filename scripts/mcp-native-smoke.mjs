@@ -8,6 +8,8 @@ import os from "node:os";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 const setup = process.env.T3_SETUP_MODULE || new URL("../docker/setup/mcp.mjs", import.meta.url).href;
 const { createMcpService } = await import(setup);
 const { withNativeProcess } = await import(process.env.T3_NATIVE_PROCESS_MODULE || new URL("../docker/harness/native-process.mjs", import.meta.url).href);
@@ -39,10 +41,26 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
 });`);
 const nativeCommand = async (env, home, args) => (await promisify(execFile)(executable, args, { env, cwd: home, timeout: 20000, maxBuffer: 1024 * 1024 })).stdout;
 
-async function inventory(env, home, major) {
+async function inventory(env, home, major, waitForMcp) {
   if (provider === 'grok') return nativeCommand(env, home, ['mcp', 'doctor', '--json']);
   if (provider === 'pi') return nativeCommand(env, home, ['mcp', 'list', '--json']);
-  if (provider === 'muse') return nativeCommand(env, home, ['exec', '--provider', 'echo', '--disable-shell', '--disable-write', '--disable-sandbox', 'Reply OK']);
+  if (provider === 'muse' && !waitForMcp) return nativeCommand(env, home, ['exec', '--provider', 'echo', '--disable-shell', '--disable-write', '--disable-sandbox', 'Reply OK']);
+  // A short echo turn can exit before Muse's background MCP startup. Keep its
+  // native session host alive until this fresh session has discovered tools.
+  if (provider === 'muse') return withNativeProcess({ executable, env, home, timeoutMs: 20000 }, ['serve', '--provider', 'echo', '--no-session-log', '--disable-shell', '--disable-write', '--disable-sandbox'], async ({ child, nextLine, signal }) => {
+    const request = async (id, method, params) => {
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+      for (;;) { const message = JSON.parse(await nextLine()); if (message.id === id) { assert.ok(!message.error, JSON.stringify(message.error)); return message.result; } }
+    };
+    await request(1, 'initialize', { clientInfo: { name: 'setup_native_smoke', version: '1' } });
+    child.stdin.write('{"jsonrpc":"2.0","method":"initialized","params":{}}\n');
+    // Muse requires a UUIDv7 command handle for each new session.
+    const stamp = Date.now().toString(16).padStart(12, '0'), random = randomUUID();
+    const commandId = `${stamp.slice(0, 8)}-${stamp.slice(8)}-7${random.slice(15, 18)}-${random.slice(19)}`;
+    const result = await request(2, 'session/start', { commandId, workspaceRoot: home });
+    await waitForMcp(signal);
+    return result;
+  });
   if (provider === "codex") return withNativeProcess({ executable, env, home, timeoutMs: 20000 }, ["app-server", "--stdio"], async ({ child, nextLine }) => {
     const request = async (id, method, params) => {
       child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
@@ -80,6 +98,7 @@ try {
       XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".data"), XDG_STATE_HOME: path.join(home, ".state"), XDG_CACHE_HOME: path.join(home, ".cache"), GROK_HOME: path.join(home, '.grok'), PI_CODING_AGENT_DIR: path.join(home, '.pi/agent'),
       OPENCODE_CONFIG_DIR: path.join(home, ".config/opencode"), OPENCODE_DISABLE_MODELS_FETCH: "1", OPENCODE_CONFIG_PROJECT_DISABLE: "1", OPENCODE_DISABLE_PROJECT_CONFIG: "1", DISABLE_AUTOUPDATER: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" });
     const version = (await nativeCommand(env, home, ["--version"])).trim(), major = Number(/(?:^|\s|v)(\d+)\./.exec(version)?.[1]);
+    console.log(`Checking ${provider} ${version}: ${transport} MCP discovery.`);
     if (provider === 'claude' && transport === 'local') {
       delete env.CLAUDE_CONFIG_DIR;
       const target = path.join(root, 'persisted-claude.json');
@@ -101,10 +120,18 @@ try {
     const created = await svc.create(input);
     await svc.setLink(provider, "fixture", true, created.revision, (await svc.list(provider)).revision);
     const before = requests.length;
-    const result = await inventory(env, home, major);
-    const traffic = transport === "local" ? (await fs.readFile(marker, "utf8")).trim().split("\n").map(JSON.parse) : requests.slice(before);
+    const readTraffic = async () => transport === 'remote' ? requests.slice(before) : (await fs.readFile(marker, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; })).trim().split('\n').filter(Boolean).map(JSON.parse);
+    const waitForMcp = async (signal, after = 0) => {
+      for (;;) {
+        const traffic = (await readTraffic()).slice(after);
+        if (['initialize', 'tools/list'].every(method => traffic.some(row => row.method === method))) return;
+        await delay(25, undefined, { signal });
+      }
+    };
+    const result = await inventory(env, home, major, waitForMcp);
+    const traffic = await readTraffic();
     assert.ok(traffic.some(row => row.method === "initialize"), "native runtime did not initialize MCP");
-    if (provider === "codex" || provider === "opencode" && major === 2 || provider === "cursor") assert.ok(traffic.some(row => row.method === "tools/list"), "native runtime did not discover tools");
+    if (provider === "codex" || provider === "opencode" && major === 2 || provider === "cursor" || provider === 'muse') assert.ok(traffic.some(row => row.method === "tools/list"), "native runtime did not discover tools");
     if (transport === "local") assert.ok(traffic.every(row => row.env === "received"));
     else assert.ok(traffic.every(row => row.auth === "Bearer fixture" && row.custom === "received"));
     if (provider === "codex") assert.ok(result.data.some(row => row.tools?.fixture));
@@ -117,7 +144,8 @@ try {
       assert.equal(transport === 'local' ? (await fs.readFile(marker, 'utf8')).length : requests.length, count, 'a disabled server must not start or connect');
       assert.deepEqual((await svc.list(provider)).disabled, ['fixture']);
       await svc.setLink(provider, 'fixture', true, currentRevision, (await svc.list(provider)).revision, true);
-      const enabled = await inventory(env, home, major);
+      const priorTraffic = (await readTraffic()).length;
+      const enabled = await inventory(env, home, major, signal => waitForMcp(signal, priorTraffic));
       assert.deepEqual((await svc.list(provider)).disabled, []);
       assert.ok(transport === 'local' ? (await fs.readFile(marker, 'utf8')).length > count : requests.length > count, 'turning the copy back on must start it in a fresh native read');
       if (provider === 'codex') assert.ok(enabled.data.some(row => row.tools?.fixture));

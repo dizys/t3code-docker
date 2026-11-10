@@ -3,6 +3,8 @@
 // browser review without installing seven agents or authorizing any writes.
 // node scripts/console-preview.mjs [--port 23785]
 import http from 'node:http';
+import { createServicesFixtures } from './lib/services-fixtures.mjs';
+const services = await createServicesFixtures();
 import { createRequire } from 'node:module';
 import { loadAssets, renderConsole, contentSecurityPolicy } from '../docker/setup/page.mjs';
 const require = createRequire(import.meta.url);
@@ -34,7 +36,7 @@ http.createServer(async (req, res) => {
   let input;
   try { input = url.pathname.endsWith('/files/upload/chunk')?Buffer.concat(chunks):chunks.length ? JSON.parse(Buffer.concat(chunks)) : {}; }
   catch { res.writeHead(400); res.end(); return; }
-  const result = await credentials.respond(req.method, url, input) || await gateways.respond(req.method, url, input) || await files.respond(req.method, url, input) || await mcp.respond(req.method, url, input) || storage.respond(req.method, url, input) || api.respond(req.method, url, input) || (url.pathname.endsWith('/status') ? { body: { ...statusFor('skills'), credentials: credentials.status(), storage: storage.status(), context: { ...statusFor('skills').context, mcp: mcp.status() } } }
+  const result = await services.respond(req.method, url, input) || await credentials.respond(req.method, url, input) || await gateways.respond(req.method, url, input) || await files.respond(req.method, url, input) || await mcp.respond(req.method, url, input) || storage.respond(req.method, url, input) || api.respond(req.method, url, input) || (url.pathname.endsWith('/status') ? { body: { ...statusFor('skills'), credentials: credentials.status(), storage: storage.status(), context: { ...statusFor('skills').context, mcp: mcp.status() } } }
     : url.pathname.endsWith('/ports') ? { body: portsFor('ready') }
       : url.pathname.endsWith('/providers') ? { body: fixture(url.searchParams.get('agent') === 'pi' ? 'pi-providers.json' : 'providers.json') }
         : { status: 404, body: { ok: false, error: 'This is a read-only fixture preview. No live API is connected.' } });

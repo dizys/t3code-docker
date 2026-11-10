@@ -64,6 +64,23 @@ jobs:
           scripts/generate-mise-idiomatic.sh --check
       - name: Compose file is valid
         run: docker compose config >/dev/null
+      - name: Services and Access browser regression
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: |
+          npm install --prefix "$RUNNER_TEMP/services-ui" --no-package-lock --no-save playwright-core@1.56.1
+          export NODE_PATH="$RUNNER_TEMP/services-ui/node_modules"
+          node scripts/services-ui-audit.mjs
+          node scripts/access-fixture-audit.mjs
+      - name: Retain Services browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-services-console
+          path: |
+            /tmp/t3-pr119-evidence/ui
+            /tmp/t3-access-ui-audit
+          if-no-files-found: ignore
 
   native-runtime:
     needs: lint
@@ -237,6 +254,17 @@ jobs:
               "${REGISTRY}/${{ steps.image.outputs.slug }}@${PLATFORM_DIGEST}"
           else
             scripts/smoke-test.sh --variant "$VARIANT" "t3code:${VARIANT}"
+          fi
+
+      - name: Managed services E2E (native architecture)
+        env:
+          VARIANT: ${{ matrix.target }}
+          PLATFORM_DIGEST: ${{ steps.platform.outputs.digest }}
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            scripts/test-services-e2e.sh "${REGISTRY}/${{ steps.image.outputs.slug }}@${PLATFORM_DIGEST}"
+          else
+            scripts/test-services-e2e.sh "t3code:${VARIANT}"
           fi
 
       # The assembled product: install and launch all five managed harnesses

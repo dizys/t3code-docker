@@ -1,0 +1,7 @@
+#!/bin/sh
+# Native T3/Ports retain process ownership. Resolve their optional verified
+# payload as the user, independently of managed named-tunnel instances.
+if [ "$(/usr/bin/id -u)" = 0 ]; then
+  exec /usr/sbin/gosu t3 /usr/local/bin/cloudflared "$@"
+fi
+exec /usr/local/libexec/t3-service-process 10000 /usr/local/bin/node /opt/t3-services/cloudflared.mjs "$@"

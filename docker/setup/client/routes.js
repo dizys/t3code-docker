@@ -48,6 +48,9 @@ const T3Routes = (() => {
     { route: 'ports', title: 'Ports', icon: 'ethernet-port', key: 'p', group: 'tools',
       summary: 'Give a dev server running here a public HTTPS address.', doc: 'ports.md',
       palette: { meta: 'Setup · publish a dev server' } },
+    { route: 'services', title: 'Services', icon: 'server-cog', key: 'b', group: 'system',
+      summary: 'Manage optional services and your own background commands.', doc: 'services.md',
+      palette: { meta: 'Setup · services, custom commands, SSH and network connectors', terms: ['daemon', 'sshd', 'tailscale', 'cloudflared', 'mise services'] } },
     { route: 'updates', title: 'Updates', icon: 'circle-arrow-up', key: 'u', group: 'system',
       summary: 'Keep T3 Code, agents and tools current.', doc: 't3code-updates.md',
       palette: { meta: 'Setup · T3 Code, agents and tools, automatic updates', terms: ['upgrade'] } },
@@ -61,6 +64,9 @@ const T3Routes = (() => {
 
   // Searchable subpages keep their parent navigation row and exact hash.
   const DESTINATIONS = [
+    { id: 'connections', route: 'access', hash: 'access/connections', title: 'Connections', icon: 'waypoints', meta: 'Setup · networks and service connections', terms: ['vpn', 'tunnel', 'tailscale', 'cloudflare'] },
+    { id: 'ssh', route: 'access', hash: 'access/ssh', title: 'SSH access', icon: 'terminal', meta: 'Setup · key-only terminal and editor access', terms: ['remote ssh', 'sshd', 'authorized keys'] },
+    { id: 'service-new', route: 'services', hash: 'services/new', title: 'Add a custom service', icon: 'server-cog', meta: 'Setup · foreground command or installed mise tool', terms: ['background', 'daemon'] },
     { id: 'skills', route: 'instructions', hash: 'instructions/skills', title: 'Skills', icon: 'book-open', meta: 'Setup · skill library and agent availability', terms: ['skill library'] },
     { id: 'skill-updates', route: 'instructions', hash: 'instructions/skills/updates', title: 'Skill updates', icon: 'circle-arrow-up', meta: 'Setup · review updates to installed skills', terms: ['skills updates source'] },
     { id: 'files-projects', route: 'files', hash: 'files/projects', title: 'Projects', icon: 'folder', meta: 'Setup · files in your workspace', terms: ['project files workspace'] },
@@ -100,7 +106,7 @@ const T3Routes = (() => {
   /** The page an address names, through its aliases; null when it names none. */
   const resolve = (name) => (BY_ROUTE.has(name) ? name : ALIASES[name] || null);
   /** The tab that holds a page on a phone. */
-  const destination = name => resolve(name) || DESTINATIONS.find(item => item.hash === name)?.hash || (typeof name === 'string' && /^gateways\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) && name.length <= 64 ? name : null) || (typeof name === 'string' && /^vault\/(?:new(?:\/[a-z]+(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?)?|[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(name) && name.split('/').at(-1).length <= 64 ? name : null);
+  const destination = name => resolve(name) || (typeof name === 'string' && /^services\/[a-z][a-z0-9-]{0,47}$/.test(name) ? name : null) || DESTINATIONS.find(item => item.hash === name)?.hash || (typeof name === 'string' && /^gateways\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) && name.length <= 64 ? name : null) || (typeof name === 'string' && /^vault\/(?:new(?:\/[a-z]+(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?)?|[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(name) && name.split('/').at(-1).length <= 64 ? name : null);
   const tabOf = (route) => (TABS.some((tab) => tab.route === route) ? route : 'more');
   /** Pages in their sidebar groups, each group with its label. */
   const grouped = () => GROUPS.map((group) => ({ ...group, pages: PAGES.filter((p) => p.group === group.id) }));

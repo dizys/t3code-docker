@@ -29,6 +29,7 @@ import {
 import * as state from "./state.mjs";
 import { applyRetention, planRetention } from "./retention.mjs";
 import { compareVersions, meetsMinimum } from "./version.mjs";
+import { assertToolUnreferenced } from "./service-references.mjs";
 
 // An exact release: digits, a dot, then version characters. Floating selectors
 // mise would also accept (`lts`, `2`, `latest`) are refused rather than
@@ -551,6 +552,10 @@ export function createHarnessManager(options = {}) {
         previous.version ? [previous.version] : [],
         configured,
       );
+      for (const version of versions) {
+        const tool = harnessInstallationForVersion(entry, version).miseTool;
+        assertToolUnreferenced(ctx, tool, version, before.tools?.[tool]?.find(item => item.version === version)?.install_path);
+      }
       for (const installation of installations) {
         try {
           await mise.unuse(ctx, installation.miseTool);
@@ -727,6 +732,7 @@ export function createHarnessManager(options = {}) {
       const selected = (listing.tools?.[entry.miseTool] ?? [])
         .filter((candidate) => candidate.installed && String(candidate.source?.path ?? "").startsWith(ctx.configDir))
         .map((candidate) => candidate.version);
+      for (const version of union(previous.managedVersions, selected)) assertToolUnreferenced(ctx, entry.miseTool, version, listing.tools?.[entry.miseTool]?.find(item => item.version === version)?.install_path);
       await mise.unuse(ctx, entry.miseTool);
       for (const version of union(previous.managedVersions, selected)) {
         await mise.uninstall(ctx, entry.miseTool, version);
@@ -961,6 +967,7 @@ export function createHarnessManager(options = {}) {
         .filter((candidate) => candidate.installed && isGlobal(candidate))
         .map((candidate) => candidate.version);
       const configured = (listing.tools?.[id] ?? []).some(isGlobal);
+      for (const version of union(previous.managedVersions, selected)) assertToolUnreferenced(ctx, id, version, listing.tools?.[id]?.find(item => item.version === version)?.install_path);
       if (configured) {
         try {
           await mise.unuse(ctx, id);

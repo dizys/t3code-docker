@@ -55,6 +55,7 @@ export function createT3Sessions({
   missTtlMs = 5_000,
   timeoutMs = 2_000,
   maxEntries = 256,
+  requiredScopes = [REQUIRED_SCOPE],
 }) {
   const cache = new Map();     // hash -> { until, viewer: { expiresAt } | null }
   const inflight = new Map();  // hash -> Promise, so a burst asks T3 once
@@ -96,7 +97,7 @@ export function createT3Sessions({
         remember(key, null, now() + missTtlMs);
         return null;
       }
-      if (!trusted(answer)) {
+      if (!trusted(answer) || !requiredScopes.every(scope => answer.scopes.includes(scope))) {
         remember(key, null, now() + missTtlMs);
         return null;
       }

@@ -136,6 +136,7 @@ const geometry = () => {
       const rename=async()=>{await t.locator('[data-cmd="device.menu"][data-id="phone"]').click();await t.getByRole('menuitem',{name:'Rename…',exact:true}).click();await t.locator('#device-label').waitFor();};
       const revoke=async(kind,id)=>{await t.locator(`[data-cmd="${kind==='session'?'device':'link'}.menu"][data-id="${id}"]`).click();await t.getByRole('menuitem',{name:kind==='session'?'Revoke…':'Revoke link…',exact:true}).click();await t.getByRole('alertdialog').getByRole('button',{name:kind==='session'?'Revoke':'Revoke link',exact:true}).click();};
 
+      await t.getByRole('tab', { name: 'Connections', exact: true }).click();
       const publish = t.getByRole('switch', { name: 'Publish agent activity', exact: true });
       const hold = t.getByRole('switch', { name: 'Hold webhooks while offline', exact: true });
       const publishRow = t.locator('[data-key="connect-publishAgentActivity"]');
@@ -209,6 +210,7 @@ const geometry = () => {
         assert.equal(await hold.isDisabled(), mode === 'publish_only');
       }
 
+      await t.getByRole('tab', { name: 'Devices', exact: true }).click();
       await rename(); await t.locator('#device-label').fill('Travel phone <safe> & "work"');
       // Capture a poll before saving, then deliver it after the write.
       const old={started:gate(),release:gate()}; heldStatus=old;
@@ -218,7 +220,8 @@ const geometry = () => {
       await t.locator('[data-key=device-save]').click();
       await device.locator('.tc-access-pending').waitFor();
       assert.equal(await device.getAttribute('aria-busy'),'true');
-      assert.equal(await device.getByRole('button').isDisabled(),true);
+      // Kit makes the background inert while the rename layer is open.
+      assert.equal(await device.locator('button').isDisabled(),true);
       assert.equal(await t.locator('#device-label').isDisabled(),true);
       await t.locator('.tc-device-rename').evaluate(form=>form.requestSubmit());
       assert.equal(requests.filter(row=>row.action==='rename').length,1,'duplicate submit is blocked');

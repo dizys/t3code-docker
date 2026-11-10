@@ -13,6 +13,15 @@ import { REQUIRED_SCOPE, createT3Sessions, t3SessionCookies, trusted } from "../
 const COOKIE = "t3_session_3773_550a82367a3d";
 const STANDARD = ["orchestration:read", "orchestration:operate", "terminal:operate", "review:write", "relay:read"];
 
+test('system service maintenance verifies current granular permission on every mutation', async () => {
+  let scopes = ['terminal:operate'], requests = 0;
+  const sessions = createT3Sessions({ baseUrl: 'http://127.0.0.1:3773', ttlMs: 0, missTtlMs: 0, requiredScopes: ['terminal:operate', 'environment:maintain'], fetchImpl: async () => { requests++; return { ok: true, json: async () => ({ authenticated: true, scopes }) }; } });
+  assert.equal(await sessions.verify(COOKIE + '=scoped'), null);
+  scopes = ['terminal:operate', 'environment:maintain']; assert.ok(await sessions.verify(COOKIE + '=scoped'));
+  scopes = ['terminal:operate']; assert.equal(await sessions.verify(COOKIE + '=scoped'), null);
+  assert.equal(requests, 3);
+});
+
 /** A fake T3: `sessions` maps a cookie value to its answer. Records every ask. */
 const fakeT3 = (sessions, { fail = false } = {}) => {
   const asked = [];

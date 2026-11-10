@@ -1,0 +1,171 @@
+[
+  {
+    "name": "prototype-mobile-light.png",
+    "width": 390,
+    "contentHeight": 1434,
+    "capturedHeight": 1434,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":390,\"scrollWidth\":390,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"16px\",\"dialogOpen\":false,\"dialogHeight\":0,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 390,
+      "height": 1434
+    }
+  },
+  {
+    "name": "prototype-services-light.png",
+    "width": 820,
+    "contentHeight": 772,
+    "capturedHeight": 772,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":820,\"scrollWidth\":820,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"16px\",\"dialogOpen\":false,\"dialogHeight\":0}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 820,
+      "height": 772
+    }
+  },
+  {
+    "name": "prototype-wizard-mobile-light.png",
+    "width": 390,
+    "contentHeight": 813,
+    "capturedHeight": 813,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":390,\"scrollWidth\":390,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"16px\",\"dialogOpen\":true,\"dialogHeight\":598}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 390,
+      "height": 813
+    }
+  },
+  {
+    "name": "prototype-wizard-desktop-dark.png",
+    "width": 1280,
+    "contentHeight": 813,
+    "capturedHeight": 813,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":1280,\"scrollWidth\":1280,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"16px\",\"dialogOpen\":true,\"dialogHeight\":586,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 1280,
+      "height": 813
+    }
+  },
+  {
+    "name": "prototype-wizard-360-20px.png",
+    "width": 360,
+    "contentHeight": 1060,
+    "capturedHeight": 1060,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":360,\"scrollWidth\":360,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"20px\",\"dialogOpen\":true,\"dialogHeight\":784,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 360,
+      "height": 1060
+    }
+  },
+  {
+    "name": "prototype-rollback-dark.png",
+    "width": 728,
+    "contentHeight": 1294,
+    "capturedHeight": 1294,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":728,\"scrollWidth\":728,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"16px\",\"dialogOpen\":true,\"dialogHeight\":560,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 728,
+      "height": 1294
+    }
+  },
+  {
+    "name": "prototype-12px-light.png",
+    "width": 728,
+    "contentHeight": 876,
+    "capturedHeight": 876,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":728,\"scrollWidth\":728,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"12px\",\"dialogOpen\":false,\"dialogHeight\":0,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 728,
+      "height": 876
+    }
+  },
+  {
+    "name": "prototype-storage-light.png",
+    "width": 728,
+    "contentHeight": 879,
+    "capturedHeight": 879,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":728,\"scrollWidth\":728,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"16px\",\"dialogOpen\":true,\"dialogHeight\":630,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 728,
+      "height": 879
+    }
+  },
+  {
+    "name": "prototype-inline-dark.png",
+    "width": 728,
+    "contentHeight": 1146,
+    "capturedHeight": 1146,
+    "consoleMessages": [],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 728,
+      "height": 1146
+    }
+  },
+  {
+    "name": "prototype-360-20px.png",
+    "width": 360,
+    "contentHeight": 1857,
+    "capturedHeight": 1857,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "INTERACTIONS {\"total\":41,\"passed\":41}"
+      },
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":360,\"scrollWidth\":360,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"20px\",\"dialogOpen\":false,\"dialogHeight\":0,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 360,
+      "height": 1857
+    }
+  }
+]

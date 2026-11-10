@@ -9,6 +9,7 @@ import * as mise from "./mise.mjs";
 import * as state from "./state.mjs";
 import { policyPath, readPolicy } from "./storage/policy.mjs";
 import { inside, processSnapshot } from "./storage/system.mjs";
+import { serviceReferences, serviceUsesTool } from "./service-references.mjs";
 
 const exact = /^\d+\.[0-9A-Za-z._+-]{1,62}$/;
 const sections = ["harnesses", "toolchains", "packages"];
@@ -42,7 +43,7 @@ async function liveReferences(ctx) {
     try { providers.push(await ctx.fs.realpath(selected)); }
     catch (error) { if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw new Error("Provider paths could not be checked. Older versions were kept."); }
   }
-  return { providers, processes: processes.processes };
+  return { providers, processes: processes.processes, services: serviceReferences(ctx) };
 }
 
 async function references(ctx) {
@@ -94,6 +95,7 @@ export async function planRetention(ctx, { saved, only, includePrevious = false 
       let reason = version === record.version ? "Current version" : !includePrevious && version === previous ? "Previous version" : null;
       if (!reason && warning) reason = "Could not verify references";
       if (!reason && !candidate) reason = "Required by a project or tool selection";
+      if (!reason && refs.services.some(item => serviceUsesTool(item, tool, version, target))) reason = "Required by a service";
       if (!reason && refs.providers.some((binary) => inside(target, binary))) reason = "Selected by a provider";
       if (!reason && refs.processes.some((process_) => [process_.executable, process_.cwd, ...process_.args].filter(Boolean).some((arg) => {
         const value = arg.startsWith("--") && arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : arg;
@@ -118,6 +120,7 @@ async function stillRemovable(ctx, refs, item) {
   const candidate = refs.prunable?.[item.tool]?.find((entry) => entry.version === item.version && entry.installed);
   const target = candidate?.install_path || null;
   if (!target || target !== item.path) return false;
+  if (refs.services.some(reference => serviceUsesTool(reference, item.tool, item.version, target))) return false;
   if (refs.providers.some((binary) => inside(target, binary))) return false;
   if (refs.processes.some((process_) => [process_.executable, process_.cwd, ...process_.args].filter(Boolean).some((arg) => {
     const value = arg.startsWith("--") && arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : arg;

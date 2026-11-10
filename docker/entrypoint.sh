@@ -39,8 +39,6 @@ PGID="$(validated_id PGID "$PGID")"
 : "${T3CODE_PORT:=3773}"
 : "${T3_WORKSPACE:=/workspace}"
 : "${T3_AUTO_ADD_PROJECTS:=1}"
-: "${T3_SSH_ENABLED:=0}"
-: "${T3_SSH_PORT:=2222}"
 : "${T3_PRINT_PAIRING_ON_START:=0}"
 : "${T3_ALLOW_SUDO:=0}"
 : "${T3_SETUP_ENABLED:=1}"
@@ -209,14 +207,11 @@ if [ "$(id -u)" -eq 0 ]; then
     rm -f /etc/sudoers.d/t3code
   fi
 
-  # SSH is opt-in and only belongs to the normal server process. One-off
-  # entrypoint commands keep their existing behavior and never start a daemon.
-  if [ "${1:-}" = "t3-serve" ]; then
-    case "$T3_SSH_ENABLED" in
-      0) ;;
-      1) /usr/local/bin/start-ssh-server.sh ;;
-      *) log "ERROR: T3_SSH_ENABLED must be 0 or 1 (got '${T3_SSH_ENABLED}')"; exit 1 ;;
-    esac
+  # The image-owned coordinator starts separate system and user supervision.
+  # It never opens custom configuration before the worker's full step-down.
+  # One-off entrypoint commands keep their existing behavior.
+  if [ "${1:-}" = "t3-serve" ] && [ -f /opt/t3-services/init.mjs ]; then
+    exec env PATH="$inherited_path" /usr/local/bin/node /opt/t3-services/init.mjs "$@"
   fi
 
   # gosu by absolute path: env resolves its command with the PATH it sets.
@@ -224,6 +219,9 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 # --- unprivileged half -------------------------------------------------------
+if [ "${1:-}" = "t3-serve" ] && [ "${T3_SERVICES_WRAPPED:-0}" != "1" ] && [ -f /opt/t3-services/init.mjs ]; then
+  exec /usr/local/bin/node /opt/t3-services/init.mjs "$@"
+fi
 # Keep a configured key available to the resolver, but out of the environment
 # of helpers and background installs. Only the resolver and Setup need it.
 export -n T3_SETUP_KEY T3_SETUP_KEY_SOURCE

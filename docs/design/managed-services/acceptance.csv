@@ -1,0 +1,123 @@
+id,area,requirement,matrix,evidence_required,phase,status
+F01,Foundation,Choose s6 integration after proving T3 exit status and one init owner,M,Exit and signal traces with candidate integrations,0,Required before production
+F02,Foundation,Optional service failure cannot block T3 or Setup startup,M,Inject missing payload and crashing optional service at boot,0,Required before production
+F03,Foundation,Unexpected T3 exit ends the container with its actual status,M,T3 exits 0 1 and signal-derived status; container result matches,0,Required before production
+F04,Foundation,Shutdown reaps grandchildren and observes bounded grace periods,M,Live SSH sessions and connector descendants leave no orphan,0,Required before production
+F05,Foundation,Rootless core behavior remains supported while unsupported SSH is gated,M rootless,Core start update rollback and shutdown with SSH unavailable,0,Required before production
+F06,Foundation,Each managed native external and agent process has one owner,M,Ownership inventory and no duplicate restart loops,1,Required before production
+F07,Foundation,Reconciliation is independent of UI polling and optional startup is asynchronous,M,No mutation on status reads or repeated page refresh,1,Required before production
+F08,Foundation,Adding one non-SSH definition uses unchanged lifecycle and inspector contracts,M,A reviewed non-SSH service integration demonstrates reuse,5,Required before production
+I01,Installation,No optional SSH or Tailscale payload in the base image,M,Image package and filesystem inventory plus size delta,2,Required before production
+I02,Installation,Existing outbound SSH client remains usable for Git and Vault,M,Existing Git and Vault SSH smoke passes,2,Required before production
+I03,Installation,Cloudflared is unbundled only after native Ports and CLI support lazy resolution,M,Pinned runtime versions exercise quick tunnels and CLI offline errors,4,Required before production
+I04,Installation,Exact artifact architecture ABI and helper closure are resolved before install,M,Valid and deliberately incompatible artifacts produce expected receipts,0,Required before production
+I05,Installation,Distribution-derived OpenSSH provenance and license are retained,M,Artifact manifest verifies package chain and redistribution requirements,0,Required before production
+I06,Installation,Catalogue signatures and payload digests fail closed,M,Tampered expired revoked and unsigned metadata rejected,1,Required before production
+I07,Installation,Archive traversal symlink hardlink device and ownership attacks are rejected,M,Hostile extraction fixtures cannot escape anchored staging,1,Required before production
+I08,Installation,Only verified immutable artifacts become active,M,Kill at download extraction verification and promotion boundaries,1,Required before production
+I09,Installation,Protected persistent volume is detected rather than inferred from a directory,M mount modes,Named bind anonymous absent and read-only mounts classified correctly,1,Required before production
+I10,Installation,Recreate retains host identity account identity and active artifact references,M,Destroy and recreate container with persistent volume; compare receipts,1,Required before production
+I11,Installation,Disk plan includes download expanded staging active and rollback space,M,ENOSPC before and during installation does not damage active state,1,Required before production
+I12,Installation,Offline re-enable works with retained verified installation,M,Disconnect network then disable and re-enable without download,2,Required before production
+I13,Installation,Retained artifacts cannot be removed while referenced active rollback or in flight,M,Concurrent update and Storage cleanup preserve every reference,1,Required before production
+I14,Installation,Service and tool-manager storage remain distinct at the privilege boundary,M,User-writable mise payload replaced; root service never executes it,1,Required before production
+I15,Installation,A partial download resumes only with matching source and verification identity,M,Changed release ETag digest or metadata causes safe staging restart,1,Required before production
+P01,Privilege,Root API accepts reviewed service IDs and typed settings only,M,Fuzz path URL argv environment PID and run-as inputs,1,Required before production
+P02,Privilege,Same-UID agent access cannot turn allowlisted API into arbitrary root execution,M,Hostile local t3 caller exercises every exposed operation,1,Required before production
+P03,Privilege,Native-session authorization uses current supported checked management policy,M sessions,Anonymous restricted expired native and Setup-key authorization matrix,0,Required before production
+P04,Privilege,Mutations retain same-origin CSRF and origin protections,M sessions,Cross-origin request and iframe attacks rejected,1,Required before production
+P05,Privilege,All root commands use trusted absolute paths and a fixed environment,M,Malicious project configuration PATH HOME and executable substitutions,1,Required before production
+P06,Privilege,PUID PGID and account changes are revalidated before SSH starts,M UID modes,Change IDs and ownership; login remains t3 with intended permissions,2,Required before production
+P07,Privilege,Neither SSH setup nor connector setup enables sudo password or root login,M,Negative authentication and capability inventory,2,Required before production
+P08,Privilege,Secrets are redacted before buffering logging status event and export,M,Seed canary tokens and scan every observation and diagnostic surface,1,Required before production
+P09,Privilege,Provider sign-in URLs stay inside the active authenticated flow,M sessions,No auth URL in permanent operations notifications or browser history,3,Required before production
+P10,Privilege,Privileged checks cannot probe arbitrary caller-supplied destinations,M,SSRF body-size timeout DNS and redirect tests on declared endpoint policy,1,Required before production
+P11,Privilege,Protected configuration and identities reject user-writable ancestors and symlinks,M,Filesystem races cannot substitute executable configuration or state,1,Required before production
+O01,Operations,Intent is durably committed before each external side effect,M,Fault injection at every journal/effect boundary,1,Required before production
+O02,Operations,Idempotency returns the same durable operation rather than repeating submission,M,Drop response and repeat key before and after restart,1,Required before production
+O03,Operations,Setup browser and container reconnect attach to existing operation IDs,M,Disconnect and restart during every install/update/account phase,1,Required before production
+O04,Operations,Expected revision rejects concurrent stale changes while preserving drafts,M sessions,Two clients change same instance; old plan cannot override new state,1,Required before production
+O05,Operations,Ambiguous provider results reconcile without repeated sign-in route or revoke effects,M,Lost provider response remains pending until receipt reconciliation,3,Required before production
+O06,Operations,Database migration WAL checkpoint backup and downgrade behavior are defined,M,Crash corrupt store and rollback image; optional failure stays isolated,1,Required before production
+O07,Operations,Event sequences resume and fall back to status reads without resubmission,M,Gap duplicate and out-of-order event tests,1,Required before production
+O08,Operations,Closing operation UI does not cancel and cancellation respects safe checkpoints,M,Background close and cancel at supported and unsupported phases,1,Required before production
+O09,Operations,Crash budget backoff jitter and operator stop prevent endless restarts,M,Repeated immediate exits; stop races a pending retry,1,Required before production
+O10,Operations,Unknown stale and last-known values retain provenance and freshness,M,Lose controller channel while UI and T3 stay available,1,Required before production
+O11,Operations,Service temporary stop disable uninstall logout and forget have distinct receipts,M,Restart after each action and compare retained state,2,Required before production
+O12,Operations,Service updates preserve T3 runtime version and Stable or Nightly channel,M runtime modes,Same-version integration before/after receipts match exact selection,2,Required before production
+N01,Network,Existing network remains a supported complete onboarding route,M host topologies,LAN VPN host connector and Compose connector evidence,2,Required before production
+N02,Network,Loopback listeners and host mappings match actual network namespaces,M topologies,Container loopback interface and host port matrix with negative cases,2,Required before production
+N03,Network,Tailscale inbound userspace forwarding is proven for the selected TCP path,M userspace,Real remote SSH via approved Serve/forward path; SOCKS alone fails gate,0,Required before production
+N04,Network,Kernel mode detects missing TUN and required capabilities before installation,M kernel,Missing device or capability gives specific deployment remedy,0,Required before production
+N05,Network,Tailnet policy and SSH key authorization are independent checked gates,M tailnet,Wrong tailnet ACL and wrong SSH key denied independently,3,Required before production
+N06,Network,Managed Cloudflare supports real SSH hostname Access policy and client helper,M Cloudflare,External client login with and without cloudflared policy authorization,3,Required before production
+N07,Network,HTTP quick tunnels and T3 Connect are never misrepresented as SSH transports,M,Protocol compatibility tests and UI choices,2,Required before production
+N08,Network,Host and Compose connectors remain externally owned,M external,No local stop install or host-network mutation from external inspector,3,Required before production
+N09,Network,Several routes can share a service and several consumers can share a connector,M,Remove one SSH route without stopping preview or other routes,3,Required before production
+N10,Network,Route replacement retains the old path until sufficient client evidence,M,Candidate locally ready but externally blocked; old route retained,3,Required before production
+N11,Network,Route verification binds endpoint configuration generation vantage method and time,M,Change key route or identity; old verification becomes stale,3,Required before production
+N12,Network,Browser HTTP probes cannot establish raw SSH reachability,M,Readiness copy and API evidence cannot claim device verification,2,Required before production
+N13,Network,Unsupported multiple connector instances are gated by definition limits,M,Conflicting tailnet instances cannot bind the same state or namespace,3,Required before production
+N14,Network,Connection revocation incomplete at provider remains pending after local stop,M,Provider unavailable during logout and later successful reconciliation,3,Required before production
+S01,SSH,Public-key-only t3 authentication works with reviewed account and PAM policy,M UID modes,Real positive key login and negative password/root/interactive login,0,Required before production
+S02,SSH,Host keys persist and missing public sidecar is recovered without replacement,M,Delete pub sidecar; compare private-derived fingerprint after recovery,2,Required before production
+S03,SSH,Corrupt mismatched or unreadable host identity requires explicit repair,M,No silent host-key regeneration after corruption,2,Required before production
+S04,SSH,Public keys are parsed deduplicated fingerprinted and options allowlisted,M,Supported algorithms malformed keys duplicate and unsafe options,2,Required before production
+S05,SSH,Pasted private keys are rejected without logging or retaining their text,M,Canary private-key field rejection and diagnostic scan,2,Required before production
+S06,SSH,Last-key removal reviews access and existing-session effects,M,Remove key while signed in; future auth denied existing behavior explained,2,Required before production
+S07,SSH,Custom T3 Setup single-port and managed listeners are checked under lock,M custom ports,Conflicting wildcard interface and IPv6 listeners rejected,2,Required before production
+S08,SSH,Interactive shell noninteractive command SFTP and VS Code all use intended environment,M clients,Real sessions see workspace home toolchains and agent configuration,0,Required before production
+S09,SSH,VS Code forwarding works deliberately and agent forwarding remains off initially,M clients,Remote-SSH extension server and channels work without agent forwarding,2,Required before production
+S10,SSH,No entire container credential environment is exported to SSH sessions,M,Canary credential absent in shell and noninteractive environment,2,Required before production
+S11,SSH,Client instructions use correct host port ProxyCommand and host-key verification,M routes,Run copied commands and editor configuration from a separate client,2,Required before production
+S12,SSH,Server identity change is explicit and never suggests disabling verification,M,Known-host mismatch path preserves provenance and recovery choice,2,Required before production
+R01,Recovery,Candidate validation and readiness failure restores prior artifact and configuration,M,Failed handshake restore old version with accurate rollback receipt,2,Required before production
+R02,Recovery,Failed rollback exposes retained recovery evidence and alternative access,M,Both candidate and previous fail; no false update success,2,Required before production
+R03,Recovery,Disabling sole known access path requires explicit impact and fallback review,M,Unknown attribution and sole known route never auto-disappear,3,Required before production
+R04,Recovery,Shared dependencies block removal or require an explicit reviewed cascade plan,M,Tailscale used by SSH and preview cannot silently disappear,3,Required before production
+R05,Recovery,Identity cleanup is separate from cache and payload uninstall,M,Cache cleanup and reinstall retain host and tailnet identity,2,Required before production
+R06,Recovery,Backup restore prevents duplicate active tailnet nodes and preserves SSH fingerprints,M,Restore while source node exists gives safe conflict handling,3,Required before production
+R07,Recovery,Image rollback respects controller and artifact compatibility boundaries,M images,Older image sees newer service state without executing unsafe payload,1,Required before production
+R08,Recovery,Legacy SSH adoption never starts two owners or executes mutable legacy payload as root,M legacy,Import plan preserves identity provenance and validated public settings,2,Required before production
+U01,UI,Access Devices Connections SSH and Services share one authoritative model,U,Same operation and state from both entry points; no duplicate toggle,2,Required before production
+U02,UI,Installed running route-ready and device-observed states use precise distinct copy,U,All modeled scenarios plus partial and unknown state matrix,2,Required before production
+U03,UI,Empty loading blocked failure background sign-in update rollback and cleanup states exist,U,Journey captures and state/action matrix review,2,Required before production
+U04,UI,Key and hostname errors are inline associated and focus the relevant field,U,Keyboard invalid-submit and private-key cases,2,Required before production
+U05,UI,Operation progress uses measured quantities and never invents percentages,U,Download versus verification and provider-wait snapshots,2,Required before production
+U06,UI,Keyboard modal tab Escape return-focus and draft behavior follow Kit,U,Keyboard-only task completion and native-host inert coordination,2,Required before production
+U07,UI,Current tokens font icons groups and existing copy fallback are reused,U,Source/proposal comparison plus actual component integration review,2,Required before production
+U08,UI,360 and 390 phone widths have no page overflow or hidden primary controls,U,Complete onboarding and recovery at narrow sizes,2,Required before production
+U09,UI,Light dark custom native palettes and 12 to 20px interface sizes remain usable,U,Native appearance bridge and standalone visual matrix,2,Required before production
+U10,UI,Embedded compact/wide geometry and standalone navigation remain distinct,U,Host 768 frame 640 and standalone 1024 breakpoint crossings,2,Required before production
+U11,UI,Reduced motion forced colors zoom and screen-reader announcements are supported,U,Real AT tests plus no repeated progress spam,2,Required before production
+U12,UI,Copy reports actual result and offers selected text with platform keys on failure,U,Secure clipboard rejection plain HTTP and unsupported API tests,2,Required before production
+U13,UI,Long labels addresses fingerprints and translated copy wrap safely,U,Long-content and 200 percent zoom screenshots,2,Required before production
+U14,UI,Stale plans and concurrent changes preserve drafts and explain conflict,U sessions,Two tabs plus reconnect after unlock and changed plan,2,Required before production
+U15,UI,Service catalogue filters preserve search focus and no-results recovery,U,Typing selection and empty filters work without state changes,2,Required before production
+U16,UI,Destructive review states interruption dependencies retention and external cleanup truthfully,U,Disable uninstall disconnect and identity review captures,2,Required before production
+U17,UI,No provider URL secret host key or account token leaks through notifications or diagnostics,U,Privacy review and canary log/export inspection,3,Required before production
+U18,UI,Existing Devices Public URL T3 Connect Ports and Updates behavior remains intact,U,Existing feature regression checks plus migration journeys,4,Required before production
+C01,Custom services,Arbitrary custom argv and scripts execute only after complete privilege drop in the user worker,M,Hostile user definition environment cwd run script and inherited-fd tests cannot regain root,0,Required before production
+C02,Custom services,User-writable s6 trees and definitions are never executed by a privileged scan tree,M,Replace run file and symlink during startup; root executes only fixed worker launcher,0,Required before production
+C03,Custom services,Rootless custom services need persistent user storage but no protected system volume,M rootless,Create restart and recreate a custom service with no system-service mount,2,Required before production
+C04,Custom services,System and user resource/operation namespaces cannot cross privilege ownership,M,Spoof source profile ID and path; root API rejects user commands and user state,1,Required before production
+C05,Custom services,Installed mise selection pins exact dependencies independent of interactive defaults,M,Change global and project selected versions; service continues using selected installations,2,Required before production
+C06,Custom services,Pinned installed-tool environment does not implicitly trust project hooks,M mise configs,Malicious untrusted mise files and hooks execute only through explicit user project-mode consent,0,Required before production
+C07,Custom services,Toolchains removal cleanup and update coordinate live and retained service references,M,Concurrent removal update and running/disabled service references cannot erase dependencies,2,Required before production
+C08,Custom services,Manual tool deletion or mutation reports unavailable/changed without fallback to latest,M,Delete or replace installation before restart; no silent reinstall or version switch,2,Required before production
+C09,Custom services,Direct argv preserves whitespace empty args quotes Unicode and shell metacharacters literally,M,Argument witness program receives exact tokens; shell syntax is never evaluated in direct mode,2,Required before production
+C10,Custom services,Explicit shell mode runs as user and shows expansion/hook behavior in review,M,Script and pipeline smoke plus negative root/sudo injection tests,2,Required before production
+C11,Custom services,Child environment and selected Vault references never inherit manager credentials,M,Canary Setup agent and control secrets absent from child plans events and logs,2,Required before production
+C12,Custom services,User worker and custom operation journal survive reconnect/restart without duplicate processes,M,Kill Setup worker and container at create/restart/edit checkpoints; reconcile owned run IDs,2,Required before production
+C13,Custom services,Owned stop kills descendants cancels pending retries and does not signal unrelated PIDs,M,Process-group children PID reuse daemonization and stop-versus-retry races,2,Required before production
+C14,Custom services,Foreground exit 0 failed exit and readiness have distinct lifecycle states,M,One-shot command daemonizing parent crash-loop and healthy foreground examples,2,Required before production
+C15,Custom services,Process-only health never claims application readiness and unhealthy checks have bounded policy,M,PID alive but endpoint fails; status Unhealthy without unbounded restart loop,2,Required before production
+C16,Custom services,Custom probes run as user against declared endpoints with bounded execution,M,Hanging oversized and adversarial probe output cannot block manager or invoke root,2,Required before production
+C17,Custom services,Logs have bounded storage cursor/gap semantics redaction limits and nonblocking overflow,M,High-volume stdout/stderr disk-full viewer reconnect and known-secret canaries,2,Required before production
+C18,Custom services,Declared ports and local health checks never automatically publish services,M,Create HTTP service and probe locally; no new host mapping or tunnel until explicit route plan,2,Required before production
+C19,Custom services,Configuration rollback reports actual recovery and never promises application-data rollback,M,Failed candidate plus data side effect retains prior config with accurate result,2,Required before production
+C20,Custom services,Disable temporary stop and remove preserve their stated startup and retention behavior,M,Restart container after each action; tools app data and Vault entries stay intact after removal,2,Required before production
+C21,Custom services,Unavailable cgroup hard limits are not displayed as enforced,M capability modes,Observe CPU/memory and test limited/unavailable enforcement before accepting a limit,2,Required before production
+C22,Custom UI,Add service supports catalogue custom commands and empty installed-tool inventory,U,Complete create edit and missing-tool detour while preserving the draft,2,Required before production
+C23,Custom UI,Custom command behavior review logs and removal use existing accessible sheet recipes,U,Keyboard touch and narrow/large-text completion with correct account/source and secret references,2,Required before production
+C24,Custom UI,Shared Configured search and Needs attention include custom tools commands and actual health,U,Find disabled/missing/unhealthy custom services without changing desired state,2,Required before production

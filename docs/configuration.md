@@ -22,9 +22,6 @@ Environment variables (all optional except where noted):
 | `T3_SINGLE_PORT` | — | Also serve T3 Code and the setup page together on this port, the setup page under `/__setup`, for a tunnel, proxy or hosting platform that routes one port. See [Exposing it through one hostname](remote-access.md#exposing-it-through-one-hostname). |
 | `T3_SETUP_ACCEPT_T3_SESSIONS` | `1` | Let a browser signed in to T3 Code with terminal access open the setup page without the key. `0` always asks for the key. |
 | `T3_ALLOW_SUDO` | `0` | Give agents passwordless sudo in the container |
-| `T3_SSH_ENABLED` | `0` | Start the image's OpenSSH server for VS Code Remote-SSH (`1` to enable; public-key authentication only) |
-| `T3_SSH_PORT` | `2222` | SSH port inside the container; the optional Compose port mapping example uses it as the host port too |
-| `T3_SSH_BIND_ADDR` | `127.0.0.1` | Host interface used by the optional Compose port mapping example; not read by the image |
 | `DEEPSEEK_API_KEY` | — | Used by the DeepSeek-through-OpenCode example |
 | `PUID` / `PGID` | `1000` | Owner of files in the workspace bind mount |
 
@@ -33,33 +30,22 @@ Volumes:
 - `/home/t3`: state, agent credentials, installed agents and toolchains, and
   shell history. Back this up.
 - `/workspace`: your repositories.
-- `/var/lib/t3code/ssh-host-keys`: root-only, persistent SSH host identity.
+- `/var/lib/t3code/services`: optional service payloads, operation records and
+  protected SSH/tailnet identities. Mount a named volume before installing a
+  system service. The provided Compose file already does this.
 
 ### VS Code Remote-SSH
 
-SSH is disabled and its port is unpublished by default. For Compose, add these
-lines to the `t3code` service's `volumes`, `environment` and `ports`, then
-recreate the container:
+SSH is installed on demand from **Setup → Access → SSH**. Paste your public
+keys, review the listener, and enable it. Root and password login remain
+disabled. A separate route connects that listener to your existing network or
+an explicitly configured connector. Declaring the route does not publish a
+Docker port or change a host firewall.
 
-```yaml
-environment:
-  T3_SSH_ENABLED: "1"
-volumes:
-  - /absolute/path/to/authorized_keys:/run/secrets/t3-ssh-authorized-keys:ro
-ports:
-  - "${T3_SSH_BIND_ADDR:-127.0.0.1}:${T3_SSH_PORT:-2222}:${T3_SSH_PORT:-2222}"
-```
-
-Add these entries to the corresponding existing `t3code` service sections.
-`T3_SSH_PORT` is passed to the container; `T3_SSH_BIND_ADDR` and the host-side
-port are used only by this optional Compose mapping. Keep the bind address on
-an interface reachable only through your trusted network (or publish the port
-through your VPN/firewall configuration).
-Connect VS Code to `t3@<host>` on the configured SSH port (default `2222`).
-The `t3` account uses the same
-`PUID` as the workspace, and SSH accepts only keys from the mounted file. The
-SSH host key persists in its own root-only `t3-ssh-host-keys` volume; do not
-share that volume between containers.
+For VS Code, use the generated SSH configuration with Remote-SSH. The account
+is `t3`, with the configured `PUID` and `PGID`. Host identity persists under the
+protected services volume. See [Services](services.md) for network mappings,
+Tailscale, Cloudflare, custom services and retained state.
 
 The first start seeds T3's native project-folder preference from `T3_WORKSPACE`.
 A folder you already chose in T3 is kept. Later changes, including clearing the

@@ -157,7 +157,7 @@ const T3GatewayModel = (() => {
   /** The same in a table column, which has no room for "checked". */
   const briefly = (check, now, relTime) => check ? [check.listed ? models(check.count) : '', relTime(check.at, now)].filter(Boolean).join(' · ') : '';
 
-  /** What a health check found that isn't applied yet. `changed` carries models whose advertised reasoning controls moved while the ids held still. */
+  /** What a health check found that isn't applied yet. `changed` includes reasoning and context limits even when the ids hold still. */
   const newModels = gateway => {
     if (!gateway.latest) return { added: [], removed: [], changed: [] };
     const held = new Set(gateway.models.ids), latest = new Set(gateway.latest);

@@ -24,6 +24,7 @@ import { hubAt, hubIdFor, probeHub } from './gateways/hub.mjs';
 import { clearClaudeSettings, scanClaudeSettings } from './gateways/conflicts.mjs';
 import { createGatewayStore, gatewayFilesDir, writePrivate } from './gateways/store.mjs';
 import { parse as parseToml } from './vendor/toml-patch.mjs';
+import { readCodexModels } from './gateways/codex.mjs';
 
 export class GatewayError extends Error {
   constructor(message, status = 400, code = 'invalid', extra = {}) { super(message); this.status = status; this.code = code; this.extra = extra; }
@@ -87,7 +88,7 @@ const offersOf = probe => Object.fromEntries(AGENTS.map(agent => [agent.id, mode
 
 const checkOf = probe => ({ at: probe.at, ok: probe.ok, code: probe.code, ms: probe.ms ?? null, message: probe.message ?? null, hint: probe.hint ?? null, count: probe.models.ids.length, listed: probe.models.listed, protocols: probe.protocols, product: probe.product ?? null });
 
-/** A health check records what it saw. Models it finds wait in `latest` until someone chooses to apply them: applying restarts instances. Reasoning facts wait beside them in `latestCapabilities`, and a change to those alone is pending too: the applied ids stay what they are, but the controls differ. */
+/** A health check records what it saw. Models, reasoning and token limits wait in `latest` and `latestCapabilities` until applied: applying can restart instances. */
 const observed = (gateway, probe) => {
   const ids = probe.ok && probe.models.listed ? cleanModelIds(probe.models.ids) : null;
   if (!ids) return { check: checkOf(probe), latest: gateway.latest ?? null, latestCapabilities: gateway.latestCapabilities ?? null };
@@ -101,7 +102,7 @@ const observed = (gateway, probe) => {
   return { check: checkOf(probe), latest: ids, latestCapabilities: knows ? capabilities : appliedCapabilities };
 };
 
-export function createGatewayService({ baseDir, home, env = process.env, io, t3, vault, processes, fetchImpl = globalThis.fetch, now = Date.now, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), onEvent = () => {}, getHarness } = {}) {
+export function createGatewayService({ baseDir, home, env = process.env, io, t3, vault, processes, fetchImpl = globalThis.fetch, now = Date.now, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), onEvent = () => {}, getHarness, nativeCodexModels = readCodexModels } = {}) {
   const store = createGatewayStore({ io, baseDir }), filesDir = gatewayFilesDir(baseDir);
   const probes = new Map();       // digest of address and key -> { at, probe }, so Connect reuses the test just shown
   const settling = new Map();     // gateway id -> { started, again }, while its instances start
@@ -194,7 +195,7 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
           results.push({ agent: agent.id, ok: true, action: 'updated' });
           continue;
         }
-        const desired = desiredInstance(agent, gateway, { instances: state.instances, enabled: true, dir: filesDir, customModelCapabilityOverrides: state.customModelCapabilityOverrides });
+        const desired = desiredInstance(agent, gateway, { instances: state.instances, enabled: true, dir: filesDir, customModelCapabilityOverrides: state.customModelCapabilityOverrides, gatewayModelLimits: state.gatewayModelLimits });
         const changed = differences(agent, desired, actual).filter(name => renamed || !COSMETIC.has(name));
         // A key deleted from the Vault leaves the working copy alone.
         const stale = key !== undefined || (stamp !== undefined && wanted.keyAt !== stamp);
@@ -255,7 +256,17 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
         catch (error) { if (error.code !== 'EEXIST') throw error; }
       }
     }
-    const config = await writePrivate(io, files.config, fileText(agent, gateway, filesDir, { major, baseConfig }));
+    const needsCatalog = agent.id === 'codex' && modelsFor(agent, gateway).some(model => gateway.models?.capabilities?.[model]?.limits);
+    const nativeModels = needsCatalog ? await nativeCodexModels({
+      executable: instances?.codex?.config?.binaryPath || (await getHarness?.('codex'))?.executable,
+      home, env,
+    }) : undefined;
+    const text = fileText(agent, gateway, filesDir, { major, baseConfig, nativeModels });
+    // Codex needs no local catalog when none of the routes advertise limits.
+    // Remove an older one too, so stale metadata cannot outlive discovery.
+    let config = false;
+    if (text !== null) config = await writePrivate(io, files.config, text);
+    else if (await io.stat(files.config).catch(() => null)) { await io.rm(files.config); config = true; }
     const key = !files.key || secret === undefined ? false : await writePrivate(io, files.key, secret || NO_KEY);
     return (config && !quiet) || key;
   };
@@ -375,7 +386,7 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     if (!state.ok) return { ...row, state: 'unknown' };
     if (!actual) return { ...row, state: 'missing' };
     if (actual.enabled === false) return { ...row, state: 'paused' };
-    if (differences(agent, desiredInstance(agent, gateway, { instances: state.instances, dir: filesDir, customModelCapabilityOverrides: state.customModelCapabilityOverrides }), actual).some(name => !COSMETIC.has(name))) return { ...row, state: 'drift' };
+    if (differences(agent, desiredInstance(agent, gateway, { instances: state.instances, dir: filesDir, customModelCapabilityOverrides: state.customModelCapabilityOverrides, gatewayModelLimits: state.gatewayModelLimits }), actual).some(name => !COSMETIC.has(name))) return { ...row, state: 'drift' };
     if (vaultKey && wanted.keyAt !== vaultKey.changedAt) return { ...row, state: 'key-stale' };
     if (!provider || (settling.get(gateway.id)?.has(agent.id) && !hasStarted(provider))) return { ...row, state: 'starting' };
     if (provider.installed === false) return { ...row, state: 'not-installed' };

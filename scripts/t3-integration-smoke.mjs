@@ -61,6 +61,7 @@ try {
   assert.deepEqual([gatewayKey.value, gatewayKey.sensitive, gatewayKey.valueRedacted], ["", true, true], "T3 redacts a sensitive value on the way out");
   assert.equal(gatewayPlain.value, "", "T3 keeps an explicitly empty value");
   assert.equal(gatewayRead.customModelCapabilityOverrides, false, "upstream must not advertise our override contract");
+  assert.equal(gatewayRead.gatewayModelLimits, false, "upstream must not advertise our gateway context-limit contract");
   assert.deepEqual(gatewayRead.instances[gatewayInstance].config.customModels, customModels);
   assert.deepEqual(gatewayRead.preferences[gatewayInstance].hiddenModels, ["smoke-hidden"]);
   await fs.access(path.join(env.T3CODE_HOME, "userdata/secrets", `provider-env-${Buffer.from(gatewayInstance).toString("base64url")}-${Buffer.from("T3_GATEWAY_KEY").toString("base64url")}.bin`));
@@ -117,6 +118,7 @@ try {
   assert.equal(after.newProjectsRoot, workspace);
   // The new capability contract belongs to the patched server, not upstream.
   assert.equal((await gatewayT3.read()).customModelCapabilityOverrides, true, "the selected patched runtime advertises capability overrides");
+  assert.equal((await gatewayT3.read()).gatewayModelLimits, true, "the upgraded runtime advertises gateway context-limit support");
   const richCustomModels = [{ slug: "smoke-model", capabilities: { optionDescriptors: [{ id: "reasoningEffort", label: "Reasoning", type: "select", options: [{ id: "ultra", label: "ultra" }] }] } }, { slug: "smoke-unknown", capabilities: { optionDescriptors: [] } }];
   await gatewayT3.upsert(gatewayInstance, { driver: "codex", displayName: "Codex · Smoke", enabled: false, config: { customModels: richCustomModels } });
   const patchedGatewayRead = await until(async () => { const state = await gatewayT3.read(); return state.instances[gatewayInstance] && state; });

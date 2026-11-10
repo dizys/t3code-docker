@@ -52,6 +52,7 @@ try {
     catch (error) { lastError = error; await new Promise((resolve) => setTimeout(resolve, 200)); }
   }
   assert(config, `Native server did not become ready: ${lastError?.message || "exited"}`);
+  assert.equal(config.gatewayModelLimits, true, "A fresh patched runtime must advertise gateway context-limit support");
   assert.equal(config.newProjectsRoot, workspace, "The native client still advertises the state directory for New project");
   const first = await api.call("projects.createNew", { name: "Workspace project" });
   const second = await api.call("projects.createNew", { name: "Workspace project" });

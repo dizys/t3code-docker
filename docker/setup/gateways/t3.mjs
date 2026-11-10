@@ -13,7 +13,8 @@ export function createGatewayT3(api) {
     return { instances: settings.providerInstances, providers: Array.isArray(config.providers) ? config.providers : [], preferences: settings.providerModelPreferences ?? {},
       // Older releases have no hubs at all, which is different from having none.
       hubs: 'usageLimitSources' in settings, hubSources: settings.usageLimitSources ?? {},
-      customModelCapabilityOverrides: config.customModelCapabilityOverrides === true };
+      customModelCapabilityOverrides: config.customModelCapabilityOverrides === true,
+      gatewayModelLimits: config.gatewayModelLimits === true };
   };
   const mutate = (providerInstanceMutation) => api.call('server.updateSettings', { patch: {}, providerInstanceMutation });
   return {

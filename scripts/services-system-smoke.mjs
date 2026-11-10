@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { serviceRequest } from '/opt/t3-services/client.mjs';
 const exec = promisify(execFile), phase = process.argv[2] || 'prepare';
 const root = '/var/lib/t3code/services/smoke-fixture';
@@ -60,11 +60,19 @@ if (phase === 'prepare') {
   await assert.rejects(exec('/usr/bin/ssh', [...args, 'root@127.0.0.1', 'true'], { timeout: 10000 }));
   await assert.rejects(exec('/usr/bin/ssh', [...args, '-o', 'PreferredAuthentications=password', 't3@127.0.0.1', 'true'], { timeout: 10000 }));
   const identity = '/var/lib/t3code/services/instances/openssh/identity/ed25519', publicIdentity = await fs.readFile(identity + '.pub', 'utf8');
+  const privateDigest = () => fs.readFile(identity).then(bytes => createHash('sha256').update(bytes).digest('hex'));
+  const originalIdentity = await privateDigest();
+  await fs.writeFile(identity + '.pub', publicIdentity.trim().split(/\s+/).slice(0, 2).join(' ') + ' distinct public sidecar comment\n');
+  await edit('system', 'openssh', 'restart');
+  assert.equal((await saved('system', 'openssh')).details.hostFingerprint, ssh.details.hostFingerprint);
   await fs.rm(identity + '.pub'); await edit('system', 'openssh', 'restart');
   assert.equal((await saved('system', 'openssh')).details.hostFingerprint, ssh.details.hostFingerprint);
+  assert.equal((await fs.readFile(identity + '.pub', 'utf8')).trim().split(/\s+/).length, 2);
   await fs.writeFile(identity + '.pub', key + '\n');
   await edit('system', 'openssh', 'restart', undefined, 'failed');
   assert.equal((await saved('system', 'openssh')).details.hostFingerprint, ssh.details.hostFingerprint);
+  assert.equal(await fs.readFile(identity + '.pub', 'utf8'), key + '\n');
+  assert.equal(await privateDigest(), originalIdentity);
   await fs.writeFile(identity + '.pub', publicIdentity); await edit('system', 'openssh', 'enable');
   // Exercise pinned connector extraction and real CLI compatibility without
   // authorizing an account or sending a token to a provider.

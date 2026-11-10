@@ -38,6 +38,12 @@ export async function publicKeys(keys, { run = null } = {}) {
   }
   return result;
 }
+export async function deriveHostPublicKey(file) {
+  // ssh-keygen can include the private key's comment. Identity comparisons and
+  // recovered public sidecars use only the key type and encoded public blob.
+  try { return (await command("/usr/bin/ssh-keygen", ["-y", "-f", file])).stdout.trim().split(/\s+/).slice(0, 2).join(" "); }
+  catch { throw new ServiceError("identity", "The existing SSH host identity cannot be read. It was preserved; restore its protected backup."); }
+}
 async function identity(root) {
   const directory = path.join(root, "instances/openssh/identity");
   await protectedDirectory(directory);
@@ -52,9 +58,7 @@ async function identity(root) {
     await fs.rename(tmp, key); await fs.rename(tmp + ".pub", key + ".pub");
     const dir = await fs.open(directory, "r"); await dir.sync(); await dir.close();
   }
-  let derived;
-  try { derived = (await command("/usr/bin/ssh-keygen", ["-y", "-f", key])).stdout.trim(); }
-  catch { throw new ServiceError("identity", "The existing SSH host identity cannot be read. It was preserved; restore its protected backup."); }
+  const derived = await deriveHostPublicKey(key);
   try {
     await protectedPath(key + ".pub", { directory: false });
     const current = await fs.readFile(key + ".pub", "utf8");

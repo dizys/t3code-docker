@@ -1,0 +1,149 @@
+[
+  {
+    "name": "custom-services-inline-dark.png",
+    "width": 728,
+    "contentHeight": 772,
+    "capturedHeight": 772,
+    "consoleMessages": [],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 728,
+      "height": 772
+    }
+  },
+  {
+    "name": "custom-services-desktop-dark.png",
+    "width": 1280,
+    "contentHeight": 813,
+    "capturedHeight": 813,
+    "consoleMessages": [],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 1280,
+      "height": 813
+    }
+  },
+  {
+    "name": "custom-command-mobile-light.png",
+    "width": 390,
+    "contentHeight": 853,
+    "capturedHeight": 853,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":390,\"scrollWidth\":390,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"16px\",\"dialogOpen\":true,\"dialogHeight\":752,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 390,
+      "height": 853
+    }
+  },
+  {
+    "name": "custom-command-desktop-dark.png",
+    "width": 1280,
+    "contentHeight": 813,
+    "capturedHeight": 813,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":1280,\"scrollWidth\":1280,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"16px\",\"dialogOpen\":true,\"dialogHeight\":744,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 1280,
+      "height": 813
+    }
+  },
+  {
+    "name": "custom-review-360-before.png",
+    "width": 360,
+    "contentHeight": 1154,
+    "capturedHeight": 1154,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":360,\"scrollWidth\":360,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"20px\",\"dialogOpen\":true,\"dialogHeight\":778,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 360,
+      "height": 1154
+    }
+  },
+  {
+    "name": "custom-review-360-20px.png",
+    "width": 360,
+    "contentHeight": 1154,
+    "capturedHeight": 1154,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":360,\"scrollWidth\":360,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"20px\",\"dialogOpen\":true,\"dialogHeight\":778,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 360,
+      "height": 1154
+    }
+  },
+  {
+    "name": "custom-inspector-dark.png",
+    "width": 1280,
+    "contentHeight": 813,
+    "capturedHeight": 813,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":1280,\"scrollWidth\":1280,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"16px\",\"dialogOpen\":true,\"dialogHeight\":744,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 1280,
+      "height": 813
+    }
+  },
+  {
+    "name": "custom-behavior-light.png",
+    "width": 728,
+    "contentHeight": 772,
+    "capturedHeight": 772,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":728,\"scrollWidth\":728,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"16px\",\"dialogOpen\":true,\"dialogHeight\":668,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 728,
+      "height": 772
+    }
+  },
+  {
+    "name": "custom-interactions-360-20px.png",
+    "width": 360,
+    "contentHeight": 1857,
+    "capturedHeight": 1857,
+    "consoleMessages": [
+      {
+        "level": "info",
+        "text": "INTERACTIONS {\"total\":63,\"passed\":63}"
+      },
+      {
+        "level": "info",
+        "text": "LAYOUT {\"width\":360,\"scrollWidth\":360,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"20px\",\"dialogOpen\":false,\"dialogHeight\":0,\"footerVisible\":true}"
+      }
+    ],
+    "screenshot": {
+      "mimeType": "image/png",
+      "width": 360,
+      "height": 1857
+    }
+  }
+]

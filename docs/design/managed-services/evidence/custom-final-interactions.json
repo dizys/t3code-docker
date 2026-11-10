@@ -1,0 +1,21 @@
+{
+  "prototypeSha256": "b66dbc73df952d178c3cbbbc0cdb7147a03a4a0bb1d94ff2e462f9f24ed99a10",
+  "width": 360,
+  "contentHeight": 1857,
+  "capturedHeight": 1857,
+  "consoleMessages": [
+    {
+      "level": "info",
+      "text": "INTERACTIONS {\"total\":63,\"passed\":63}"
+    },
+    {
+      "level": "info",
+      "text": "LAYOUT {\"width\":360,\"scrollWidth\":360,\"overflow\":[],\"fontLoaded\":true,\"fontSize\":\"20px\",\"dialogOpen\":false,\"dialogHeight\":0,\"footerVisible\":true}"
+    }
+  ],
+  "screenshot": {
+    "mimeType": "image/png",
+    "width": 360,
+    "height": 1857
+  }
+}

@@ -408,6 +408,16 @@ const run = async base => {
       if(entry.hash)expect(await frame.evaluate(()=>location.hash)==='#'+entry.hash,'palette opens the exact '+entry.title+' subpage');
       ok('native palette opens Settings / Setup / '+entry.title);
       expect(await page.evaluate(()=>window.__setupPaletteDocument)===documentToken,'the pinned native router opens Settings without a document reload');
+      if(id==='service-new'){
+        // This registry entry opens a modal editor over Services. Dismiss it
+        // before using the console header, which must stay inert underneath.
+        const editor=frame.getByRole('dialog',{name:'Add a custom service',exact:true});
+        await editor.waitFor();
+        expect(await frame.locator('#app').evaluate(el=>el.inert),'the custom-service editor makes the underlying console inert');
+        await editor.getByRole('button',{name:'Close',exact:true}).click();
+        await editor.waitFor({state:'detached'});
+        expect(await frame.locator('#app').evaluate(el=>!el.inert),'closing the custom-service editor restores console interaction');
+      }
       await frame.locator('.tc-console-topbar [data-cmd="embed.close"]').click();await page.locator('.t3-setup-pane').waitFor({state:'detached'});
     }
     if(process.env.T3_BRIDGE_UI_FIXTURES==='1') {

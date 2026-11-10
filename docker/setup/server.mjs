@@ -57,6 +57,7 @@ import {
   checkReaches, clearSaved, parsePublicUrl, platformUrl, readSaved, resolvePublicUrl, writeSaved,
 } from "./public-url.mjs";
 import * as AutoUpdate from "./auto-update.mjs";
+import { createServicesAPI, SERVICE_ROUTES } from "./services.mjs";
 
 const run = promisify(execFile);
 const gzip = promisify(gzipCallback);
@@ -222,6 +223,8 @@ const deviceLabels = createDeviceLabels({
 // T3_SETUP_ACCEPT_T3_SESSIONS=0 asks every browser for the key again.
 const ACCEPT_T3_SESSIONS = !/^(0|false|no|off)$/i.test(String(process.env.T3_SETUP_ACCEPT_T3_SESSIONS ?? "").trim());
 const t3Sessions = createT3Sessions({ baseUrl: `http://127.0.0.1:${T3_PORT}` });
+const serviceSessions = createT3Sessions({ baseUrl: `http://127.0.0.1:${T3_PORT}`, ttlMs: 0, missTtlMs: 0, requiredScopes: ["terminal:operate", "environment:maintain"] });
+const servicesAPI = createServicesAPI();
 
 // The page's own view model, run here once so that the count T3 Code's
 // settings show beside Setup is the one the console's own badges add up to.
@@ -2352,6 +2355,7 @@ const ROUTES = [...PLUGIN_ROUTES, ...FILES_ROUTES, ...CREDENTIAL_ROUTES, ...GATE
   "/t3/updates/check", "/t3/update", "/ports/expose", "/ports/unexpose",
   "/auto-update", "/auto-update/policy",
   "/harnesses/install", "/harnesses/update", "/harnesses/uninstall", "/harnesses/cancel", "/harnesses/versions", "/harnesses/enable", "/harnesses",
+  ...SERVICE_ROUTES,
   "/toolchains/install", "/toolchains/update", "/toolchains/uninstall", "/toolchains/cancel",
   "/auth/apikey/remove", "/auth/apikey", "/auth/use-cli", "/auth/signin", "/auth/session", "/auth/code", "/auth/cancel",
   "/source-control/signin", "/source-control/signout",
@@ -2731,6 +2735,17 @@ const server = createServer(async (req, res) => {
     // `viewer` says how this browser got in, so the page offers Lock only
     // where locking would end something.
     if (route === "/status") return sendJson(res, 200, { ...(await status()), viewer: { via: viewer.via } });
+
+    if (SERVICE_ROUTES.includes(route)) {
+      const read = route === "/services";
+      if (req.method !== (read ? "GET" : "POST")) return sendJson(res, 405, { ok: false, error: "Use the supported method for this service action." });
+      try {
+        let input = {};
+        if (!read) { try { input = JSON.parse(await readBody(req)); } catch { return sendJson(res, 400, { ok: false, error: "Send service details as a JSON object of at most 64 KiB." }); } }
+        if (viewer.via === "t3" && await servicesAPI.requiresMaintenance(route, input) && !await serviceSessions.verify(req.headers.cookie)) return sendJson(res, 403, { ok: false, code: "scope", error: "System service changes need environment maintenance permission. Use a device with that permission or the Setup key." });
+        return sendJson(res, 200, await servicesAPI.handle(route, input));
+      } catch (error) { return sendJson(res, ["conflict", "busy", "expired", "tools-busy"].includes(error.code) ? 409 : error.code === "controller-unavailable" ? 503 : 400, { ok: false, code: error.code, field: error.field, error: error.message }); }
+    }
 
     if (GATEWAY_ROUTES.includes(route)) {
       if (req.method !== (route === "/gateways" ? "GET" : "POST")) return sendJson(res, 405, { ok: false, error: "Use the supported method for this gateway action." });

@@ -1,6 +1,7 @@
 // Secrets stay in an owner-only store. Revisions are random, independent tokens;
 // testing and trust metadata never change a credential's revision.
 import path from 'node:path';
+import { serviceReferences } from './service-references.mjs';
 import * as fs from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { createCredentialIO } from './credentials/io.mjs';
@@ -190,6 +191,8 @@ export function createCredentialStore({ directory = credentialDirectory(), readO
       return { credential: await publicCredential(saved, metadata) };
     }),
     remove: ({ id, revision: expected }) => io.transaction(async () => {
+      const references = serviceReferences({ home, env: { HOME: home, T3CODE_HOME: path.dirname(directory) } }).filter(item => item.credentials.includes(id));
+      if (references.length) throw new CredentialError('Required by service ' + references.map(item => item.name).join(', ') + '. Change the reference in Services before removing this credential.', 409, 'service-reference');
       const data = await read(), credential = await current(data, id, expected), metadata = await state.read(data.credentials);
       delete metadata.tests[id]; delete metadata.hostKeys[id];
       await commit(data, data.credentials.filter(row => row.id !== id), metadata, credential.type === 'ssh' ? new Map([[id, null]]) : new Map());

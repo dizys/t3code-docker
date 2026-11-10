@@ -207,11 +207,21 @@ if [ "$(id -u)" -eq 0 ]; then
     rm -f /etc/sudoers.d/t3code
   fi
 
+  # The image-owned coordinator starts separate system and user supervision.
+  # It never opens custom configuration before the worker's full step-down.
+  # One-off entrypoint commands keep their existing behavior.
+  if [ "${1:-}" = "t3-serve" ] && [ -f /opt/t3-services/init.mjs ]; then
+    exec env PATH="$inherited_path" /usr/local/bin/node /opt/t3-services/init.mjs "$@"
+  fi
+
   # gosu by absolute path: env resolves its command with the PATH it sets.
   exec env PATH="$inherited_path" "$(command -v gosu)" "$T3_USER" "$0" "$@"
 fi
 
 # --- unprivileged half -------------------------------------------------------
+if [ "${1:-}" = "t3-serve" ] && [ "${T3_SERVICES_WRAPPED:-0}" != "1" ] && [ -f /opt/t3-services/init.mjs ]; then
+  exec /usr/local/bin/node /opt/t3-services/init.mjs "$@"
+fi
 # Keep a configured key available to the resolver, but out of the environment
 # of helpers and background installs. Only the resolver and Setup need it.
 export -n T3_SETUP_KEY T3_SETUP_KEY_SOURCE

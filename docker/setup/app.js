@@ -163,6 +163,7 @@
   const mcpUI = T3McpUI.create({ api, getStatus: () => state.status, render: () => render() });
   const credentialsUI = T3CredentialsUI.create({ api, getStatus: () => state.status, render: () => render(), onChange: () => loadStatus(true) });
   const gatewaysUI = T3GatewaysUI.create({ api, getStatus: () => state.status, render: () => render(), onChange: () => loadStatus(true), go: (route) => go(route) });
+  const servicesUI = T3ServicesUI.create({ api, getStatus: () => state.status, render: () => render(), go: route => go(route) });
   const filesUI = T3FilesUI.create({ api, base: BASE, getStatus: () => state.status, getRoute: () => state.route, render: () => render(), go: route => go(route) });
 
   /** Whether this browser came in on its T3 Code session rather than the key, so Lock would end nothing. */
@@ -248,6 +249,7 @@
         if (state.route === 'vault' && (location.hash === shownHash || !location.hash.includes('/'))) credentialsUI.activate();
         if (state.route === 'gateways' && (location.hash === shownHash || !location.hash.includes('/'))) gatewaysUI.activate();
         if (state.route === 'files') filesUI.activate();
+        if (['services', 'access'].includes(state.route)) servicesUI.activate();
         if (state.route === 'instructions' && state.contextTab === 'instructions') void loadInstructionsPreview();
       } else if (!locked) {
         // Name the URL and the reason. "Could not read status" sent someone
@@ -1127,6 +1129,12 @@
   };
 
   const accessPage = (s, n) => {
+    const tab = servicesUI.accessTab();
+    // Keep the tab containers distinct from refresh notices so their controls
+    // survive when a notice is inserted or removed.
+    const heading = html`${pageHead('access')}${pageNotices('access')}${servicesUI.accessTabs()}`;
+    if (tab === 'connections') return html`${heading}<div id="access-tabpanel" data-key="access-tabpanel" role="tabpanel" aria-label="Connections">${section('reach-title', 'How devices reach T3 Code', reachGroup(s))}${servicesUI.connectionsContent()}</div>`;
+    if (tab === 'ssh') return html`${heading}<div id="access-tabpanel" data-key="access-tabpanel" role="tabpanel" aria-label="SSH">${servicesUI.sshContent()}</div>`;
     const devices = M.deviceRows(s.sessions, n);
     const m = pair.minted;
     const waiting = m && !m.outcome ? m.id : null;
@@ -1136,11 +1144,9 @@
       ? (m.label ? '“' + m.label + '” · ' : '') + 'single use · expires ' + M.relTime(m.expiresAt, n)
       : null;
     // With no address yet, how devices reach the server is the first thing to do.
-    const reach = section('reach-title', 'How devices reach this server', reachGroup(s));
     return html`
-      ${pageHead('access')}
-      ${pageNotices('access')}
-      ${s.publicUrl ? '' : reach}
+      ${heading}<div id="access-tabpanel" data-key="access-tabpanel" role="tabpanel" aria-label="Devices">
+      ${s.publicUrl ? '' : html`<div class="tc-notice tc-notice--warn"><div class="tc-notice-body"><span class="tc-notice-desc">Set a public address before pairing another device.</span></div><a class="tc-btn tc-btn--sm" href="#access/connections">Open Connections</a></div>`}
       ${section('pair-title', 'Pair a device', ceremony ? pairCeremony(m, s, n) : pairForm(s),
         { actions: ceremony ? html`${sub ? muted(sub) : ''}<button class="tc-btn tc-btn--sm" type="button" data-cmd="pair.new" aria-keyshortcuts="P" title="New link · P"${pair.minting ? raw(' disabled') : ''}>${pair.minting ? html`<span class="tc-spinner" aria-hidden="true"></span>Creating link…` : html`${icon('plus')}New link`}</button>` : null })}
       ${section('paired-title', 'Paired devices', devices.length
@@ -1159,7 +1165,7 @@
           <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name">${l.name}</span>${l.waiting ? html`<span class="tc-badge tc-badge--info">Waiting</span>` : ''}</div>${accessFeedback('pairing', l.id) || html`<span class="tc-status" title="${l.expiresTitle}">${l.status}</span>`}</div>
           <div class="tc-row-actions"><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" aria-label="More for link ${l.name}" aria-haspopup="menu" aria-expanded="${String(Kit.menuOpenFor('menu-link-' + l.id))}" data-cmd="link.menu" data-id="${l.id}" data-key="menu-link-${l.id}"${access.pending('pairing', l.id) ? raw(' disabled') : ''}>${icon('ellipsis')}</button></div>
         </div>`)}</div></div>`) : ''}
-      ${s.publicUrl ? reach : ''}`;
+      </div>`;
   };
 
   /** T3 Connect: where it stands, the one thing to do next, and a menu for the rest. */
@@ -1933,6 +1939,7 @@
     mcp: () => html`${mcpUI.phoneHead()}${pageHead('mcp', { sub: 'Servers your agents can start or connect to. Define one once, then add it to the agents you choose.' })}${mcpUI.content()}`,
     vault: () => html`${pageHead('vault')}${credentialsUI.content()}`,
     gateways: () => html`${gatewaysUI.phoneHead()}${pageHead('gateways')}${gatewaysUI.content()}`,
+    services: () => html`${pageHead('services')}${servicesUI.content()}`,
     toolchains: toolchainsPage, sourcecontrol: sourceControlPage, ports: portsPage,
     updates: updatesPage, storage: storagePage, server: serverPage, more: morePage,
   };
@@ -2057,6 +2064,7 @@
     if (!await mcpUI.beforeNavigate()) return false;
     if (!await credentialsUI.beforeNavigate()) return false;
     if (!await gatewaysUI.beforeNavigate()) return false;
+    if (!await servicesUI.beforeNavigate()) return false;
     return filesUI.beforeNavigate();
   };
   let hostLeaving = false;
@@ -2092,6 +2100,7 @@
     if (route === 'vault' && state.status) credentialsUI.activate(true);
     if (route === 'gateways' && state.status) gatewaysUI.activate(true);
     if (route === 'files' && state.status) filesUI.activate();
+    if (['services', 'access'].includes(route)) servicesUI.activate(true);
   };
   const navigateFromHash = async focus => {
     const version = ++navigationVersion;
@@ -4287,7 +4296,7 @@
 
   // ------------------------------------------------------------ shortcuts --
   Kit.bind('mod+k', openPalette);
-  Kit.bind('/', () => state.route === 'files' ? filesUI.focusSearch() : state.route === 'mcp' ? mcpUI.focusSearch() : state.route === 'gateways' ? gatewaysUI.focusSearch() : state.route === 'vault' ? credentialsUI.focusSearch() : state.route === 'instructions' && state.contextTab === 'skills' ? skillsUI.focusSearch() : openPalette());
+  Kit.bind('/', () => state.route === 'services' ? servicesUI.focusSearch() : state.route === 'files' ? filesUI.focusSearch() : state.route === 'mcp' ? mcpUI.focusSearch() : state.route === 'gateways' ? gatewaysUI.focusSearch() : state.route === 'vault' ? credentialsUI.focusSearch() : state.route === 'instructions' && state.contextTab === 'skills' ? skillsUI.focusSearch() : openPalette());
   for (const page of T3Routes.PAGES) {
     if (page.key) Kit.bind('g ' + page.key, () => { keyboardNav = true; go(page.route); });
   }

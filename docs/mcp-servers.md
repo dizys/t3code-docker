@@ -197,7 +197,9 @@ in both themes with synthetic data. All API mutations are intercepted.
 local/HTTP handshakes, credential delivery, unlink and native Off/On using
 fresh native reads, disposable homes and fixture servers. It never sends model
 requests to an external provider or uses real credentials. Muse uses its local
-echo provider. This checks native configuration and MCP negotiation,
+echo provider and trusts only the disposable fixture workspace for both enabled
+and disabled probes. Muse 1.4.15 requires workspace trust to start the configured
+servers. This checks native configuration and MCP negotiation,
 not model-selected tool calls or OAuth.
 
 Native contracts: [Claude](https://code.claude.com/docs/en/mcp),

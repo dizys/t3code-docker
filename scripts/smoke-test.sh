@@ -1696,12 +1696,11 @@ check "the console's own T3 session is not listed as a device" console_session_i
 
 printf '\nPorts\n'
 
-# T3 Code fetches cloudflared at runtime when it is missing, which needs egress
-# at the moment you are trying to get connected. Shipping it is only useful if
-# T3 Code actually finds it, so assert the pointer as well as the binary.
-check "cloudflared ships in the image" \
+# The image-owned shim resolves a verified cloudflared payload on first use.
+# Read-only compatibility probes do not download or enable a connector.
+check "cloudflared on-demand adapter reports its pinned version" \
   "docker exec $NAME cloudflared --version"
-check "T3 Code is pointed at the shipped binary" \
+check "T3 Code is pointed at the on-demand adapter" \
   "docker exec $NAME sh -c 'test -x \"\$T3CODE_CLOUDFLARED_PATH\"'"
 
 cloudflared_matches_t3() {

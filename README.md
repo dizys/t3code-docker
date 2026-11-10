@@ -228,6 +228,10 @@ the only boundary.
   and `t3 auth session revoke <id>`.
 - **Don't publish port 3773, 3774 or `T3_SINGLE_PORT` unencrypted.** The
   examples above bind to localhost for that reason; use TLS or a tunnel.
+- **SSH and network connectors are optional downloads.** Set them up from
+  **Setup → Access → SSH** or **Services**. SSH accepts your public keys and
+  exposes no host port automatically. Keep its protected services volume.
+  See [Services](docs/services.md) for SSH, tunnels and custom mise commands.
 - **A browser paired with T3 Code can open the setup page without the key**
   when both share a hostname, because T3 Code already gives it a terminal.
   `T3_SETUP_ACCEPT_T3_SESSIONS=0` turns this off.

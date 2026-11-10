@@ -30,6 +30,22 @@ Volumes:
 - `/home/t3`: state, agent credentials, installed agents and toolchains, and
   shell history. Back this up.
 - `/workspace`: your repositories.
+- `/var/lib/t3code/services`: optional service payloads, operation records and
+  protected SSH/tailnet identities. Mount a named volume before installing a
+  system service. The provided Compose file already does this.
+
+### VS Code Remote-SSH
+
+SSH is installed on demand from **Setup → Access → SSH**. Paste your public
+keys, review the listener, and enable it. Root and password login remain
+disabled. A separate route connects that listener to your existing network or
+an explicitly configured connector. Declaring the route does not publish a
+Docker port or change a host firewall.
+
+For VS Code, use the generated SSH configuration with Remote-SSH. The account
+is `t3`, with the configured `PUID` and `PGID`. Host identity persists under the
+protected services volume. See [Services](services.md) for network mappings,
+Tailscale, Cloudflare, custom services and retained state.
 
 The first start seeds T3's native project-folder preference from `T3_WORKSPACE`.
 A folder you already chose in T3 is kept. Later changes, including clearing the

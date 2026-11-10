@@ -59,7 +59,7 @@ RUN set -eux; \
         ca-certificates curl wget gnupg \
         git git-lfs openssh-client \
         build-essential python3 python3-dev python3-venv pipx \
-        tini gosu \
+        tini gosu s6 util-linux \
         jq ripgrep fd-find bat sqlite3 \
         unzip zip xz-utils \
         less nano vim-tiny \
@@ -103,23 +103,16 @@ RUN set -eux; \
     fi; \
     echo "gh $installed"
 
-# Cloudflare Tunnel. T3 Code has managed-tunnel support built in and fetches
-# this binary at runtime when it is missing - which needs working egress at
-# exactly the moment someone is trying to get connected, and writes into the
-# state volume on first use. Ship it instead, pinned to the release T3 Code
-# asks for, and point T3 Code at it so it never downloads its own. It is also
-# what `t3-expose` and the setup page's Ports panel use to publish a dev server.
+# Optional payload metadata is image-owned. No server or connector payload is
+# installed here. Native T3 tunnels use the compatible lazy cloudflared shim.
 ARG CLOUDFLARED_VERSION=2026.5.2
+ARG TAILSCALE_VERSION=1.104.5
+COPY scripts/service-catalogue.mjs /tmp/service-catalogue.mjs
 RUN set -eux; \
-    case "$(dpkg --print-architecture)" in \
-      amd64) cfarch=amd64 ;; \
-      arm64) cfarch=arm64 ;; \
-      *) echo "no cloudflared build for $(dpkg --print-architecture)" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /usr/local/bin/cloudflared \
-      "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${cfarch}"; \
-    chmod 0755 /usr/local/bin/cloudflared; \
-    cloudflared --version
+    apt-get -o Acquire::Retries=8 update; \
+    mkdir -p /opt/t3-services; \
+    node /tmp/service-catalogue.mjs /opt/t3-services/catalogue.json "$TAILSCALE_VERSION" "$CLOUDFLARED_VERSION"; \
+    rm -rf /var/lib/apt/lists/* /tmp/service-catalogue.mjs
 ENV T3CODE_CLOUDFLARED_PATH=/usr/local/bin/cloudflared
 
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
@@ -132,7 +125,13 @@ RUN set -eux; \
     userdel -r node 2>/dev/null || true; \
     groupdel node 2>/dev/null || true; \
     groupadd -g "$T3_GID" t3; \
-    useradd -m -u "$T3_UID" -g "$T3_GID" -s /bin/bash t3
+    useradd -m -u "$T3_UID" -g "$T3_GID" -s /bin/bash t3; \
+    # An impossible hash permits key-only UsePAM=no sessions without ever
+    # provisioning a password. OpenSSH rejects Linux's leading-! locked form.
+    usermod -p '*' t3; \
+    useradd --system --no-create-home --home-dir /run/sshd --shell /usr/sbin/nologin sshd; \
+    mkdir -p /run/sshd /var/lib/t3code/services; \
+    chmod 0755 /run/sshd /var/lib/t3code/services
 
 # Mutable npm location for user globals (`npm i -g`). Nothing the image itself
 # runs lives here: T3 Code is in /opt/t3, the browser MCP servers in /opt/t3-mcp,
@@ -272,6 +271,9 @@ COPY docker/bin/ /usr/local/bin/
 COPY docker/harness/ /opt/t3-harness/
 COPY docker/provider-integration/ /opt/t3-provider/
 COPY docker/setup/ /opt/t3-setup/
+COPY docker/services/ /opt/t3-services/
+RUN mkdir -p /usr/local/libexec \
+    && cc -std=c11 -Wall -Wextra -Werror -O2 /opt/t3-services/process.c -o /usr/local/libexec/t3-service-process
 # The one-port router (T3_SINGLE_PORT): T3 Code and the setup page behind a
 # single listener, for platforms and tunnels that route one port.
 COPY docker/router/ /opt/t3-router/
@@ -286,7 +288,7 @@ RUN "$T3_INFRA_NODE" /usr/local/share/t3-client/patch.mjs
 # `t3` is the same immutable launcher under its user-facing name, for root's
 # shell and anyone typing it. Nothing in the image resolves it by name: the
 # entrypoint, the setup service and the helpers all use T3_INFRA_LAUNCHER.
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/lib/t3code/run-t3.sh /usr/local/bin/t3-* \
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/lib/t3code/run-t3.sh /usr/local/bin/t3-* /usr/local/bin/cloudflared \
     /opt/t3-setup/credentials/askpass.sh \
     && ln -sfn t3-admin /usr/local/bin/t3
 
@@ -315,11 +317,12 @@ ENV T3CODE_HOME=/home/t3/.t3 \
     PUID=1000 \
     PGID=1000
 
-RUN mkdir -p /workspace /home/t3/.t3 /home/t3/go && chown -R t3:t3 /workspace /home/t3
+RUN mkdir -p /workspace /home/t3/.t3 /home/t3/go \
+    && chown -R t3:t3 /workspace /home/t3
 
 VOLUME ["/home/t3", "/workspace"]
 WORKDIR /workspace
-EXPOSE 3773 3774
+EXPOSE 3773 3774 2222
 
 # With one port, asked through it: that is the way in, so a router that is not
 # answering is an unhealthy container even while T3 Code itself is fine.

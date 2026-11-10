@@ -6,6 +6,7 @@
 // `MISE_AUTO_INSTALL=false` and disable the system fallback: a status call must
 // never install anything and must never resolve a tool it did not install.
 import path from "node:path";
+import { assertToolUnreferenced } from "./service-references.mjs";
 
 /** The environment a read-only mise call runs under. */
 export function readEnv(env) {
@@ -132,6 +133,7 @@ export async function unuse(ctx, tool) {
 
 /** Remove one installed version. Idempotent: a missing version is not an error. */
 export async function uninstall(ctx, tool, version) {
+  assertToolUnreferenced(ctx, tool, version);
   const result = await ctx.run(miseArgs(ctx, ["uninstall", `${tool}@${version}`]), {
     env: writeEnv(ctx.env),
     cwd: ctx.home,

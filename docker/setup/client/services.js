@@ -238,7 +238,7 @@ const T3ServicesUI = (() => {
       event.preventDefault(); nodes[index].click(); nodes[index].focus();
     });
     return { content, sshContent, connectionsContent, accessTab,
-      accessTabs: () => html`<div class="tc-tabs" role="tablist" aria-label="Access">${accessTabs.map(([id, label]) => html`<button class="tc-tab-button" type="button" role="tab" aria-controls="access-tabpanel" aria-selected="${String(accessTab() === id)}" tabindex="${accessTab() === id ? 0 : -1}" data-service-action="access-tab" data-value="${id}">${label}</button>`)}</div>`,
+      accessTabs: () => html`<div class="tc-tabs" data-key="access-tabs" role="tablist" aria-label="Access">${accessTabs.map(([id, label]) => html`<button class="tc-tab-button" type="button" role="tab" aria-controls="access-tabpanel" aria-selected="${String(accessTab() === id)}" tabindex="${accessTab() === id ? 0 : -1}" data-service-action="access-tab" data-value="${id}">${label}</button>`)}</div>`,
       activate: (entered = false) => {
         // Navigation owns the editor entry. Background status reads may refresh
         // this page while its editor, draft or review is still open.

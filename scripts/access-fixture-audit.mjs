@@ -18,6 +18,11 @@ try {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   if (!ready) throw new Error('Disposable console did not start.');
-  const audit = spawn(process.execPath, ['scripts/access-ui-audit.js', url, 'dev'], { cwd: new URL('..', import.meta.url), stdio: 'inherit' });
-  process.exitCode = (await once(audit, 'exit'))[0] ?? 1;
+  // Run draft preservation in the fast fixture gate as well as image smoke,
+  // so changes to Access markup fail before the native image matrix starts.
+  for (const script of ['scripts/access-ui-audit.js', 'scripts/form-drafts-ui-audit.js']) {
+    const audit = spawn(process.execPath, [script, url, 'dev'], { cwd: new URL('..', import.meta.url), stdio: 'inherit' });
+    process.exitCode = (await once(audit, 'exit'))[0] ?? 1;
+    if (process.exitCode !== 0) break;
+  }
 } finally { server.kill('SIGTERM'); if (server.exitCode === null) await once(server, 'exit'); }

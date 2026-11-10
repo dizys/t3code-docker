@@ -1130,9 +1130,11 @@
 
   const accessPage = (s, n) => {
     const tab = servicesUI.accessTab();
+    // Keep the tab containers distinct from refresh notices so their controls
+    // survive when a notice is inserted or removed.
     const heading = html`${pageHead('access')}${pageNotices('access')}${servicesUI.accessTabs()}`;
-    if (tab === 'connections') return html`${heading}<div id="access-tabpanel" role="tabpanel" aria-label="Connections">${section('reach-title', 'How devices reach T3 Code', reachGroup(s))}${servicesUI.connectionsContent()}</div>`;
-    if (tab === 'ssh') return html`${heading}<div id="access-tabpanel" role="tabpanel" aria-label="SSH">${servicesUI.sshContent()}</div>`;
+    if (tab === 'connections') return html`${heading}<div id="access-tabpanel" data-key="access-tabpanel" role="tabpanel" aria-label="Connections">${section('reach-title', 'How devices reach T3 Code', reachGroup(s))}${servicesUI.connectionsContent()}</div>`;
+    if (tab === 'ssh') return html`${heading}<div id="access-tabpanel" data-key="access-tabpanel" role="tabpanel" aria-label="SSH">${servicesUI.sshContent()}</div>`;
     const devices = M.deviceRows(s.sessions, n);
     const m = pair.minted;
     const waiting = m && !m.outcome ? m.id : null;
@@ -1143,7 +1145,7 @@
       : null;
     // With no address yet, how devices reach the server is the first thing to do.
     return html`
-      ${heading}<div id="access-tabpanel" role="tabpanel" aria-label="Devices">
+      ${heading}<div id="access-tabpanel" data-key="access-tabpanel" role="tabpanel" aria-label="Devices">
       ${s.publicUrl ? '' : html`<div class="tc-notice tc-notice--warn"><div class="tc-notice-body"><span class="tc-notice-desc">Set a public address before pairing another device.</span></div><a class="tc-btn tc-btn--sm" href="#access/connections">Open Connections</a></div>`}
       ${section('pair-title', 'Pair a device', ceremony ? pairCeremony(m, s, n) : pairForm(s),
         { actions: ceremony ? html`${sub ? muted(sub) : ''}<button class="tc-btn tc-btn--sm" type="button" data-cmd="pair.new" aria-keyshortcuts="P" title="New link · P"${pair.minting ? raw(' disabled') : ''}>${pair.minting ? html`<span class="tc-spinner" aria-hidden="true"></span>Creating link…` : html`${icon('plus')}New link`}</button>` : null })}

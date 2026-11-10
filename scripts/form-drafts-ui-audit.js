@@ -11,8 +11,8 @@ if (!base.pathname.endsWith('/')) base.pathname += '/';
 const key = process.argv[3] || 'dev';
 const draft = '  Desk <draft> & "iPhone"  ';
 const selection = [5, 12, 'backward'];
-// Refresh notices sit between the page's head and its sections.
-const pageNotices = '.tc-page:not([hidden]) > .tc-notice:has(~ .tc-section)';
+// Refresh notices sit above sections or an Access tabpanel containing them.
+const pageNotices = '.tc-page:not([hidden]) > .tc-notice:has(~ .tc-section, ~ [role="tabpanel"])';
 const runs = [
   { width: 1440, embedded: false, fallback: false },
   { width: 1198, embedded: true, fallback: true },
@@ -77,6 +77,7 @@ const runs = [
         await ui.locator('#pair-label').waitFor();
       }
       if (run.fallback) await ui.evaluate(() => { Element.prototype.moveBefore = undefined; });
+      await ui.locator(pageNotices).waitFor();
       const refresh = async notices => {
         const response = page.waitForResponse(r => new URL(r.url()).pathname === new URL('status', base).pathname);
         await ui.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
@@ -93,10 +94,14 @@ const runs = [
         const actual = await ui.evaluate(() => {
           const input = document.querySelector('#pair-label');
           return { value: input.value, sameNode: input === window.draftInput, focused: document.activeElement === input,
+            sameTabs: document.querySelector('#page-access [role="tablist"]') === window.draftTabs,
+            samePanel: document.querySelector('#access-tabpanel') === window.draftPanel,
             selection: [input.selectionStart, input.selectionEnd, input.selectionDirection] };
         });
         assert.equal(actual.value, draft, 'refresh must retain the unsaved label');
         assert.equal(actual.sameNode, true, 'the form must survive changes to page notices');
+        assert.equal(actual.sameTabs, true, 'refresh must retain the Access tab controls');
+        assert.equal(actual.samePanel, true, 'refresh must retain the active Access panel');
         assert.equal(actual.focused, focused, 'refresh must preserve the current focus');
         if (focused) assert.deepEqual(actual.selection, selection, 'refresh must preserve the editing selection');
       };
@@ -104,6 +109,8 @@ const runs = [
       await ui.locator('#pair-label').fill(draft);
       await ui.evaluate(range => {
         window.draftInput = document.querySelector('#pair-label');
+        window.draftTabs = document.querySelector('#page-access [role="tablist"]');
+        window.draftPanel = document.querySelector('#access-tabpanel');
         window.draftInput.setSelectionRange(...range);
       }, selection);
       readFailed = false; await refresh(0); await checkDraft(true);
@@ -135,6 +142,28 @@ const runs = [
       assert.equal(await ui.locator('#pair-label').inputValue(), '', 'only a successful submission clears the draft');
       assert.equal(await ui.locator('[data-cmd="pair.ttl"][data-value="7d"]').getAttribute('aria-pressed'), 'true');
 
+      // Every Access panel must keep its tabs and keyboard focus through the
+      // same notice transitions, even when it has no pairing form.
+      for (const name of ['Connections', 'SSH', 'Devices']) {
+        const tab = ui.getByRole('tab', { name, exact: true });
+        await tab.click();
+        await ui.getByRole('tabpanel', { name, exact: true }).waitFor();
+        await tab.focus();
+        await ui.evaluate(() => {
+          window.refreshTab = document.activeElement;
+          window.refreshPanel = document.querySelector('#access-tabpanel');
+        });
+        for (const stale of [true, false]) {
+          readFailed = stale; await refresh(stale ? 1 : 0);
+          const actual = await ui.evaluate(() => ({
+            sameTab: document.querySelector('#page-access [role="tab"][aria-selected="true"]') === window.refreshTab,
+            focused: document.activeElement === window.refreshTab,
+            samePanel: document.querySelector('#access-tabpanel') === window.refreshPanel,
+          }));
+          assert.deepEqual(actual, { sameTab: true, focused: true, samePanel: true }, name + ': notices must preserve the panel and tab focus');
+        }
+      }
+
       // Shared patching also protects DOM-owned passwords and textareas, and
       // restores selection when an older browser blurs a moved control.
       const controls = await ui.evaluate(() => {
@@ -161,7 +190,7 @@ const runs = [
       }
       assert.equal(controls[2].outsideFocus, true);
       assert.deepEqual(errors, [], 'the console must not throw or make unexpected mutations');
-      console.log(`PASS: ${run.width}px${run.embedded ? ' embedded' : ''}${run.fallback ? ' insertBefore fallback' : ''}: drafts, focus, selection, failed refresh and retry`);
+      console.log(`PASS: ${run.width}px${run.embedded ? ' embedded' : ''}${run.fallback ? ' insertBefore fallback' : ''}: drafts, focus, selection, failed refresh, retry and all Access tabs`);
       await page.close();
     }
   } finally { await browser.close(); }

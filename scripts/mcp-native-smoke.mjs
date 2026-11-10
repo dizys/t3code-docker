@@ -44,10 +44,12 @@ const nativeCommand = async (env, home, args) => (await promisify(execFile)(exec
 async function inventory(env, home, major, waitForMcp) {
   if (provider === 'grok') return nativeCommand(env, home, ['mcp', 'doctor', '--json']);
   if (provider === 'pi') return nativeCommand(env, home, ['mcp', 'list', '--json']);
-  if (provider === 'muse' && !waitForMcp) return nativeCommand(env, home, ['exec', '--provider', 'echo', '--disable-shell', '--disable-write', '--disable-sandbox', 'Reply OK']);
+  // Muse 1.4.15 also gates user-configured MCP startup on workspace trust.
+  // Trust only this disposable fixture, for both enabled and disabled probes.
+  if (provider === 'muse' && !waitForMcp) return nativeCommand(env, home, ['exec', '--provider', 'echo', '--trust-workspace', '--disable-shell', '--disable-write', '--disable-sandbox', 'Reply OK']);
   // A short echo turn can exit before Muse's background MCP startup. Keep its
   // native session host alive until this fresh session has discovered tools.
-  if (provider === 'muse') return withNativeProcess({ executable, env, home, timeoutMs: 20000 }, ['serve', '--provider', 'echo', '--no-session-log', '--disable-shell', '--disable-write', '--disable-sandbox'], async ({ child, nextLine, signal }) => {
+  if (provider === 'muse') return withNativeProcess({ executable, env, home, timeoutMs: 20000 }, ['serve', '--provider', 'echo', '--no-session-log', '--trust-workspace', '--disable-shell', '--disable-write', '--disable-sandbox'], async ({ child, nextLine, signal }) => {
     const request = async (id, method, params) => {
       child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
       for (;;) { const message = JSON.parse(await nextLine()); if (message.id === id) { assert.ok(!message.error, JSON.stringify(message.error)); return message.result; } }

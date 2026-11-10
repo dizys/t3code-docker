@@ -114,11 +114,16 @@ if (phase === 'prepare') {
   const { stdout: account } = await exec('/usr/bin/ssh', ['-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=' + root + '/known_hosts', '-i', root + '/client', '-p', '22222', 't3@127.0.0.1', 'id', '-u'], { timeout: 10000 });
   assert.equal(Number(account.trim()), Number(process.env.PUID || 1000));
   if (phase === 'recreate') {
+    // Linux forbids writing an executable while a process is using it. Stop
+    // the owned SSH process tree before deliberately corrupting its package.
+    await edit('system', 'openssh', 'stop');
+    assert.equal((await saved('system', 'openssh')).observation.state, 'stopped');
     const config = (await saved('system', 'openssh')).config;
     const executable = ssh.artifact.path + '/usr/sbin/sshd', original = await fs.readFile(executable);
     await fs.appendFile(executable, 'test-only-cache-tamper');
     await edit('system', 'openssh', 'edit', { port: config.port, listen: config.listen, keys: config.keys, enabled: true }, 'failed');
     assert.notEqual((await saved('system', 'openssh')).uninstalled, true);
+    assert.equal((await saved('system', 'openssh')).observation.state, 'stopped');
     await fs.writeFile(executable, original);
     await edit('system', 'openssh', 'edit', { port: config.port, listen: config.listen, keys: config.keys, enabled: true });
     assert.equal((await saved('system', 'openssh')).details.hostFingerprint, receipt.fingerprint);

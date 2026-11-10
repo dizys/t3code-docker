@@ -61,6 +61,22 @@ test('OpenCode, Pi and Codex receive per-model limits while unknown routes retai
   assert.equal(catalog.models.find(row => row.slug === 'gemini-large').base_instructions, nativeModels[0].base_instructions);
 });
 
+test('context-only OpenCode limits preserve the native unknown-output fallback in v1', () => {
+  const gw = gateway({ models: { ids: ['context-only', 'invalid-output', 'unknown'], capabilities: {
+    'context-only': { limits: { context: 1048576 } },
+    'invalid-output': { limits: { context: 1048576, output: 1048576 } },
+  } } });
+  for (const major of [1, 2]) {
+    const config = JSON.parse(fileText(opencode, gw, '/d', { major }));
+    const entries = (config.providers ?? config.provider)['t3gw-my-proxy'].models;
+    for (const slug of ['context-only', 'invalid-output']) {
+      assert.equal(entries[slug].limit.context, 1048576);
+      assert.equal(entries[slug].limit.output, major === 1 ? 0 : undefined);
+    }
+    assert.equal(entries.unknown.limit, undefined);
+  }
+});
+
 test('Codex preserves installed model instructions and tools and prevents prefix leaks into unknown routes', () => {
   const gw = gateway({ models: { ids: ['gpt-6-astra', 'foreign', 'foreign-unknown', 'namespace/foreign-unknown', 'unknown'], capabilities: {
     'gpt-6-astra': { limits: { context: 500000 }, base_instructions: 'Untrusted gateway prompt' },

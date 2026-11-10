@@ -148,6 +148,11 @@ conservative effective window. A model without advertised limits keeps the
 agent's operational fallback. One model's larger limit is never used as the
 gateway-wide default.
 
+OpenCode 1 requires an output field beside a context limit. When the gateway
+omits output or supplies an impossible value, Setup uses OpenCode's native `0`
+sentinel, preserving its normal output reserve. OpenCode 2 accepts an omitted
+output field.
+
 Claude's support requires an explicit `gatewayModelLimits: true` runtime
 advertisement. Older runtimes keep their native behavior. A model switch that
 changes process-scoped limits uses T3's existing close/resume path; running
@@ -185,13 +190,13 @@ Health checks do not restart agents or silently raise a running model's window.
 Withdrawing limits removes the corresponding generated overrides on Apply.
 
 Native fixture checks passed with Claude Code 2.1.321, Codex 0.167.0, OpenCode
-2.2.6, and Pi 1.5.0. Claude continued past simulated 220,000-token usage and
+1.19.5 and 2.2.6, and Pi 1.5.0. Claude continued past simulated 220,000-token usage and
 compacted near the configured million-token boundary. Codex reported 996,147
 usable tokens for a 1,048,576-token model and 121,600 after switching to 128,000,
 and performed local compaction. These checks simulate usage against a local
 fixture. They do not establish an upstream route's million-token acceptance,
-token-count accuracy, or long-context quality. OpenCode 1's config spelling has
-source coverage; Grok's limit handling has no native verification here.
+token-count accuracy, or long-context quality. Grok's limit handling has no
+native verification here.
 
 References: [Claude model configuration](https://code.claude.com/docs/en/model-config),
 [official OpenAI documentation for Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference),

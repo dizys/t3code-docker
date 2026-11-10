@@ -307,7 +307,11 @@ const smokes = {
     await withNativeProcess({ executable, home: work, env, timeoutMs: 30_000 }, legacy ? ["serve", ...port] : ["serve", "--stdio", ...port], async ({ nextLine, signal }) => {
       const line = await nextLine(), url = new URL(legacy ? /https?:\/\/\S+/.exec(line)[0] : JSON.parse(line).url), location = `directory=${encodeURIComponent(work)}`;
       const headers = { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` };
-      const read = async route => (await fetch(new URL(`${route}?${location}`, url), { headers, signal })).json();
+      const read = async route => {
+        const response = await fetch(new URL(`${route}?${location}`, url), { headers, signal }), body = await response.json();
+        assert.equal(response.ok, true, `${route} (${response.status}): ${JSON.stringify(body)}`);
+        return body;
+      };
       const providers = legacy ? (await read('/config/providers')).providers : (await read('/api/provider')).data ?? [];
       const nativeModels = legacy ? Object.entries(providers[0].models).map(([id, model]) => ({ ...model, id })) : (await read('/api/model')).data ?? [];
       const catalog = [{ id: providers[0]?.id, models: nativeModels.map(model => model.id) }];
@@ -316,6 +320,7 @@ const smokes = {
       assert.equal(nativeModels.find(model => model.id === 'smoke-model').limit.context, 1048576);
       assert.equal(nativeModels.find(model => model.id === 'smoke-model').limit.output, 65536);
       assert.equal(nativeModels.find(model => model.id === 'gemini-smoke').limit.context, 1048576, 'a context-only limit is valid native config');
+      if (legacy) assert.equal(nativeModels.find(model => model.id === 'gemini-smoke').limit.output, 0, 'v1 keeps its native unknown-output sentinel');
     });
   },
 };

@@ -56,8 +56,11 @@ const openCodeConfig = (gateway, models, files, { major = 1 } = {}) => {
   const id = providerId(gateway).replaceAll('_', '-'), name = gateway.name.replace(/[{}]/g, '');
   const entries = Object.fromEntries(models.map(model => {
     const limits = limitsFor(gateway, model);
+    // v1 requires output beside context. Zero is its native unknown-output
+    // sentinel and preserves its normal output reserve when discovery omits it.
+    const output = limits?.output ?? (major < 2 ? 0 : undefined);
     return [model, { ...openCodeEntry(major, model, cleanReasoning(gateway.models?.capabilities?.[model])),
-      ...(limits ? { limit: { context: limits.context, ...(limits.input ? { input: limits.input } : {}), ...(limits.output ? { output: limits.output } : {}) } } : {}) }];
+      ...(limits ? { limit: { context: limits.context, ...(limits.input ? { input: limits.input } : {}), ...(output !== undefined ? { output } : {}) } } : {}) }];
   }));
   // Braces would be expanded by OpenCode: see models.mjs.
   return JSON.stringify({

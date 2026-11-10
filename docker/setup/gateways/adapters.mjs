@@ -20,12 +20,14 @@
 // so it is never written without a reason.
 import path from 'node:path';
 import { AGENTS, GATEWAY_INSTANCE_ENV, GATEWAY_KEY_ENV, NO_KEY } from './catalog.mjs';
-import { canChat, cleanModelIds, cleanReasoning, newestIn } from './models.mjs';
+import { canChat, cleanModelIds, cleanModelLimits, cleanReasoning, newestIn } from './models.mjs';
 import { stringify as toml } from '../vendor/toml-patch.mjs';
+import { codexTemplate, nativeCodexModel } from './codex.mjs';
 
 const plain = (name, value) => ({ name, value, sensitive: false });
 const secret = name => ({ name, value: '', sensitive: true, secret: true });
 const unique = values => [...new Set(values)];
+const limitsFor = (gateway, model) => cleanModelLimits(gateway.models?.capabilities?.[model]?.limits);
 /** Provider ids live in TOML keys and model slugs. */
 const providerId = gateway => 't3gw_' + gateway.id.replaceAll('-', '_');
 
@@ -52,7 +54,14 @@ const openCodeEntry = (major, model, reasoning) => {
 // only, and the default is v1, still the catalogue's default install.
 const openCodeConfig = (gateway, models, files, { major = 1 } = {}) => {
   const id = providerId(gateway).replaceAll('_', '-'), name = gateway.name.replace(/[{}]/g, '');
-  const entries = Object.fromEntries(models.map(model => [model, openCodeEntry(major, model, cleanReasoning(gateway.models?.capabilities?.[model]))]));
+  const entries = Object.fromEntries(models.map(model => {
+    const limits = limitsFor(gateway, model);
+    // v1 requires output beside context. Zero is its native unknown-output
+    // sentinel and preserves its normal output reserve when discovery omits it.
+    const output = limits?.output ?? (major < 2 ? 0 : undefined);
+    return [model, { ...openCodeEntry(major, model, cleanReasoning(gateway.models?.capabilities?.[model])),
+      ...(limits ? { limit: { context: limits.context, ...(limits.input ? { input: limits.input } : {}), ...(output !== undefined ? { output } : {}) } } : {}) }];
+  }));
   // Braces would be expanded by OpenCode: see models.mjs.
   return JSON.stringify({
     ...(major >= 2
@@ -84,16 +93,59 @@ const piConfig = (gateway, models) => {
       const effort = level === 'off' ? 'none' : level;
       return [level, efforts.includes(effort) ? effort : null];
     }));
+    const limits = limitsFor(gateway, id), contextWindow = limits?.input ?? limits?.context ?? 128000;
     return { id, name: id, reasoning: Object.values(thinkingLevelMap).some(Boolean), thinkingLevelMap,
       input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       // Operational fallback limits, not discovered capability claims. Pi needs
       // these to register any custom model. No name-based reasoning defaults.
-      contextWindow: 128000, maxTokens: 8192,
+      contextWindow, maxTokens: limits?.output ?? Math.max(1, Math.min(8192, Math.floor(contextWindow / 4))),
       compat: { supportsStore: false, supportsDeveloperRole: false } };
   }) };
   // A launch-only extension leaves Pi's agent directory and mutable state alone.
   // Gateway data is a JSON literal, never executable source supplied by a server.
   return `export default function (pi) {\n  pi.registerProvider(${JSON.stringify(providerId(gateway))}, { ...${JSON.stringify(config, null, 2)}, apiKey: "$${GATEWAY_KEY_ENV}" });\n}\n`;
+};
+
+// Codex does not fetch /models for a custom provider. A startup catalog supplies
+// per-model windows, including after a model switch, without a global override.
+// Keep native metadata for known models. Foreign models use the installed
+// default's coding prompt and tool settings, with no invented reasoning levels.
+// Gateway prompts and tool declarations never enter the catalog.
+const hasCodexCatalog = (gateway, models) => models.some(model => limitsFor(gateway, model));
+const codexCatalog = (gateway, models, files, { nativeModels } = {}) => {
+  if (!hasCodexCatalog(gateway, models)) return null;
+  const template = codexTemplate(nativeModels);
+  const overrides = models.flatMap(slug => {
+    const limits = limitsFor(gateway, slug);
+    if (!limits) return [];
+    const native = nativeCodexModel(nativeModels, slug);
+    const base = native ?? {
+      slug, display_name: slug, description: 'Gateway model', priority: 99,
+      supported_reasoning_levels: [], shell_type: template.shell_type,
+      visibility: 'list', supported_in_api: true, support_verbosity: false,
+      truncation_policy: template.truncation_policy, experimental_supported_tools: template.experimental_supported_tools,
+      base_instructions: template.base_instructions, model_messages: template.model_messages,
+    };
+    return [{ ...base, slug, context_window: limits.input ?? limits.context, max_context_window: limits.input ?? limits.context,
+      // Drop an unrelated native threshold. An absent route threshold lets
+      // Codex derive its usual headroom from the discovered window.
+      auto_compact_token_limit: limits.autoCompact ?? null }];
+  });
+  // Codex resolves metadata by prefix. An unknown sibling must not accidentally
+  // inherit another route's newly enlarged window. Use its normal synthetic
+  // 272K fallback in this case, with the same installed coding template.
+  for (const slug of models) if (!limitsFor(gateway, slug) && nativeCodexModel(overrides, slug)) {
+    const native = nativeCodexModel(nativeModels, slug);
+    overrides.push(native ? { ...native, slug } : {
+      slug, display_name: slug, priority: 99, supported_reasoning_levels: [],
+      shell_type: template.shell_type, visibility: 'list', supported_in_api: true, support_verbosity: false,
+      truncation_policy: template.truncation_policy, experimental_supported_tools: template.experimental_supported_tools,
+      base_instructions: template.base_instructions, model_messages: template.model_messages,
+      context_window: 272000, max_context_window: 272000,
+    });
+  }
+  const replaced = new Set(overrides.map(row => row.slug));
+  return JSON.stringify({ models: [...nativeModels.filter(row => !replaced.has(row.slug)), ...overrides] }, null, 2);
 };
 
 const grokConfig = (gateway, models, files, { baseConfig = {} } = {}) => toml({
@@ -121,11 +173,15 @@ const SPECS = Object.freeze({
   claude: Object.freeze({
     configKeys: ['binaryPath', 'homePath', 'customModels'],
     compatible: id => /claude/i.test(id),
-    environment: (gateway, models) => [
+    environment: (gateway, models, files, instances, options) => [
       plain('ANTHROPIC_BASE_URL', gateway.url),
       secret('ANTHROPIC_AUTH_TOKEN'),
       // Explicitly empty, so a key in the container's environment can't win.
       plain('ANTHROPIC_API_KEY', ''),
+      plain('T3_GATEWAY_MODEL_LIMITS', options.gatewayModelLimits ? JSON.stringify(Object.fromEntries(models.flatMap(model => {
+        const limits = limitsFor(gateway, model);
+        return limits ? [[model, limits]] : [];
+      }))) : ''),
       // Subagents and background work ask for aliases, not exact ids. Point each
       // at what this gateway serves, or they fail on a model it doesn't have.
       ...Object.entries(CLAUDE_ALIASES).flatMap(([family, name]) => {
@@ -150,6 +206,7 @@ const SPECS = Object.freeze({
       const id = providerId(gateway), key = name => `model_providers.${id}.${name}`;
       // Single-quoted for T3's tokenizer, double-quoted inside so Codex reads TOML strings.
       const overrides = [['model_provider', id], [key('name'), gateway.id], [key('base_url'), `${gateway.url}/v1`], [key('env_key'), GATEWAY_KEY_ENV], [key('wire_api'), 'responses']];
+      if (hasCodexCatalog(gateway, models)) overrides.push(['model_catalog_json', files.config]);
       // Codex needs the key; the shells it opens don't. Without this it also lands
       // in ~/.codex/shell_snapshots, on disk, where rotating it can't reach.
       const keepFromShells = `-c 'shell_environment_policy.exclude=["${GATEWAY_KEY_ENV}"]'`;
@@ -161,6 +218,7 @@ const SPECS = Object.freeze({
         customModels: t3Models('codex', gateway, models, capabilities),
       };
     },
+    file: codexCatalog,
   }),
   opencode: Object.freeze({
     configKeys: ['binaryPath'],
@@ -202,7 +260,8 @@ export const instanceIdFor = (gatewayId, agent) => `${agent.driver}_gw_${gateway
 /** Where an agent's files live, for an agent that takes settings from files. */
 export const filesFor = (agent, gateway, dir) => agent.id === 'pi' ? { config: path.join(dir, `${gateway.id}.pi.mjs`) }
   : agent.id === 'grok' ? { config: path.join(dir, `${gateway.id}.grok`, 'config.toml') }
-    : SPECS[agent.id].file ? { config: path.join(dir, `${gateway.id}.json`), key: path.join(dir, `${gateway.id}.key`) } : null;
+    : agent.id === 'codex' ? { config: path.join(dir, `${gateway.id}.codex-models.json`) }
+      : SPECS[agent.id].file ? { config: path.join(dir, `${gateway.id}.json`), key: path.join(dir, `${gateway.id}.key`) } : null;
 
 /** The text of an agent's config file, or null if it has none. Options carry the installed major for an agent whose file spelling changed between majors. */
 export const fileText = (agent, gateway, dir, options) => {
@@ -230,14 +289,14 @@ export function inheritedFrom(agent, instances) {
 const defined = value => Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
 
 /** The instance a gateway asks for. Secret rows are placeholders until `mergeInstance`. */
-export function desiredInstance(agent, gateway, { instances = {}, enabled = true, dir = '', customModelCapabilityOverrides = false } = {}) {
+export function desiredInstance(agent, gateway, { instances = {}, enabled = true, dir = '', customModelCapabilityOverrides = false, gatewayModelLimits = false } = {}) {
   const spec = SPECS[agent.id], models = modelsFor(agent, gateway);
   return {
     driver: agent.driver,
     displayName: `${agent.short} · ${gateway.name}`,
     accentColor: gateway.accent,
     enabled,
-    environment: [...spec.environment(gateway, models, filesFor(agent, gateway, dir), instances), plain(GATEWAY_INSTANCE_ENV, instanceIdFor(gateway.id, agent))],
+    environment: [...spec.environment(gateway, models, filesFor(agent, gateway, dir), instances, { gatewayModelLimits: gatewayModelLimits === true }), plain(GATEWAY_INSTANCE_ENV, instanceIdFor(gateway.id, agent))],
     config: defined(spec.config(gateway, models, inheritedFrom(agent, instances), filesFor(agent, gateway, dir), customModelCapabilityOverrides === true)),
   };
 }

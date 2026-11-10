@@ -12,18 +12,19 @@ import { createGatewayT3 } from '../docker/setup/gateways/t3.mjs';
 import { parse as parseToml } from '../docker/setup/vendor/toml-patch.mjs';
 import { createMcpService } from '../docker/setup/mcp.mjs';
 import { createSkillsService } from '../docker/setup/skills.mjs';
+import { nativeModels } from './fixtures/codex-models.mjs';
 
 const REDACTED = { redacted: true };
 const redacted = instance => ({ ...instance, environment: instance.environment?.map(row => row.sensitive ? { ...row, value: '', valueRedacted: true } : row) });
 
-function fakeT3({ instances = {}, models = {}, customModelCapabilityOverrides = false } = {}) {
+function fakeT3({ instances = {}, models = {}, customModelCapabilityOverrides = false, gatewayModelLimits = false } = {}) {
   const state = { instances: { claudeAgent: { driver: 'claudeAgent', config: { binaryPath: '/launchers/claude' } }, codex: { driver: 'codex', config: { binaryPath: '/launchers/codex' } }, opencode: { driver: 'opencode', config: { binaryPath: '/launchers/opencode', serverPassword: 'must-not-copy' } }, ...instances }, preferences: {} };
   // As on a real server, an instance is only checked again when it's written.
   const checked = new Map();
-  const t3 = { state, customModelCapabilityOverrides, writes: [], refreshed: [], secrets: new Map(), hidden: [], down: false, failFor: null, status: 'ready', hubs: {}, hubWrites: [], reports: [], reportReads: 0, hubFails: false, hubStreamFails: false,
+  const t3 = { state, customModelCapabilityOverrides, gatewayModelLimits, writes: [], refreshed: [], secrets: new Map(), hidden: [], down: false, failFor: null, status: 'ready', hubs: {}, hubWrites: [], reports: [], reportReads: 0, hubFails: false, hubStreamFails: false,
     read: async () => {
       if (t3.down) throw new Error('T3 Code is not answering');
-      return { customModelCapabilityOverrides: t3.customModelCapabilityOverrides, hubs: true, hubSources: Object.fromEntries(Object.entries(t3.hubs).map(([id, source]) => [id, { ...source, managementKey: REDACTED }])), instances: Object.fromEntries(Object.entries(state.instances).map(([id, instance]) => [id, redacted(instance)])), preferences: state.preferences,
+      return { customModelCapabilityOverrides: t3.customModelCapabilityOverrides, gatewayModelLimits: t3.gatewayModelLimits, hubs: true, hubSources: Object.fromEntries(Object.entries(t3.hubs).map(([id, source]) => [id, { ...source, managementKey: REDACTED }])), instances: Object.fromEntries(Object.entries(state.instances).map(([id, instance]) => [id, redacted(instance)])), preferences: state.preferences,
         providers: Object.entries(state.instances).filter(([id]) => id.includes('_gw_')).map(([instanceId, instance]) => ({ instanceId, status: t3.status, installed: true, checkedAt: checked.get(instanceId), models: (models[instance.driver] ?? []).map(slug => ({ slug })) })) };
     },
     refresh: async id => { t3.refreshed.push(id); },
@@ -87,7 +88,7 @@ async function harness(t, options = {}) {
   const home = path.join(root, 'home'), t3 = fakeT3(options), vault = fakeVault();
   await fs.mkdir(path.join(home, '.claude'), { recursive: true });
   const stopped = [], processes = { stop: async (agent, instanceId) => { stopped.push(instanceId); return 1; } };
-  const service = createGatewayService({ baseDir: path.join(root, 'state'), home, env: {}, io: options.io ?? fs, t3, vault, processes, wait: options.wait ?? (() => Promise.resolve()), ...(options.now ? { now: options.now } : {}), ...(options.getHarness ? { getHarness: options.getHarness } : {}) });
+  const service = createGatewayService({ baseDir: path.join(root, 'state'), home, env: {}, io: options.io ?? fs, t3, vault, processes, nativeCodexModels: options.nativeCodexModels ?? (async () => nativeModels), wait: options.wait ?? (() => Promise.resolve()), ...(options.now ? { now: options.now } : {}), ...(options.getHarness ? { getHarness: options.getHarness } : {}) });
   return { service, t3, vault, home, root, stopped, processes, gateway: await gatewayServer(t, options.gatewayModels) };
 }
 const add = (h, agents = ['claude', 'codex', 'opencode'], over = {}) => h.service.create({ gateway: { name: 'My Proxy', preset: 'cliproxyapi', url: h.gateway.url, agents, ...over }, key: 'sk-one' });
@@ -565,6 +566,72 @@ test('advertised reasoning facts are kept on create and in the view', async t =>
   assert.deepEqual(stored.gateways[0].models.capabilities, { 'gpt-6-astra': { supported: true, effort: ['low', 'high'] } });
 });
 
+test('context-only catalog changes wait for apply, rewrite scoped files, and keep direct instances intact', async t => {
+  const h = await harness(t, { gatewayModelLimits: true });
+  h.gateway.state.catalog = [{ slug: 'gpt-6-astra', context_window: 500000, max_context_window: 1000000, max_tokens: 128000 }];
+  const direct = structuredClone(h.t3.state.instances);
+  const { id } = await add(h);
+  await settled(h);
+  const file = path.join(h.root, 'state/setup/gateways/agents', `${id}.codex-models.json`);
+  assert.equal(JSON.parse(await fs.readFile(file, 'utf8')).models[0].context_window, 500000);
+  assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+  const env = () => JSON.parse(h.t3.state.instances[`claudeAgent_gw_${id}`].environment.find(row => row.name === 'T3_GATEWAY_MODEL_LIMITS').value);
+  // Claude's default scope excludes GPT models, so the map contains no phantom route.
+  assert.deepEqual(env(), {});
+  let view = await h.service.status();
+  await h.service.setAgent({ id, agent: 'claude', connected: true, scope: 'all', revision: view.revision });
+  await settled(h);
+  assert.equal(env()['gpt-6-astra'].context, 500000);
+  h.t3.writes.length = 0; h.stopped.length = 0;
+  view = await h.service.status();
+  h.gateway.state.catalog[0].context_window = 872000;
+  await h.service.test({ id });
+  const pending = await h.service.status();
+  assert.equal(pending.revision, view.revision);
+  assert.equal(pending.gateways[0].latestCapabilities['gpt-6-astra'].limits.context, 872000);
+  assert.deepEqual(h.t3.writes, []);
+  assert.equal(JSON.parse(await fs.readFile(file, 'utf8')).models[0].context_window, 500000);
+  await h.service.refreshModels({ id, revision: view.revision });
+  await settled(h);
+  assert.equal(env()['gpt-6-astra'].context, 872000);
+  assert.equal(JSON.parse(await fs.readFile(file, 'utf8')).models[0].context_window, 872000);
+  assert.ok(h.stopped.includes(`codex_gw_${id}`));
+  assert.ok(h.stopped.includes(`claudeAgent_gw_${id}`));
+  for (const driver of ['claudeAgent', 'codex', 'opencode']) assert.deepEqual(h.t3.state.instances[driver], direct[driver]);
+  h.stopped.length = 0; h.t3.writes.length = 0;
+  view = await h.service.status();
+  await h.service.reapply({ id, revision: view.revision });
+  assert.deepEqual(h.stopped, []);
+  assert.deepEqual(h.t3.writes, []);
+  h.gateway.state.catalog = [];
+  view = await h.service.status();
+  await h.service.refreshModels({ id, revision: view.revision });
+  await settled(h);
+  assert.equal(await fs.stat(file).catch(() => null), null, 'withdrawn limits remove the local catalog');
+  assert.doesNotMatch(h.t3.state.instances[`codex_gw_${id}`].config.launchArgs, /model_catalog_json/);
+});
+
+test('a failed native Codex catalog export keeps its working file and process intact', async t => {
+  let broken = false;
+  const h = await harness(t, { nativeCodexModels: async () => {
+    if (broken) throw new Error('Update Codex before applying gateway context limits.');
+    return nativeModels;
+  } });
+  h.gateway.state.catalog = [{ slug: 'gpt-6-astra', context_window: 500000 }];
+  const { id } = await add(h, ['codex']);
+  await settled(h);
+  const file = path.join(h.root, 'state/setup/gateways/agents', `${id}.codex-models.json`);
+  const before = await fs.readFile(file, 'utf8');
+  h.stopped.length = 0; h.t3.writes.length = 0;
+  broken = true;
+  h.gateway.state.catalog[0].context_window = 872000;
+  const result = await h.service.refreshModels({ id, revision: (await h.service.status()).revision });
+  assert.equal(result.results.find(row => row.agent === 'codex').ok, false);
+  assert.equal(await fs.readFile(file, 'utf8'), before);
+  assert.deepEqual(h.stopped, []);
+  assert.deepEqual(h.t3.writes, []);
+});
+
 test('a capability-only change is pending without bumping the revision', async t => {
   const h = await harness(t), { id } = await add(h, ['opencode']);
   await settled();
@@ -635,8 +702,9 @@ test('runtime upgrades and downgrades change desired entry shape consistently in
 
 test('the bridge requires an explicit boolean capability advertisement', async () => {
   for (const flag of [undefined, false, 'true', 1, true]) {
-    const t3 = createGatewayT3({ call: async () => ({ settings: { providerInstances: {} }, customModelCapabilityOverrides: flag }) });
+    const t3 = createGatewayT3({ call: async () => ({ settings: { providerInstances: {} }, customModelCapabilityOverrides: flag, gatewayModelLimits: flag }) });
     assert.equal((await t3.read()).customModelCapabilityOverrides, flag === true);
+    assert.equal((await t3.read()).gatewayModelLimits, flag === true);
   }
 });
 

@@ -7,7 +7,7 @@
 // words are never shown, because an error body can echo the key.
 import { PROTOCOLS } from './catalog.mjs';
 import { parseAddress, withHost } from './address.mjs';
-import { parseModelCapabilities, parseModelList } from './models.mjs';
+import { cleanModelLimits, cleanReasoning, parseModelCapabilities, parseModelList } from './models.mjs';
 
 const DOCKER_HOST = 'host.docker.internal';
 const MAX_LIST_BYTES = 8 * 1024 * 1024;
@@ -160,7 +160,14 @@ export async function probeGateway({ url: input, key = '', fetchImpl = globalThi
       if (Array.isArray(body?.models)) {
         const ids = parseModelList(body), capabilities = parseModelCapabilities(body) ?? {};
         if (!models.listed) { models.ids = ids; models.listed = true; }
-        for (const id of models.ids) if (!Object.hasOwn(models.capabilities, id) && Object.hasOwn(capabilities, id)) models.capabilities[id] = capabilities[id];
+        for (const id of models.ids) if (Object.hasOwn(capabilities, id)) {
+          // The ordinary list can describe reasoning without any token limits.
+          // Fill missing facts independently, keeping its explicit facts first.
+          const ordinary = models.capabilities[id], catalog = capabilities[id];
+          const reasoning = cleanReasoning(ordinary) ?? cleanReasoning(catalog);
+          const limits = cleanModelLimits({ ...catalog.limits, ...ordinary?.limits });
+          models.capabilities[id] = { ...reasoning, ...(limits ? { limits } : {}) };
+        }
       }
     } catch { /* The optional catalog must not break an otherwise working gateway. */ }
   }

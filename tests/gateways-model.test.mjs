@@ -52,6 +52,12 @@ test('a capability-only change is reported as changed, not added or removed', ()
   assert.deepEqual(plain(S.newModels(gateway(over))), { added: [], removed: [], changed: ['a'] });
 });
 
+test('context-only changes are pending even when the model IDs and reasoning stay the same', () => {
+  const over = { models: { ids: ['a'], capabilities: { a: { limits: { context: 200000 } } } },
+    latest: ['a'], latestCapabilities: { a: { limits: { context: 1048576 } } } };
+  assert.deepEqual(plain(S.newModels(gateway(over))), { added: [], removed: [], changed: ['a'] });
+});
+
 test('a test’s lines read in order, and only say what’s known', () => {
   const lines = S.checkLines({ ok: true, ms: 34, models: { listed: true, ids: ['a'] }, protocols: { messages: 'available', responses: 'missing', chat: 'unknown' } }, { keyed: true });
   assert.deepEqual(plain(lines.map(line => [line.tone, line.text])), [['ok', 'Reached in 34 ms'], ['ok', 'Key accepted'], ['ok', '1 model available'], ['ok', 'Anthropic Messages'], ['muted', 'No OpenAI Responses'], ['warn', 'Couldn’t confirm OpenAI Chat Completions']]);

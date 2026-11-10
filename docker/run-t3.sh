@@ -9,8 +9,8 @@
 # setup page should be able to apply them without a shell or a host panel. So
 # this stays in the middle:
 #
-#   - the setup page asks for a restart by creating $T3_RUN_DIR/restart and
-#     sending T3 Code SIGTERM (its pid is in $T3_RUN_DIR/t3.pid); T3 Code
+#   - the setup page asks the runtime supervisor for a restart by creating
+#     $T3_RUN_DIR/restart; the supervisor sends its child SIGTERM. T3 Code
 #     shuts down as it would for `docker stop`, and starts again here;
 #   - T3 Code exiting for any other reason ends this script with its status,
 #     and so the container, as before: a crash is seen, and the container's

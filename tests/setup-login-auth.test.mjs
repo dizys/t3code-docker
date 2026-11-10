@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
+import { processIdentity, supervisorRecord } from '../docker/runtime/supervision.mjs';
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Exercises every step that used to break: @ and # need decoding, = needs
@@ -27,7 +28,8 @@ test('punctuated key round-trips, throttle resets on any accepted key, hostile p
     ...process.env, HOME: home, T3CODE_HOME: path.join(home, '.t3'), CLAUDE_CONFIG_DIR: path.join(home, '.claude'), T3_WORKSPACE: root,
     MISE_DATA_DIR: path.join(root, 'mise-data'), MISE_STATE_DIR: path.join(root, 'mise-state'), MISE_CONFIG_DIR: path.join(root, 'mise-config'),
     T3_HARNESS_MODULE: fileURLToPath(new URL('../docker/harness/index.mjs', import.meta.url)),
-    T3_SETUP_KEY: KEY, T3_SETUP_KEY_SOURCE: 'env', T3_SETUP_PORT: String(port), T3CODE_PORT: '1', T3_INFRA_LAUNCHER: '/bin/false',
+    T3_SETUP_KEY: `  ${KEY} \n`, T3_SETUP_KEY_SOURCE: 'env', T3_SETUP_PORT: String(port), T3CODE_PORT: '1', T3_INFRA_LAUNCHER: '/bin/false',
+    T3_RUN_DIR: path.join(root, 'run'), T3_RUNTIME_MODULE: fileURLToPath(new URL('../docker/runtime/manager.mjs', import.meta.url)),
   }, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = ''; child.stdout.on('data', (x) => { logs += x; }); child.stderr.on('data', (x) => { logs += x; });
   t.after(async () => { if (child.exitCode === null) { const exit = once(child, 'exit'); child.kill(); await exit; } await fs.rm(root, { recursive: true, force: true }); });
@@ -47,6 +49,18 @@ test('punctuated key round-trips, throttle resets on any accepted key, hostile p
   const cookie = setCookie.split(';')[0];
   const signedIn = await (await fetch(`${base}/hello`, { headers: { cookie } })).json();
   assert.equal(signedIn.signedIn, true, 'the cookie just set must authenticate');
+  const stranger = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const strangerExited = once(stranger, 'exit');
+  t.after(async () => { stranger.kill(); await strangerExited; });
+  await once(stranger, 'spawn');
+  const runDir = path.join(root, 'run'); await fs.mkdir(runDir, { recursive: true });
+  await fs.writeFile(path.join(runDir, 't3.pid'), String(stranger.pid));
+  await fs.writeFile(path.join(runDir, 'supervisor.json'), JSON.stringify({ ...supervisorRecord(), pid: child.pid, startTime: processIdentity(child.pid).startTime }));
+  const restart = await fetch(`${base}/t3/restart`, { method: 'POST', headers: { 'x-t3-setup-key': KEY, 'content-type': 'application/json' }, body: '{}' });
+  assert.equal(restart.status, 409, 'a live supervisor record cannot authorize a sibling PID');
+  assert.equal((await restart.json()).code, 'unsupervised');
+  assert.doesNotThrow(() => process.kill(stranger.pid, 0));
+  await assert.rejects(fs.access(path.join(runDir, 'restart')), { code: 'ENOENT' });
   const raw = await (await fetch(`${base}/hello`, { headers: { cookie: `t3setup=${KEY}` } })).json();
   assert.equal(raw.signedIn, false, 'the unencoded key is not the cookie (its ; ends the value)');
 

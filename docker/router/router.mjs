@@ -81,6 +81,9 @@ export const normalizePrefix = (value) => {
   const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   if (!/^(\/[\w\-.~]+)+$/.test(prefixed)) return null;
   if (prefixed.split("/").some((segment) => segment === "." || segment === "..")) return null;
+  // A prefix that swallows the health check or the API hides T3 Code behind
+  // the setup page on the one-port router, and the container never goes green.
+  if (prefixed === "/.well-known" || prefixed.startsWith("/.well-known/") || prefixed === "/api" || prefixed.startsWith("/api/")) return null;
   return prefixed;
 };
 
@@ -532,7 +535,7 @@ const validPort = (port) => Number.isInteger(port) && port >= 1 && port <= 65535
 // Exactly as the entrypoint decides whether to start the setup page at all:
 // "1" or nothing. Anything else routing /__setup to a page that never started
 // would show "restarting" forever.
-const setupStarts = (value) => String(value ?? "1").trim() === "1";
+export const setupStarts = (value) => String(value ?? "1").trim() === "1";
 
 /**
  * The router's configuration from the environment, or an Error whose message

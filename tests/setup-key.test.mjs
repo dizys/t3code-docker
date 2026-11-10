@@ -92,6 +92,15 @@ test("a volume that cannot keep a key still gets one, for this start", (t) => {
     "a configured key works without the file");
 });
 
+test("invalid environment keys never overwrite the kept key", (t) => {
+  const dir = scratch(t);
+  writeKeyFile(dir, "kept-key");
+  for (const key of ["two words", "line\nbreak", "x".repeat(257), "ключ", "\t \n"]) {
+    assert.deepEqual(resolveSetupKey({ env: { T3_SETUP_KEY: key }, stateDir: dir }), { key: "kept-key", source: "volume" });
+    assert.equal(readKeyFile(dir), "kept-key");
+  }
+});
+
 test("the entrypoint's --resolve prints the source and the key, and keeps the key", (t) => {
   const dir = scratch(t);
   const run = (env = {}) => execFileSync(process.execPath, [MODULE, "--resolve"], { env: { PATH: process.env.PATH, T3CODE_HOME: dir, ...env }, encoding: "utf8" });

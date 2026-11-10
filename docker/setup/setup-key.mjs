@@ -73,7 +73,7 @@ export function writeKeyFile(stateDir, key) {
  */
 export function resolveSetupKey({ env = process.env, stateDir } = {}) {
   const configured = String(env.T3_SETUP_KEY ?? "").trim();
-  if (configured) {
+  if (validKey(configured)) {
     try {
       writeKeyFile(stateDir, configured);
     } catch {

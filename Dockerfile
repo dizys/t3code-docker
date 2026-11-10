@@ -327,8 +327,10 @@ EXPOSE 3773 3774 2222
 
 # With one port, asked through it: that is the way in, so a router that is not
 # answering is an unhealthy container even while T3 Code itself is fine.
+# On that one port a dead setup page would otherwise stay green, so check it
+# too (unless setup is disabled entirely).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-    CMD curl -fsS --max-time 4 "http://127.0.0.1:${T3_SINGLE_PORT:-${T3CODE_PORT}}/.well-known/t3/environment" >/dev/null || exit 1
+    CMD ["/usr/local/bin/node", "/opt/t3-router/healthcheck.mjs"]
 
 # Stamped last so a version change reuses every layer above it. IMAGE_VERSION is
 # the release tag in CI and "dev" for a local build; the setup page shows both so
@@ -355,7 +357,7 @@ FROM core AS browser
 # Browser automation over MCP. T3 Code's own preview tools are hosted by the
 # web/desktop client, so a phone-only setup has no eyes without this.
 ARG CHROME_DEVTOOLS_MCP_VERSION=1.12.0
-ARG PLAYWRIGHT_MCP_VERSION=0.0.84
+ARG PLAYWRIGHT_MCP_VERSION=0.0.85
 USER root
 
 RUN set -eux; \

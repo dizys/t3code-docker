@@ -2,10 +2,11 @@
 // prepared over T3's launcher protocol before it may accept commands.
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { promises as fs } from "node:fs";
+import { promises as fs, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { refreshSetupBridge } from "./client-shell.mjs";
+import { supervisorRecord } from "./supervision.mjs";
 import { CHANNELS, exactVersion, databaseName, validScopes, validPatchRevision, runtimePaths, readJson, writeJson, readSelection, selectedRuntime } from "./state.mjs";
 
 const sqlite = /\.(?:sqlite3?|db)(?:-wal|-shm|-journal)?$/;
@@ -41,9 +42,34 @@ async function syncFile(target) {
   try { await directory.sync(); } finally { await directory.close(); }
 }
 
+async function syncDirectory(dir) {
+  const handle = await fs.open(dir, "r");
+  try { await handle.sync(); } finally { await handle.close(); }
+}
+
+async function recoverSnapshot(paths) {
+  if (!await exists(paths.backup) && await exists(`${paths.backup}.previous`)) {
+    await fs.rename(`${paths.backup}.previous`, paths.backup);
+    await syncDirectory(path.dirname(paths.backup));
+  }
+}
+
+async function removeSnapshots(paths) {
+  for (const file of [paths.backup, `${paths.backup}.previous`, `${paths.backup}.staging`]) {
+    await fs.rm(file, { recursive: true, force: true });
+  }
+  await syncDirectory(path.dirname(paths.backup));
+}
+
 export async function snapshotDatabase(paths, id) {
+  await recoverSnapshot(paths);
   const existing = await readJson(path.join(paths.backup, "complete.json"));
-  if (existing?.id === id) return;
+  if (existing?.id === id) {
+    await syncDirectory(path.dirname(paths.backup));
+    await fs.rm(`${paths.backup}.previous`, { recursive: true, force: true });
+    await syncDirectory(path.dirname(paths.backup));
+    return;
+  }
   const stage = `${paths.backup}.staging`;
   await fs.rm(stage, { recursive: true, force: true });
   await fs.mkdir(stage, { recursive: true, mode: 0o700 });
@@ -53,21 +79,40 @@ export async function snapshotDatabase(paths, id) {
   // the main file and WAL separately can capture different checkpoints.
   const files = (await databaseFiles(userdata)).filter((file) => /\.(?:sqlite3?|db)$/.test(file));
   const { DatabaseSync, backup } = await import("node:sqlite");
+  const directories = new Set([stage]);
   for (const file of files) {
     const target = path.join(stage, "files", file);
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     const source = new DatabaseSync(path.join(userdata, file), { readOnly: true });
     try { await backup(source, target); } finally { source.close(); }
     await syncFile(target);
+    for (let dir = path.dirname(target); dir !== stage; dir = path.dirname(dir)) directories.add(dir);
   }
   await writeJson(path.join(stage, "complete.json"), { id, files });
-  await fs.rm(paths.backup, { recursive: true, force: true });
-  await fs.rename(stage, paths.backup);
-  const directory = await fs.open(paths.root, "r");
-  try { await directory.sync(); } finally { await directory.close(); }
+  for (const dir of [...directories].sort((a, b) => b.length - a.length)) await syncDirectory(dir);
+  // Keep the previous backup until the new one is in place: a crash between
+  // rm and rename used to lose both copies.
+  const previous = `${paths.backup}.previous`;
+  // An earlier promotion may have failed its directory sync. Make the
+  // canonical name durable before discarding any older generation.
+  await syncDirectory(path.dirname(paths.backup));
+  await fs.rm(previous, { recursive: true, force: true });
+  try { await fs.rename(paths.backup, previous); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  await syncDirectory(path.dirname(paths.backup));
+  try {
+    await fs.rename(stage, paths.backup);
+  } catch (error) {
+    try { await recoverSnapshot(paths); } catch { /* retain the previous copy and original error */ }
+    throw error;
+  }
+  // The new name must survive a power loss before the old snapshot goes.
+  await syncDirectory(path.dirname(paths.backup));
+  await fs.rm(previous, { recursive: true, force: true });
+  await syncDirectory(path.dirname(paths.backup));
 }
 
 export async function restoreDatabase(paths, id) {
+  await recoverSnapshot(paths);
   const backup = await readJson(path.join(paths.backup, "complete.json"));
   if (backup?.id !== id || !Array.isArray(backup.files) || backup.files.some((file) => typeof file !== "string" || path.isAbsolute(file) || file.split(path.sep).includes("..") || !sqlite.test(file))) {
     throw new Error("The upgrade's database snapshot is incomplete. Refusing to start against partially restored data.");
@@ -254,7 +299,7 @@ export async function recoverUpdate(paths) {
     await writeJson(paths.operation, { ...request, previous: undefined, phase: "interrupted", error: "An interrupted upgrade was recovered. The previous T3 Code version and data were kept.", finishedAt: Date.now() });
   }
   await fs.rm(paths.request, { force: true });
-  await fs.rm(paths.backup, { recursive: true, force: true });
+  await removeSnapshots(paths);
 }
 
 export async function runSupervisor(args, { env = process.env, preparedTimeoutMs = 120_000, authenticationTimeoutMs = 120_000 } = {}) {
@@ -265,12 +310,22 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
   await fs.rm(restartFile, { force: true });
   await fs.rm(path.join(paths.run, "hold"), { force: true });
   await recoverUpdate(paths);
-  await writeJson(path.join(paths.run, "supervisor.json"), { pid: process.pid, protocol: 3 });
+  await writeJson(path.join(paths.run, "supervisor.json"), supervisorRecord());
   let child = null;
   let launching = null;
   let stopping = false;
   const stop = () => { stopping = true; (child || launching)?.process.kill("SIGTERM"); };
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, stop);
+  // Setup only writes a request. The parent that owns the ChildProcess
+  // handle sends SIGTERM, so a stale PID file can never signal a stranger.
+  const restartTimer = setInterval(() => {
+    const target = child || launching;
+    if (!stopping && !target?.restartRequested && existsSync(restartFile) && target?.process.exitCode === null && target.process.signalCode === null) {
+      target.restartRequested = true;
+      target.process.kill("SIGTERM");
+    }
+  }, 250);
+  restartTimer.unref();
 
   const launch = async (runtime, update = null) => {
     if (stopping) throw new Error("The container is stopping.");
@@ -362,7 +417,7 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
       await writeJson(paths.selection, { schema: 1, channel: request.channel, version: request.version, ...(request.patchRevision ? { patchRevision: request.patchRevision } : {}), updateId: request.id });
       committed = true;
       await new Promise((resolve, reject) => child.process.send({ type: "committed", updateId: request.id }, (error) => error ? reject(error) : resolve()));
-      await fs.rm(paths.backup, { recursive: true, force: true });
+      await removeSnapshots(paths);
       await pruneRuntimes(paths, request).catch((error) => console.error(`[t3code] could not trim cached releases: ${error.message}`));
       await writeJson(paths.operation, { ...request, previous: undefined, phase: "succeeded", finishedAt: Date.now() });
       // Keep the request as the cross-process mutex until every cleanup and
@@ -376,7 +431,7 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
       child = null;
       if (snapshot) { await phase("restoring"); await restoreDatabase(paths, request.id); }
       await fs.rm(paths.request, { force: true });
-      await fs.rm(paths.backup, { recursive: true, force: true });
+      await removeSnapshots(paths);
       await writeJson(paths.operation, { ...request, previous: undefined, phase: "rolled-back", error: `${error.message} The previous version and database were restored.`, finishedAt: Date.now() });
       console.error(`[t3code] upgrade rolled back: ${error.message}`);
     }
@@ -396,6 +451,7 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
     }
     return 143;
   } finally {
+    clearInterval(restartTimer);
     for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.off(signal, stop);
     await terminate(child);
     await fs.rm(pidFile, { force: true });

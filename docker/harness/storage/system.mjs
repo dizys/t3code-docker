@@ -56,7 +56,8 @@ export async function filesystemUsage(target) {
 
 /** One bounded traversal. Descendant sizes come from that same traversal,
  * so category subtraction cannot count a file twice through nested folders. */
-export async function measureStorage(roots, { timeout = 120_000 } = {}) {
+export async function measureStorage(roots, { timeout = 120_000, run = exec } = {}) {
+  const deadline = Date.now() + timeout;
   const targets = [...new Set(roots)];
   const existing = [];
   for (const target of targets) {
@@ -66,14 +67,30 @@ export async function measureStorage(roots, { timeout = 120_000 } = {}) {
   if (!existing.length) return { sizes: {}, partial: false };
   let stdout = "", partial = false;
   try {
-    ({ stdout } = await exec("du", ["-x", "-B1", "--max-depth=5", "--", ...existing], {
+    ({ stdout } = await run("du", ["-x", "-B1", "--max-depth=5", "--", ...existing], {
       timeout, maxBuffer: 8 * 1024 * 1024, encoding: "utf8", env: { ...process.env, LC_ALL: "C" },
     }));
   } catch (error) {
-    // Permission errors still produce useful totals. A timeout or truncated
-    // output has no reliable root totals and must not replace the last scan.
-    if (error.killed || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || !error.stdout) throw new Error("Storage measurement did not finish. Try again later.");
-    stdout = error.stdout; partial = true;
+    // Permission errors still produce useful totals. A timeout has no
+    // reliable root totals and must not replace the last scan. A truncated
+    // (maxBuffer) deep listing falls back to root totals. Node kills du on
+    // overflow too, so distinguish the error code from a genuine timeout.
+    if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error("Storage measurement did not finish. Try again later.");
+      try {
+        ({ stdout } = await run("du", ["-x", "-B1", "-s", "--", ...existing], {
+          timeout: remaining, maxBuffer: 256 * 1024, encoding: "utf8", env: { ...process.env, LC_ALL: "C" },
+        }));
+      } catch (fallback) {
+        if (fallback.killed || fallback.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || !fallback.stdout) throw new Error("Storage measurement did not finish. Try again later.");
+        stdout = fallback.stdout;
+      }
+      partial = true; // Descendant sizes are unavailable, so never authorize cleanup.
+    } else {
+      if (error.killed || !error.stdout) throw new Error("Storage measurement did not finish. Try again later.");
+      stdout = error.stdout; partial = true;
+    }
   }
   const sizes = {};
   for (const line of stdout.split("\n")) {

@@ -327,9 +327,44 @@ async function requestTrial(paths, version, channel = "nightly", database = {}) 
   const request = { id: randomUUID(), version, channel, fromVersion: (await selectedRuntime(paths)).version, phase: "stopping", previous: await readSelection(paths), ...database };
   await writeJson(paths.request, request);
   await fs.writeFile(path.join(paths.run, "restart"), "requested");
-  process.kill(Number(await fs.readFile(path.join(paths.run, "t3.pid"), "utf8")), "SIGTERM");
   return request;
 }
+
+test("the supervisor handles restart requests without signaling a PID read from disk", async (t) => {
+  const { env, paths } = await world(t);
+  await fakeRuntime(paths, "0.0.45", "ready", true);
+  const sup = await supervisor(t, env);
+  const first = await fs.readFile(path.join(paths.run, "t3.pid"), "utf8");
+  // A stale file naming a different live process cannot redirect the signal.
+  await fs.writeFile(path.join(paths.run, "t3.pid"), String(process.pid));
+  await fs.writeFile(path.join(paths.run, "restart"), "requested");
+  await waitFor(async () => {
+    const next = Number((await fs.readFile(path.join(paths.run, "t3.pid"), "utf8")).trim());
+    return Number.isInteger(next) && next > 1 && next !== Number(first) && next !== process.pid;
+  });
+  assert.doesNotThrow(() => process.kill(sup.child.pid, 0));
+});
+
+for (const location of ["home", "state", "explicit"]) test(`the shipping supervision smoke resolves the ${location} run directory`, async (t) => {
+  const { root, env } = await world(t);
+  const home = path.join(root, "user");
+  env.HOME = home;
+  env.T3CODE_HOME = location === "state" ? path.join(root, "separate-state") : path.join(home, ".t3");
+  env.T3_RUN_DIR = location === "explicit" ? path.join(root, "custom-run") : path.join(env.T3CODE_HOME, "run");
+  const paths = runtimePaths(env);
+  await fs.mkdir(path.join(paths.home, "userdata"), { recursive: true });
+  await fakeRuntime(paths, "0.0.45", "ready", true);
+  await supervisor(t, env);
+  const smoke = await fs.readFile(new URL("../scripts/smoke-test.sh", import.meta.url), "utf8");
+  const body = smoke.split("restart_identity_matches_child() {", 2)[1].split("<<'NODE'\n", 2)[1].split("\nNODE\n", 1)[0];
+  // Docker exec sees the container configuration, not variables exported
+  // only by entrypoint.sh. Keep the shipping assertion otherwise verbatim.
+  const probeEnv = { PATH: process.env.PATH, HOME: home };
+  if (location === "state") probeEnv.T3CODE_HOME = env.T3CODE_HOME;
+  if (location === "explicit") probeEnv.T3_RUN_DIR = env.T3_RUN_DIR;
+  const source = body.replaceAll("/opt/t3-runtime/", new URL("../docker/runtime/", import.meta.url).href);
+  await promisify(execFile)(process.execPath, ["--input-type=module", "-e", source], { env: probeEnv, timeout: 5000 });
+});
 
 test("the workspace is the New project default across native release changes", async (t) => {
   const { paths, env, root } = await world(t);
@@ -621,6 +656,86 @@ test("recovery requires the committed integration identity as well as its native
   await recoverUpdate(paths);
   assert.equal((await readJson(paths.operation)).phase, "succeeded");
   assert.equal(await fs.readFile(database, "utf8"), "committed data");
+});
+
+test("failed snapshot promotion keeps the previous backup and can be retried", async (t) => {
+  const { paths } = await world(t);
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "old data");
+  await snapshotDatabase(paths, "old");
+  const rename = fs.rename;
+  const fault = t.mock.method(fs, "rename", async (source, target) => {
+    if (source === `${paths.backup}.staging`) throw Object.assign(new Error("promotion failed"), { code: "EIO" });
+    return rename(source, target);
+  });
+  await assert.rejects(snapshotDatabase(paths, "new"), { code: "EIO" });
+  assert.equal((await readJson(path.join(paths.backup, "complete.json"))).id, "old");
+  fault.mock.restore();
+  await snapshotDatabase(paths, "new");
+  assert.equal((await readJson(path.join(paths.backup, "complete.json"))).id, "new");
+});
+
+test("a crash between backup renames recovers the previous snapshot before another copy or restore", async (t) => {
+  const { paths } = await world(t);
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "original");
+  await snapshotDatabase(paths, "old");
+  await fs.rename(paths.backup, `${paths.backup}.previous`);
+  await fs.writeFile(database, "trial data");
+  await restoreDatabase(paths, "old");
+  assert.equal(await databaseContent(database), "original");
+  await fs.rename(paths.backup, `${paths.backup}.previous`);
+  const mkdir = fs.mkdir;
+  const fault = t.mock.method(fs, "mkdir", async (file, ...args) => {
+    if (file === `${paths.backup}.staging`) throw new Error("copy interrupted");
+    return mkdir(file, ...args);
+  });
+  // Recovery of the canonical snapshot happens before building the next one.
+  await assert.rejects(snapshotDatabase(paths, "new"), /copy interrupted/);
+  assert.equal((await readJson(path.join(paths.backup, "complete.json"))).id, "old");
+  fault.mock.restore();
+});
+
+test("the previous backup survives a failed directory sync after promotion", async (t) => {
+  const { paths } = await world(t);
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "original");
+  await snapshotDatabase(paths, "old");
+  const open = fs.open;
+  const fault = t.mock.method(fs, "open", async (file, ...args) => {
+    const handle = await open(file, ...args);
+    if (file === paths.root && (await readJson(path.join(paths.backup, "complete.json")))?.id === "new") {
+      handle.sync = async () => { throw Object.assign(new Error("directory sync failed"), { code: "EIO" }); };
+    }
+    return handle;
+  });
+  await assert.rejects(snapshotDatabase(paths, "new"), { code: "EIO" });
+  assert.equal((await readJson(path.join(`${paths.backup}.previous`, "complete.json"))).id, "old");
+  fault.mock.restore();
+  // Model the unsynced new directory entry being lost in a power failure.
+  await fs.rm(paths.backup, { recursive: true });
+  await fs.writeFile(database, "trial data");
+  await restoreDatabase(paths, "old");
+  assert.equal(await databaseContent(database), "original");
+});
+
+test("retrying a promoted snapshot syncs its name before removing the previous copy", async (t) => {
+  const { paths } = await world(t);
+  const database = path.join(paths.home, "userdata/statev2.sqlite");
+  await seedDatabase(database, "original");
+  await snapshotDatabase(paths, "new");
+  await fs.cp(paths.backup, `${paths.backup}.previous`, { recursive: true });
+  const open = fs.open;
+  const fault = t.mock.method(fs, "open", async (file, ...args) => {
+    const handle = await open(file, ...args);
+    if (file === paths.root) handle.sync = async () => { throw new Error("sync interrupted"); };
+    return handle;
+  });
+  await assert.rejects(snapshotDatabase(paths, "new"), /sync interrupted/);
+  assert.ok(await fs.stat(`${paths.backup}.previous`));
+  fault.mock.restore();
+  await snapshotDatabase(paths, "new");
+  await assert.rejects(fs.access(`${paths.backup}.previous`), { code: "ENOENT" });
 });
 
 test("a SQLite snapshot includes committed WAL data and needs no disappearing sidecars", async (t) => {

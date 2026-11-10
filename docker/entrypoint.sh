@@ -20,6 +20,20 @@ T3_HOME=/home/t3
 
 : "${PUID:=1000}"
 : "${PGID:=1000}"
+validated_id() {
+  local name="$1" value="$2"
+  case "$value" in ''|*[!0-9]*) log "ERROR: ${name} must be a numeric id"; return 1 ;; esac
+  # Normalize leading zeros before comparison or passing the id to account
+  # tools. uid_t/gid_t reserve 4294967295 for an unset id.
+  value="${value#"${value%%[!0]*}"}"
+  value="${value:-0}"
+  if [ "${#value}" -gt 10 ] || [ "$value" -gt 4294967294 ]; then
+    log "ERROR: ${name} must be between 0 and 4294967294"; return 1
+  fi
+  printf '%s' "$value"
+}
+PUID="$(validated_id PUID "$PUID")"
+PGID="$(validated_id PGID "$PGID")"
 : "${T3CODE_HOME:=${T3_HOME}/.t3}"
 : "${T3CODE_HOST:=0.0.0.0}"
 : "${T3CODE_PORT:=3773}"

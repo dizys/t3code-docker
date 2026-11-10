@@ -161,6 +161,8 @@ done
 [ "$health_status" = healthy ] \
   && ok "docker healthcheck reports healthy" \
   || no "docker healthcheck reports $health_status"
+check "the healthcheck defaults an empty T3 Code port as boot does" \
+  "docker exec -e T3CODE_PORT= $NAME /usr/local/bin/node /opt/t3-router/healthcheck.mjs"
 
 printf '\nHarnesses (variant %s)\n' "$VARIANT"
 check "t3 runs" "docker exec $NAME t3 --version"
@@ -179,6 +181,41 @@ check "no harness executable is baked, only the root-owned dispatcher" only_the_
 check "mise ships" "docker exec $NAME mise --version"
 check "harness installer ships" "docker exec $NAME t3-harness --help"
 check "storage CLI ships" "docker exec $NAME t3-storage --help"
+boot_rejects_invalid_owner_ids() {
+  local output status
+  for setting in PUID=invalid PGID=-1 PUID=4294967295; do
+    status=0
+    output="$(docker run --rm --network none --read-only -e "$setting" "$IMAGE" 2>&1)" || status=$?
+    [ "$status" -eq 1 ] || return 1
+    case "$output" in *"ERROR: ${setting%%=*} must be"*) ;; *) return 1 ;; esac
+  done
+}
+check "boot rejects invalid owner ids before changing accounts or volumes" boot_rejects_invalid_owner_ids
+snapshot_rotation_recovers() {
+  docker exec -i -u t3 "$NAME" /usr/local/bin/node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { snapshotDatabase, restoreDatabase } from '/opt/t3-runtime/supervisor.mjs';
+const root = await fs.mkdtemp(path.join(os.tmpdir(), 't3-backup-smoke-'));
+const paths = { home: path.join(root, 'home'), root: path.join(root, 'runtime'), backup: path.join(root, 'runtime/backup') };
+try {
+  await fs.mkdir(path.join(paths.home, 'userdata'), { recursive: true });
+  const file = path.join(paths.home, 'userdata/statev2.sqlite');
+  const db = new DatabaseSync(file);
+  db.exec("CREATE TABLE content (body TEXT); INSERT INTO content VALUES ('original')"); db.close();
+  await snapshotDatabase(paths, 'fixture');
+  await fs.rename(paths.backup, `${paths.backup}.previous`);
+  await fs.writeFile(file, 'trial data');
+  await restoreDatabase(paths, 'fixture');
+  const restored = new DatabaseSync(file, { readOnly: true });
+  try { assert.equal(restored.prepare('SELECT body FROM content').get().body, 'original'); } finally { restored.close(); }
+} finally { await fs.rm(root, { recursive: true, force: true }); }
+NODE
+}
+check "database recovery keeps an interrupted backup rotation usable" snapshot_rotation_recovers
 check "Vault CLI ships" "docker exec $NAME t3-vault --help"
 check "old credential helpers are gone" "! docker exec $NAME sh -c 'command -v t3-ssh || command -v t3-api'"
 credentials_roundtrip() {
@@ -197,6 +234,25 @@ assert disk["availableBytes"] >= 0
 '
 }
 check "storage CLI reads filesystem space" storage_cli_has_disk
+background_checks_keep_attempts() {
+  docker exec -i -u t3 "$NAME" /usr/local/bin/node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { normalizePolicy, checkT3Updates, readUpdateState, writeUpdateState } from '/opt/t3-setup/auto-update.mjs';
+let saved = '{}', state = {}, calls = 0;
+const fs = { readFile: async () => saved, mkdir: async () => {}, writeFile: async (_file, text) => { saved = text; } };
+const policy = normalizePolicy({ t3: { enabled: true } });
+const persist = async patch => { state = await writeUpdateState(fs, '/fixture', patch); };
+const check = async () => { calls++; return { error: 'offline fixture' }; };
+await checkT3Updates({ policy, state, check, persist });
+await persist({ lastSkillsRunAt: Date.now() });
+state = await readUpdateState(fs, '/fixture');
+await checkT3Updates({ policy, state, check, persist });
+assert.equal(calls, 1);
+assert.equal(state.lastT3CheckAt, null);
+assert.ok(state.lastT3AttemptAt);
+NODE
+}
+check "failed runtime checks keep their retry schedule across state reloads" background_checks_keep_attempts
 storage_cache_paths_protect_tools() {
   docker exec -i -u t3 "$NAME" node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
@@ -1944,6 +2000,12 @@ one_healthy() {
   return 1
 }
 check "the docker healthcheck asks through it and reports healthy" one_healthy
+check "the healthcheck defaults an empty Setup flag as boot does" \
+  "docker exec -e T3_SETUP_ENABLED= ${NAME}-one /usr/local/bin/node /opt/t3-router/healthcheck.mjs"
+check "the healthcheck normalizes the setup prefix as the router does" \
+  "docker exec -e 'T3_SETUP_BASE_PATH= /__setup/ ' ${NAME}-one /usr/local/bin/node /opt/t3-router/healthcheck.mjs"
+check "the router refuses a setup prefix that hides T3's health endpoint" \
+  "docker exec ${NAME}-one /usr/local/bin/node --input-type=module -e \"import { normalizePrefix } from '/opt/t3-router/router.mjs'; process.exit(normalizePrefix('/.well-known/t3') === null ? 0 : 1)\""
 check "the router did not crash-loop" "! output_has 'docker logs ${NAME}-one' 'router exited'"
 
 # The public URL without T3_PUBLIC_URL: the platform's, then one saved on the
@@ -2029,6 +2091,19 @@ one_restarts_t3() {
   [ "$(docker inspect -f '{{.State.StartedAt}}' "${NAME}-one")" = "$started" ]
 }
 check "the setup page restarts T3 Code, and the container keeps running" one_restarts_t3
+restart_identity_matches_child() {
+  docker exec -i -u t3 "${NAME}-one" /usr/local/bin/node --input-type=module >> "$UI_AUDIT_LOG" 2>&1 <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { supervisedChild } from '/opt/t3-runtime/supervision.mjs';
+import { runtimePaths } from '/opt/t3-runtime/state.mjs';
+const { run: runDir } = runtimePaths();
+const pid = Number(readFileSync(`${runDir}/t3.pid`, 'utf8').trim());
+assert.equal(supervisedChild(runDir, pid), true);
+assert.equal(supervisedChild(runDir, process.pid), false);
+NODE
+}
+check "restart supervision recognizes its child and refuses another live process" restart_identity_matches_child
 check "the log says it was asked for" \
   "output_has 'docker logs ${NAME}-one' 'restarting T3 Code, as asked on the setup page'"
 check "status reports T3 Connect off, with its relay client ready" \

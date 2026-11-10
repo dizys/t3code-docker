@@ -224,6 +224,27 @@ test('ordinary explicit reasoning facts win over CLIProxyAPI catalog templates',
   assert.deepEqual((await probeGateway({ url: server.url })).models.capabilities, { 'model-a': { supported: false } });
 });
 
+test('ordinary reasoning and token limits are enriched independently from the optional catalog', async t => {
+  const server = await serve(gateway({
+    '/': (req, res) => json(res, 200, { message: 'CLIProxyAPI' }),
+    '/v1/models': (req, res) => json(res, 200, { data: [
+      { id: 'model-a', reasoning: false },
+      { id: 'model-b', context_length: 128000 },
+    ] }),
+    '/v1/models?client_version=0.144.0': (req, res) => json(res, 200, { models: [
+      { slug: 'model-a', context_window: 1048576, max_tokens: 1048576, supported_reasoning_levels: [{ effort: 'high' }] },
+      { slug: 'model-b', context_window: 1000000, max_tokens: 8192 },
+      { slug: 'phantom', context_window: 1000000 },
+    ] }),
+  })); within(t, server);
+  const { models } = await probeGateway({ url: server.url });
+  assert.deepEqual(models.capabilities, {
+    'model-a': { supported: false, limits: { context: 1048576 } },
+    'model-b': { limits: { context: 128000, output: 8192 } },
+  });
+  assert.deepEqual(models.ids, ['model-a', 'model-b']);
+});
+
 test('other gateways and rejected keys never request the CLIProxyAPI catalog', async t => {
   for (const identified of [false, true]) {
     const server = await serve(gateway({ '/': (req, res) => json(res, 200, identified ? { message: 'CLIProxyAPI' } : {}),

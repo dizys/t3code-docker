@@ -11,7 +11,7 @@
 // image.
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
-import { timingSafeEqual, randomBytes } from "node:crypto";
+import { timingSafeEqual, randomBytes, createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { gzip as gzipCallback } from "node:zlib";
 import { readFileSync, writeFileSync, existsSync, rmSync, statSync, openSync, closeSync, fstatSync, constants } from "node:fs";
@@ -36,6 +36,7 @@ import { createDeviceLabels } from "./device-labels.mjs";
 import * as Context from "./context.mjs";
 import { createOpenCodeAuth } from "./opencode-auth.mjs";
 import { createPiAuth, PI_KEY_PROVIDERS, piProviderName } from "./pi-auth.mjs";
+import { createPluginsService } from "./plugins.mjs";
 import { createSkillsService } from "./skills.mjs";
 import { autoInstallable, autoUpdateCandidate } from "./skills/update-review.mjs";
 import { createMcpService } from "./mcp.mjs";
@@ -598,6 +599,9 @@ const contextFs = async () => (await import("node:fs/promises"));
 const skillsService = createSkillsService({ home: CONTEXT_HOME, env: process.env,
   onNativeChange: provider => gateways.syncNativeResources(provider),
   getHarness: async (provider) => (await harnessCache.snapshotCheap()).harnesses?.find((row) => row.id === provider),
+});
+const pluginsService = createPluginsService({ home: CONTEXT_HOME, env: process.env, baseDir: STATE_DIR, io: await contextFs(),
+  getHarness: async provider => (await harnessCache.snapshotCheap()).harnesses?.find(row => row.id === provider),
 });
 const mcpService = createMcpService({ home: CONTEXT_HOME, env: process.env, baseDir: STATE_DIR,
   getHarness: async provider => (await harnessCache.snapshotCheap()).harnesses?.find(row => row.id === provider),
@@ -2344,7 +2348,8 @@ const cancelLifecycle = (target, rawId) => {
   return { http: 404, body: { ok: false, code: "not-running", error: "Nothing is running or waiting for that row." } };
 };
 
-const ROUTES = [...FILES_ROUTES, ...CREDENTIAL_ROUTES, ...GATEWAY_ROUTES, "/login", "/logout", "/hello", "/status", "/pair", "/revoke", "/devices/rename", "/ports",
+const PLUGIN_ROUTES = ["/context/plugins", "/context/plugins/read", "/context/plugins/source", "/context/plugins/plan", "/context/plugins/apply", "/context/plugins/job", "/context/plugins/discard"];
+const ROUTES = [...PLUGIN_ROUTES, ...FILES_ROUTES, ...CREDENTIAL_ROUTES, ...GATEWAY_ROUTES, "/login", "/logout", "/hello", "/status", "/pair", "/revoke", "/devices/rename", "/ports",
   "/storage/versions/prune", "/storage/versions", "/storage/refresh", "/storage/clean/preview", "/storage/clean", "/storage/policy", "/storage",
   "/public-url/clear", "/public-url", "/setup-key/reveal", "/setup-key/replace", "/connect/unlink", "/connect/preferences", "/t3/restart",
   "/t3/updates/check", "/t3/update", "/ports/expose", "/ports/unexpose",
@@ -2986,6 +2991,28 @@ const server = createServer(async (req, res) => {
         return sendJson(res, result.ok ? 200 : 404, result);
       } catch (error) {
         return sendJson(res, 400, { error: String(error?.message ?? error) });
+      }
+    }
+
+    if (PLUGIN_ROUTES.includes(route)) {
+      const readOnly = ["/context/plugins", "/context/plugins/read", "/context/plugins/job"].includes(route);
+      if (req.method !== (readOnly ? "GET" : "POST")) return sendJson(res, 405, { ok: false, error: "Use the supported method for this plugin action." });
+      const owner = createHash("sha256").update(String(req.headers["x-t3-setup-key"] || req.headers.cookie || "")).digest("hex");
+      try {
+        if (route === "/context/plugins") return sendJson(res, 200, await pluginsService.list());
+        if (route === "/context/plugins/read") return sendJson(res, 200, await pluginsService.read(raw.searchParams.get("id")));
+        if (route === "/context/plugins/job") return sendJson(res, 200, pluginsService.job(raw.searchParams.get("id"), owner));
+        const input = JSON.parse((await readBody(req, 65536)) || "{}");
+        if (!input || typeof input !== "object" || Array.isArray(input)) throw Object.assign(new Error("Send a plugin operation object."), { code: "invalid" });
+        const result = route === "/context/plugins/source" ? await pluginsService.previewSource(input.source, owner)
+          : route === "/context/plugins/plan" ? await pluginsService.prepare(input, owner)
+          : route === "/context/plugins/apply" ? await pluginsService.apply(input.planId, owner)
+          : pluginsService.discard(input.planId, owner);
+        if (route === "/context/plugins/apply") recordEvent("plugins.operation", "Started a reviewed plugin operation");
+        return sendJson(res, 200, result);
+      } catch (error) {
+        const status = { invalid: 400, missing: 404, conflict: 409, busy: 409, too_large: 413, unsupported: 403, unavailable: 503 }[error.code] || (error instanceof SyntaxError ? 400 : 500);
+        return sendJson(res, status, { ok: false, code: error.code || "unavailable", error: String(error.message || "The plugin operation failed.").slice(0, 500) });
       }
     }
 

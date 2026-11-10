@@ -44,6 +44,7 @@ export const CONSOLE_SCRIPTS = [
   "client/skill-update.js",
   "client/skill-hooks.js",
   "client/skills.js",
+  "client/plugins.js",
   "client/mcp-command.js",
   "client/mcp-model.js",
   "client/mcp-inspector.js",

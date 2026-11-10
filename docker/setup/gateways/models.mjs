@@ -70,13 +70,39 @@ const reasoningOf = row => {
 /** A stored or listed reasoning value, cleaned as if just read: saved data is no more trusted. */
 export const cleanReasoning = value => reasoningOf({ reasoning: value });
 
+const tokenLimit = value => Number.isSafeInteger(value) && value > 0 && value <= MAX_BUDGET ? value : undefined;
+const firstLimit = (...values) => values.map(tokenLimit).find(value => value !== undefined);
+
+/** Token limits are route facts. Never infer them from a model name or raise a
+ * default window to max_context_window, which can require a separate opt-in. */
+export function cleanModelLimits(value) {
+  const context = tokenLimit(value?.context);
+  if (!context) return null;
+  const limits = { context }, input = tokenLimit(value.input), output = tokenLimit(value.output), compact = tokenLimit(value.autoCompact);
+  if (input && input <= context) limits.input = input;
+  // Some catalogs repeat the context size as max_tokens. Reserving that much
+  // output would leave no room for a prompt and trigger compaction immediately.
+  if (output && output < (limits.input ?? context)) limits.output = output;
+  if (compact && compact < (limits.input ?? context)) limits.autoCompact = compact;
+  return limits;
+}
+
+const limitsOf = row => cleanModelLimits({
+  context: firstLimit(row?.limit?.context, row?.context_window, row?.context_length, row?.max_model_len,
+    row?.input_token_limit, row?.max_input_tokens, row?.runtime?.max_input_tokens),
+  input: firstLimit(row?.limit?.input, row?.input_token_limit, row?.max_input_tokens, row?.runtime?.max_input_tokens),
+  output: firstLimit(row?.limit?.output, row?.top_provider?.max_completion_tokens, row?.output_token_limit,
+    row?.max_output_tokens, row?.runtime?.max_output_tokens, row?.max_tokens),
+  autoCompact: tokenLimit(row?.auto_compact_token_limit),
+});
+
 /** The major in a harness row's version, or null when it isn't there. The config spelling follows this, not the version string's shape. */
 export const harnessMajor = value => {
   const match = /^v?(\d+)\./.exec(String(value?.version ?? value?.installedVersion ?? value?.recordedVersion ?? '').trim());
   return match ? Number(match[1]) : null;
 };
 
-/** The reasoning facts a list response carries, by model id. Absence means unknown, never a guess. */
+/** The reasoning and token-limit facts a list response carries, by model id. */
 export function parseModelCapabilities(body) {
   const rows = rowsOf(body);
   if (!rows) return null;
@@ -84,8 +110,8 @@ export function parseModelCapabilities(body) {
   for (const row of rows) {
     const id = rowId(row);
     if (!validModelId(id) || id in found) continue;
-    const reasoning = reasoningOf(row);
-    if (reasoning) found[id] = reasoning;
+    const reasoning = reasoningOf(row), limits = limitsOf(row);
+    if (reasoning || limits) found[id] = { ...reasoning, ...(limits ? { limits } : {}) };
   }
   return found;
 }
@@ -94,8 +120,8 @@ export function parseModelCapabilities(body) {
 export const cleanCapabilities = (ids, capabilities) => {
   if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) return {};
   return Object.fromEntries(cleanModelIds(ids).flatMap(id => {
-    const reasoning = cleanReasoning(capabilities[id]);
-    return reasoning ? [[id, reasoning]] : [];
+    const reasoning = cleanReasoning(capabilities[id]), limits = cleanModelLimits(capabilities[id]?.limits);
+    return reasoning || limits ? [[id, { ...reasoning, ...(limits ? { limits } : {}) }]] : [];
   }));
 };
 

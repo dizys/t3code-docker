@@ -95,9 +95,10 @@ guesses. CLIProxyAPI may advertise inherited template defaults, so its catalog
 is not proof of route-specific inference support. OpenCode receives the config
 spelling for its installed major. Pi and Grok expose only levels their native
 clients can represent, omitting `ultra`; Pi uses provider-qualified model IDs.
-Unknown models receive no generated effort controls. Pi requires fallback text
-input limits (128,000 context, 8,192 output) and zero placeholder prices to register
-custom models; these are not discovered limits or billing data.
+Unknown models receive no generated effort controls. Pi requires text input
+limits and zero placeholder prices to register custom models. When discovery
+does not supply limits, its operational fallback is 128,000 context and 8,192
+output; these are not discovered limits or billing data.
 
 On the maintained runtime, Claude Code and Codex receive explicit per-instance
 model capabilities, including empty controls for unknown models. These override
@@ -114,6 +115,92 @@ controls, which can differ from discovered facts. Pi and Grok still need native
 client changes to represent `ultra`. CLIProxyAPI needs catalog provenance to
 distinguish explicit route facts from inherited templates; Setup cannot infer
 that distinction from a successful request.
+
+## Context windows and compaction
+
+A gateway does not automatically teach every CLI a model's context window.
+Claude Code 2.1.321 treats an unknown ID such as `gemini-4-argon-high` as a
+200,000-token model. Its normal output and compaction reserves explain why it
+can compact around 178,000 tokens even when the gateway advertises 1,048,576.
+Codex 0.167.0 does not automatically read the gateway catalog for a custom
+provider. OpenCode and Pi also need limits in their generated model definitions.
+
+Setup keeps advertised limits per model alongside reasoning metadata. It reads
+common catalog fields such as `context_window`, `context_length`,
+`input_token_limit`, `output_token_limit`, and OpenCode's `limit` object.
+CLIProxyAPI's plain `/v1/models` can omit these, so its optional Codex-client
+catalog supplies missing facts. The default `context_window` wins over
+`max_context_window`: a larger maximum can require a separate opt-in. Limits are
+positive integers up to 10 million. Output limits at or above the effective
+context/input window are discarded. For example, an Argon catalog that repeats
+1,048,576 as `max_tokens` cannot reserve that entire window for output.
+
+| Agent | How discovered limits reach the CLI | Compaction behavior |
+| --- | --- | --- |
+| Claude Code | The maintained runtime merges selected-model context and output overrides into the SDK's scoped settings | Normal headroom stays enabled; model-specific compaction caps cover other known routes |
+| Codex | An owner-only `model_catalog_json` file supplies per-model windows and advertised compaction thresholds | Codex keeps its usual headroom and updates the window when switching models |
+| OpenCode 1 and 2 | Each model receives `limit.context`, `limit.input`, and `limit.output` when known | OpenCode chooses its normal compaction timing from those limits |
+| Pi | Its provider extension receives `contextWindow` and `maxTokens` | Pi keeps its normal reserve and compaction policy |
+| Grok Build | No verified context-limit override is generated | Native behavior remains unverified for foreign models |
+
+When a separate input limit is smaller, Claude, Codex and Pi use it as their
+conservative effective window. A model without advertised limits keeps the
+agent's operational fallback. One model's larger limit is never used as the
+gateway-wide default.
+
+OpenCode 1 requires an output field beside a context limit. When the gateway
+omits output or supplies an impossible value, Setup uses OpenCode's native `0`
+sentinel, preserving its normal output reserve. OpenCode 2 accepts an omitted
+output field.
+
+Claude's support requires an explicit `gatewayModelLimits: true` runtime
+advertisement. Older runtimes keep their native behavior. A model switch that
+changes process-scoped limits uses T3's existing close/resume path; running
+background work can block that replacement. Claude's native model IDs retain
+their own ceiling rules. Its per-model compaction setting only represents
+100,000 through 1,000,000 tokens. Native Claude subagents inherit the parent's
+context and output environment. They cannot automatically gain a larger ceiling
+than their parent or an independent output override, and a helper route below
+100,000 cannot receive an exact per-model compaction cap. T3-managed child
+sessions get their own selected-model settings. Earlier explicit compaction caps
+supplied through T3 or SDK settings are preserved. Representable output overrides
+are capped at 128,000.
+
+Codex's catalog format includes prompts and tool settings as well as limits.
+Setup reads `codex debug models --bundled` from the installed CLI, preserving
+native metadata for matching models, including its prefix and namespace
+matching. Foreign models with discovered limits use that CLI's default bundled
+coding prompt and tool settings, with no generated default reasoning effort.
+This differs from Codex's generic unknown-model prompt. Gateway-supplied prompts
+and tool declarations are never imported. The rest of the bundled catalog stays
+available for native fallback; unknown routes that would inherit a changed
+prefix receive a separate 272,000-token operational fallback. A Codex version
+that cannot export its catalog leaves that agent unapplied with an update
+message instead of installing a shortened coding prompt. Reapply refreshes
+the templates after changing the installed CLI.
+
+For an earlier compaction, use the agent's own scoped settings, such as Claude's
+T3 **Auto-compact window** or Codex's `model_auto_compact_token_limit` launch
+override. Keep model-window facts in the gateway catalog rather than editing
+generated files, which Setup rewrites. Disabling compaction or setting one
+instance-wide million-token window can make smaller routes overflow.
+
+Context-only catalog changes wait for **Apply**, just like model-list changes.
+Health checks do not restart agents or silently raise a running model's window.
+Withdrawing limits removes the corresponding generated overrides on Apply.
+
+Native fixture checks passed with Claude Code 2.1.321, Codex 0.167.0, OpenCode
+1.19.5 and 2.2.6, and Pi 1.5.0. Claude continued past simulated 220,000-token usage and
+compacted near the configured million-token boundary. Codex reported 996,147
+usable tokens for a 1,048,576-token model and 121,600 after switching to 128,000,
+and performed local compaction. These checks simulate usage against a local
+fixture. They do not establish an upstream route's million-token acceptance,
+token-count accuracy, or long-context quality. Grok's limit handling has no
+native verification here.
+
+References: [Claude model configuration](https://code.claude.com/docs/en/model-config),
+[official OpenAI documentation for Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference),
+and [OpenCode model limits](https://opencode.ai/docs/models/).
 
 ## Usage
 
@@ -187,12 +274,15 @@ on that gateway stops.** The page says so before you save.
 - Changing the address or key, or updating a key from the Vault
 - **Restore** on an agent changed in T3 Code
 - Turning an agent off, or removing the gateway
-- New models or reasoning metadata for OpenCode, Pi and Grok, which read generated files when they start
+- Model, reasoning or token-limit changes that rewrite OpenCode, Pi or Grok's generated files
+- A changed Codex model catalog, or adding or removing its catalog launch override
+- A changed Claude model-limit map
 
 Your threads aren't affected: they continue on the next message. Only that
 gateway's agents restart, never a direct sign-in, and never anything an agent
-started, such as a dev server. A new name, or new models for Claude Code and Codex,
-restarts nothing.
+started, such as a dev server. A new name restarts nothing. Claude and Codex
+picker-only model or effort changes do not restart the native helper unless
+they also change one of these process settings or files.
 
 ## When something goes wrong
 
@@ -234,6 +324,7 @@ forgets the management key.
 | Saved gateways | `<T3 state>/setup/gateways/gateways.json` (no keys) |
 | Keys | The Vault |
 | OpenCode's config and key | `<T3 state>/setup/gateways/agents/` |
+| Codex's optional model catalog | `<T3 state>/setup/gateways/agents/<id>.codex-models.json` |
 | Pi's extension | `<T3 state>/setup/gateways/agents/<id>.pi.mjs` |
 | Grok's private home | `<T3 state>/setup/gateways/agents/<id>.grok/` (session history retained on removal) |
 | Management key | T3 Code's secret store |

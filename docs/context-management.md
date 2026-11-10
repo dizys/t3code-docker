@@ -777,3 +777,7 @@ the request after capturing it: no real credentials or paid model calls were
 used. This verifies loading into a request, not model adherence or all versions.
 Native paths follow the [Claude Code memory documentation](https://code.claude.com/docs/en/memory)
 and [OpenCode rules documentation](https://opencode.ai/docs/rules/).
+
+## Complete plugin packages
+
+The **Plugins** tab sits beside Skills. It inventories full packages and offers reviewed source installation, updates and removal for supported Setup-owned Codex, Claude Code and Pi packages, plus experimental OpenCode modules. Plugin-owned skill files remain managed through their package. See [Plugins in Setup](plugins.md) for current provider support, hook review and container access.

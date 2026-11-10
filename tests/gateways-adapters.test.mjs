@@ -3,7 +3,9 @@ import test from 'node:test';
 import { parse as parseToml } from '../docker/setup/vendor/toml-patch.mjs';
 import { desiredInstance, differences, fileText, filesFor, instanceIdFor, mergeInstance, modelsFor, modelsToHide } from '../docker/setup/gateways/adapters.mjs';
 import { GATEWAY_KEY_ENV, NO_KEY, agentOf } from '../docker/setup/gateways/catalog.mjs';
-import { cleanCapabilities, cleanModelIds, harnessMajor, newestIn, parseModelCapabilities, parseModelList } from '../docker/setup/gateways/models.mjs';
+import { cleanCapabilities, cleanModelIds, cleanModelLimits, harnessMajor, newestIn, parseModelCapabilities, parseModelList } from '../docker/setup/gateways/models.mjs';
+import { nativeModels } from './fixtures/codex-models.mjs';
+import { readCodexModels } from '../docker/setup/gateways/codex.mjs';
 
 const [claude, codex, opencode] = ['claude', 'codex', 'opencode'].map(agentOf);
 const [pi, grok] = ['pi', 'grok'].map(agentOf);
@@ -11,6 +13,114 @@ const gateway = (over = {}) => ({ id: 'my-proxy', name: 'My Proxy', url: 'http:/
   models: { ids: ['claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-5', 'claude-sonnet-4-5-20250929', 'gemini-2.5-pro', 'gpt-5.6-sol', 'gpt-6-astra'], manual: [] },
   agents: { claude: { on: true }, codex: { on: true }, opencode: { on: true } }, ...over });
 const env = (instance, name) => instance.environment.find(row => row.name === name);
+
+test('token limits are parsed without raising the default to an opt-in maximum or accepting impossible output', () => {
+  const caps = parseModelCapabilities({ models: [
+    { slug: 'argon', context_window: 1048576, max_tokens: 1048576 },
+    { slug: 'codex', context_window: 500000, max_context_window: 872000, max_tokens: 128000, auto_compact_token_limit: 440000 },
+    { id: 'router', context_length: 1000000, top_provider: { max_completion_tokens: 65536 } },
+    { id: 'oc', limit: { context: 200000, input: 180000, output: 8192 } },
+    { id: 'gemini', input_token_limit: 1048576, output_token_limit: 65536 },
+    { id: 'unknown', max_context_window: 1000000 },
+  ] });
+  assert.deepEqual(caps.argon, { limits: { context: 1048576 } });
+  assert.deepEqual(caps.codex.limits, { context: 500000, output: 128000, autoCompact: 440000 });
+  assert.deepEqual(caps.router.limits, { context: 1000000, output: 65536 });
+  assert.deepEqual(caps.oc.limits, { context: 200000, input: 180000, output: 8192 });
+  assert.deepEqual(caps.gemini.limits, { context: 1048576, input: 1048576, output: 65536 });
+  assert.equal(caps.unknown, undefined);
+  for (const context of [0, -1, 1.5, Infinity, '1000000', 10000001]) assert.equal(cleanModelLimits({ context }), null);
+  assert.deepEqual(cleanCapabilities(['argon'], { argon: caps.argon, unknown: caps.codex }), { argon: caps.argon });
+  assert.deepEqual(cleanModelLimits({ context: 128000, input: 200000, output: 128000, autoCompact: 128000 }), { context: 128000 });
+  assert.deepEqual(cleanModelLimits({ context: 200000, input: 128000, output: 150000 }), { context: 200000, input: 128000 });
+});
+
+test('OpenCode, Pi and Codex receive per-model limits while unknown routes retain CLI fallbacks', async () => {
+  const gw = gateway({ models: { ids: ['gemini-large', 'small', 'unknown'], capabilities: {
+    'gemini-large': { limits: { context: 1048576, output: 65536 } },
+    small: { limits: { context: 200000, input: 128000, output: 8192 } },
+  } }, agents: { codex: { scope: 'all' } } });
+  for (const major of [1, 2]) {
+    const config = JSON.parse(fileText(opencode, gw, '/d', { major }));
+    const entries = (config.providers ?? config.provider)['t3gw-my-proxy'].models;
+    assert.deepEqual(entries['gemini-large'].limit, { context: 1048576, output: 65536 });
+    assert.deepEqual(entries.small.limit, { context: 200000, input: 128000, output: 8192 });
+    assert.equal(entries.unknown.limit, undefined);
+  }
+  const extension = await import(`data:text/javascript,${encodeURIComponent(fileText(pi, gw, '/d'))}`);
+  let models;
+  extension.default({ registerProvider: (id, config) => { models = config.models; } });
+  assert.equal(models.find(row => row.id === 'gemini-large').contextWindow, 1048576);
+  assert.equal(models.find(row => row.id === 'gemini-large').maxTokens, 65536);
+  assert.equal(models.find(row => row.id === 'small').contextWindow, 128000);
+  assert.equal(models.find(row => row.id === 'unknown').contextWindow, 128000);
+  const catalog = JSON.parse(fileText(codex, gw, '/d', { nativeModels }));
+  assert.deepEqual(catalog.models.filter(row => row.slug !== 'gpt-6-astra').map(row => [row.slug, row.context_window]), [['gemini-large', 1048576], ['small', 128000]]);
+  assert.match(desiredInstance(codex, gw, { dir: '/d' }).config.launchArgs, /model_catalog_json="\/d\/my-proxy.codex-models.json"/);
+  assert.doesNotMatch(JSON.stringify(catalog), /T3_GATEWAY_KEY/);
+  assert.equal(catalog.models.find(row => row.slug === 'gemini-large').base_instructions, nativeModels[0].base_instructions);
+});
+
+test('context-only OpenCode limits preserve the native unknown-output fallback in v1', () => {
+  const gw = gateway({ models: { ids: ['context-only', 'invalid-output', 'unknown'], capabilities: {
+    'context-only': { limits: { context: 1048576 } },
+    'invalid-output': { limits: { context: 1048576, output: 1048576 } },
+  } } });
+  for (const major of [1, 2]) {
+    const config = JSON.parse(fileText(opencode, gw, '/d', { major }));
+    const entries = (config.providers ?? config.provider)['t3gw-my-proxy'].models;
+    for (const slug of ['context-only', 'invalid-output']) {
+      assert.equal(entries[slug].limit.context, 1048576);
+      assert.equal(entries[slug].limit.output, major === 1 ? 0 : undefined);
+    }
+    assert.equal(entries.unknown.limit, undefined);
+  }
+});
+
+test('Codex preserves installed model instructions and tools and prevents prefix leaks into unknown routes', () => {
+  const gw = gateway({ models: { ids: ['gpt-6-astra', 'foreign', 'foreign-unknown', 'namespace/foreign-unknown', 'unknown'], capabilities: {
+    'gpt-6-astra': { limits: { context: 500000 }, base_instructions: 'Untrusted gateway prompt' },
+    foreign: { limits: { context: 1048576 } },
+  } }, agents: { codex: { scope: 'all' } } });
+  const original = structuredClone(nativeModels);
+  const catalog = JSON.parse(fileText(codex, gw, '/d', { nativeModels }));
+  const known = catalog.models.find(row => row.slug === 'gpt-6-astra');
+  assert.deepEqual(known, { ...nativeModels[0], context_window: 500000, max_context_window: 500000, auto_compact_token_limit: null });
+  const foreign = catalog.models.find(row => row.slug === 'foreign');
+  assert.deepEqual(foreign.model_messages, nativeModels[0].model_messages);
+  assert.deepEqual(foreign.supported_reasoning_levels, []);
+  assert.equal(foreign.default_reasoning_level, undefined);
+  assert.equal(catalog.models.find(row => row.slug === 'foreign-unknown').context_window, 272000);
+  assert.equal(catalog.models.find(row => row.slug === 'namespace/foreign-unknown').context_window, 272000);
+  assert.equal(catalog.models.find(row => row.slug === 'unknown'), undefined);
+  assert.deepEqual(nativeModels, original);
+  assert.throws(() => fileText(codex, gw, '/d'), /installed model catalog/);
+});
+
+test('Codex reads only the bundled catalog and rejects failed or invalid exports without echoing output', async () => {
+  const options = { executable: '/native/codex', home: '/home', env: { KEEP: 'yes' } };
+  const read = (error, stdout) => readCodexModels({ ...options, execFileImpl: (executable, args, settings, callback) => {
+    assert.equal(executable, options.executable);
+    assert.deepEqual(args, ['debug', 'models', '--bundled']);
+    assert.equal(settings.cwd, options.home);
+    assert.equal(settings.env, options.env);
+    assert.equal(settings.timeout, 10000);
+    callback(error, stdout);
+  } });
+  assert.deepEqual(await read(null, JSON.stringify({ models: nativeModels })), nativeModels);
+  for (const stdout of ['sensitive native output', '{}', '{"models":[]}', '{"models":[{"slug":"bad"}]}']) {
+    await assert.rejects(read(null, stdout), error => /invalid bundled/.test(error.message) && !error.message.includes(stdout));
+  }
+  await assert.rejects(read(new Error('sensitive command error'), ''), /Update Codex/);
+});
+
+test('Claude route limits require the complete runtime contract and are cleared on downgrade', () => {
+  const gw = gateway({ models: { ids: ['gemini-large', 'unknown'], capabilities: { 'gemini-large': { limits: { context: 1048576 } } } }, agents: { claude: { scope: 'all' } } });
+  for (const gatewayModelLimits of [undefined, false, 'true', 1]) assert.equal(env(desiredInstance(claude, gw, { gatewayModelLimits }), 'T3_GATEWAY_MODEL_LIMITS').value, '');
+  const instance = desiredInstance(claude, gw, { gatewayModelLimits: true });
+  assert.deepEqual(JSON.parse(env(instance, 'T3_GATEWAY_MODEL_LIMITS').value), { 'gemini-large': { context: 1048576 } });
+  assert.deepEqual(differences(claude, desiredInstance(claude, gw), instance), ['T3_GATEWAY_MODEL_LIMITS']);
+});
 
 test('Claude and Codex use exact advertised controls only with negotiated runtime support', () => {
   const gw = gateway({ models: { ids: ['claude-known', 'gpt-known', 'unknown', 'disabled'], capabilities: {

@@ -25,6 +25,7 @@ const publicOperation = value => {
 export function createController({ store, supervisor, tools, secrets = async () => ({ receipts: [] }), artifacts, system = null, systemSnapshot, systemRequest, networkReferences, peerPorts = async () => [], toolLock = async fn => fn(), boot = containerBoot(), health = checkHealth, now = Date.now, reservedPorts = [] }) {
   let working = false, closed = false, timer = null;
   const services = () => store.list().filter(item => item.kind === "service");
+  const packageReferences = (id, operationId) => [...services().filter(item => item.id !== id).map(item => item.artifact), ...store.pending().filter(op => op.id !== operationId).flatMap(op => [op.plan.previous?.artifact, op.plan.candidate?.artifact])].filter(Boolean);
   const network = createNetwork({ store, systemSnapshot, systemRequest });
   const snapshot = async () => ({ schema: 1, domain: store.domain, observedAt: now(), services: services().map(resource => publicResource({ ...resource, observation: store.meta("observation:" + resource.id) || { state: "unknown", at: null } })),
     ...await network.snapshot(),
@@ -59,7 +60,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
     if (/^(?:connection-|route-|client-observed)/.test(input?.action || "")) return network.plan(input);
     object(input, ["action", "id", "configuration", "expectedRevision"]);
     const { action, expectedRevision } = input;
-    if (!["add", "edit", "enable", "disable", "stop", "restart", "remove", "install", "update", "uninstall", "sign-in", "sign-out", "serve", "unserve"].includes(action)) throw new ServiceError("invalid", "Choose a supported service action.");
+    if (!["add", "edit", "enable", "disable", "start", "stop", "restart", "remove", "install", "update", "migrate", "uninstall", "sign-in", "sign-out", "serve", "unserve"].includes(action)) throw new ServiceError("invalid", "Choose a supported service action.");
     let id = input.id;
     if (action === "add" && store.domain === "user" && !id) id = "custom-" + randomUUID().replaceAll("-", "").slice(0, 20);
     if (!validId(id) || store.domain === "system" && !["openssh", "tailscale", "cloudflared"].includes(id)) throw new ServiceError("invalid", "Choose a valid service.");
@@ -68,7 +69,15 @@ export function createController({ store, supervisor, tools, secrets = async () 
     if (action !== "add" && action !== "install" && !previous) throw new ServiceError("missing", "This service is no longer registered.");
     if (action === "add" && previous) throw new ServiceError("conflict", "This service is already registered.");
     if (action === "uninstall" && store.domain !== "system") throw new ServiceError("invalid", "Remove a custom registration to retain its tools and application files.");
-    if (store.domain === 'system' && ['enable', 'restart'].includes(action) && !previous?.artifact) throw new ServiceError('artifact', 'Install this service again before enabling it. Its saved identity and configuration are retained.');
+    if (store.domain === 'system' && action === 'remove') throw new ServiceError('invalid', 'Uninstall this service to remove its software while keeping saved settings and identity.');
+    if (action === 'migrate' && (store.domain !== 'system' || !previous?.artifact || previous.artifact.manager === 'mise')) throw new ServiceError('invalid', 'Choose an existing service installation that has not moved to Mise yet.');
+    if (store.domain === 'system' && ['enable', 'start', 'restart'].includes(action) && !previous?.artifact) throw new ServiceError('artifact', 'Install this service again before enabling it. Its saved identity and configuration are retained.');
+    if (action === 'start') {
+      if (!previous.enabled) throw new ServiceError('invalid', 'Enable this service to start it now and at container startup.');
+      const live = await supervisor.observe(id);
+      if (live.unavailable) throw new ServiceError('unavailable', 'Current process status is unavailable. Refresh before starting this service.');
+      if (live.up) throw new ServiceError('conflict', 'This service is already running. Refresh to review a restart.');
+    }
     const consumers = await consumersOf(id);
     await checkPendingRoutes(id, action);
     if (["remove", "uninstall"].includes(action) && consumers.length) throw new ServiceError("dependencies", "Remove this service’s routes before removing its registration or payload.");
@@ -83,23 +92,29 @@ export function createController({ store, supervisor, tools, secrets = async () 
       }
     }
     let candidate = {};
-    if (["add", "edit", "install"].includes(action)) candidate = await toolLock(() => validate(id, input.configuration));
-    else if (["update", "restart", "enable"].includes(action)) {
+    if (["add", "edit", "install"].includes(action)) {
+      candidate = await toolLock(() => validate(id, input.configuration));
+      // Editing a legacy service keeps its existing runtime. Changing package
+      // ownership requires its own explicit migration/update/install review.
+      if (action === 'edit' && store.domain === 'system' && previous?.artifact && previous.artifact.manager !== 'mise') delete candidate.artifact;
+    }
+    else if (["update", "migrate", "restart", "enable", "start"].includes(action)) {
       if (store.domain === 'system') await checkBindings(id, previous.config);
-      candidate = store.domain === "system" ? { config: previous.config, ...(action === "update" ? { artifact: artifacts.selection(id) } : {}) } : await toolLock(() => validate(id, previous.config));
+      candidate = store.domain === "system" ? { config: previous.config, ...(['update', 'migrate'].includes(action) ? { artifact: artifacts.selection(id) } : {}) } : await toolLock(() => validate(id, previous.config));
       if (store.domain === "user" && action !== "update" && hash(candidate.receipt) !== hash(previous.receipt)) throw new ServiceError("tool-changed", "The selected tool or executable changed. Review its configuration before enabling it.", "executable");
     }
     const selected = candidate.config || previous?.config;
-    const effect = ["disable", "remove", "uninstall"].includes(action) ? "Stops this service. Existing connections may end." : action === "stop" ? "Stops until the next container start. Startup remains enabled." : action === "edit" && hash(candidate.config) === hash(previous?.config) ? "No configuration change." : "May restart this service. Other services and T3 keep running.";
+    const effect = action === 'uninstall' ? 'Stops this service and removes its installed software, old cached versions and dependencies that no other service or pending operation needs. Existing connections may end.' : action === 'migrate' ? 'Installs the image-approved packages through Mise and switches this service to them. A running service restarts; a stopped or disabled service stays stopped. The previous installation is retained for recovery until uninstall.' : ["disable", "remove"].includes(action) ? "Stops this service. Existing connections may end." : action === "start" ? "Starts the stopped service with its pinned configuration. Startup remains enabled." : action === "stop" ? "Stops until the next container start. Startup remains enabled." : action === "edit" && hash(candidate.config) === hash(previous?.config) ? "No configuration change." : "May restart this service. Other services and T3 keep running.";
     return store.plan({ target: id, action, expectedRevision, previous, candidate, control, review: {
       name: selected?.name || id, action, domain: store.domain, effect: control ? action === 'sign-in' ? 'Starts or resumes tailnet sign-in. Device identity and provider policy stay with Tailscale.' : action === 'sign-out' ? 'Signs this connector out. Every route using it will lose access until sign-in is completed again.' : action === 'serve' ? `Forwards tailnet TCP port ${control.listenPort} to container loopback port ${control.targetPort}. Tailnet policy still applies.` : `Removes tailnet TCP forwarding on port ${control.listenPort}.` : effect,
       ...(control ? { control } : {}),
       runAs: store.domain === "user" ? "t3 (current user)" : id === "openssh" ? "root listener; t3 sessions only" : "system service",
       config: publicResource({ config: selected }).config, version: candidate.artifact?.version || previous?.artifact?.version || null,
-      downloads: candidate.artifact?.payloads?.map(({ bytes, name, sha256, url }) => ({ bytes, name, sha256, url })) || [],
+      downloads: candidate.artifact?.payloads?.map(({ bytes, name, version, sha256, url }) => ({ bytes, name, version: version || candidate.artifact.version, sha256, url })) || [],
       tools: candidate.receipt?.installations || previous?.receipt?.installations || [],
-      retains: store.domain === "user" ? "Installed tools, application data and Vault entries are retained. Configuration recovery cannot undo application data changes." : "Host and provider identities and previous verified artifacts are retained.",
-      requiresFallback: store.domain === 'system' && Boolean(previous?.enabled) && ['edit', 'update', 'restart', 'disable', 'stop', 'remove', 'uninstall', 'sign-out', 'unserve'].includes(action),
+      retains: store.domain === "user" ? "Installed tools, application data and Vault entries are retained. Configuration recovery cannot undo application data changes." : action === 'uninstall' ? 'Saved settings, SSH host keys and provider identities are kept for reinstall. Software still needed by another service is kept. User Mise tools are unchanged.' : "Host and provider identities and previous verified artifacts are retained.",
+      packageManager: candidate.artifact?.manager || previous?.artifact?.manager || null,
+      requiresFallback: store.domain === 'system' && Boolean(previous?.enabled) && ['edit', 'update', 'migrate', 'restart', 'disable', 'stop', 'remove', 'uninstall', 'sign-out', 'unserve'].includes(action),
       routes: consumers.map(item => item.name || item.id), network: "Declaring a port does not publish it. Container port mappings and external network policy are managed separately." } });
   };
   const phase = (op, state, detail = {}) => {
@@ -184,7 +199,11 @@ export function createController({ store, supervisor, tools, secrets = async () 
           if (!op.activated) { current = { ...current, revision: current.revision + 1, enabled: action === "stop" ? current.enabled : false, stoppedBoot: action === "stop" ? boot : null, restart: {}, config: { ...current.config, enabled: action === "stop" ? current.enabled : false }, lastOperationId: op.id }; store.transaction(() => { store.put(current); op.activated = true; store.saveOperation(op); }); }
           await supervisor.stop(id, current.config.shutdownMs);
           if (action === "remove") { store.remove(id); await fs.rm(path.join(store.root, "logs", id), { recursive: true, force: true }); }
-          if (action === "uninstall") { store.put({ ...current, artifact: null, uninstalled: true }); }
+          if (action === "uninstall") {
+            phase(op, 'removing-software');
+            const removal = await artifacts.remove(id, { references: () => packageReferences(id, op.id) });
+            store.transaction(() => { store.put({ ...current, artifact: null, uninstalled: true, removal }); op.removal = removal; store.saveOperation(op); });
+          }
           if (action !== "remove") await observe(store.get(id));
         }
         finish(op, "succeeded"); return;
@@ -192,20 +211,27 @@ export function createController({ store, supervisor, tools, secrets = async () 
       let resource = store.get(id);
       if (!op.activated) {
         phase(op, "preflight");
+        const checkStart = async () => { if (action === 'start') {
+          const live = await supervisor.observe(id);
+          if (live.unavailable || live.up) throw new ServiceError('conflict', 'Process status changed. Refresh before starting this service; no running process was restarted.');
+        } };
+        await checkStart();
         let candidate = op.plan.candidate;
         if (store.domain === "user") {
           await toolLock(async () => {
             const validated = await validate(id, candidate.config || original.config);
             if (candidate.receipt && hash(validated.receipt) !== hash(candidate.receipt) || candidate.secretReceipts && hash(validated.secretReceipts) !== hash(candidate.secretReceipts)) throw new ServiceError("conflict", "A selected tool or credential changed. Review the preserved draft again.");
             candidate = { ...candidate, ...validated };
-            resource = { ...original, ...candidate, id, kind: "service", uninstalled: false, revision: (original?.revision ?? 0) + 1, enabled: ["enable", "restart"].includes(action) ? true : candidate.config.enabled, stoppedBoot: null, restart: {}, activatedAt: now(), lastOperationId: op.id };
+            await checkStart();
+            resource = { ...original, ...candidate, id, kind: "service", uninstalled: false, revision: (original?.revision ?? 0) + 1, enabled: ["enable", "restart"].includes(action) ? true : action === 'start' ? original.enabled : candidate.config.enabled, stoppedBoot: null, restart: {}, activatedAt: now(), lastOperationId: op.id };
             // Registration/pins and tool deletion share the harness lock.
             store.transaction(() => { store.put(resource); op.activated = true; store.saveOperation(op); });
           });
         } else {
           await checkBindings(id, candidate.config || original.config);
           if (candidate.artifact) { phase(op, "stage"); candidate = { ...candidate, artifact: await artifacts.install(id, candidate.artifact) }; }
-          resource = { ...original, ...candidate, id, kind: "service", uninstalled: false, revision: (original?.revision ?? 0) + 1, enabled: ["enable", "restart"].includes(action) ? true : (action === "update" ? original?.enabled : candidate.config?.enabled ?? original?.enabled), stoppedBoot: null, restart: {}, activatedAt: now(), lastOperationId: op.id };
+          await checkStart();
+          resource = { ...original, ...candidate, id, kind: "service", uninstalled: false, removal: null, revision: (original?.revision ?? 0) + 1, enabled: ["enable", "restart"].includes(action) ? true : ['update', 'migrate', 'start'].includes(action) ? original?.enabled : candidate.config?.enabled ?? original?.enabled, stoppedBoot: ['update', 'migrate'].includes(action) ? original?.stoppedBoot : null, restart: {}, activatedAt: now(), lastOperationId: op.id };
           store.transaction(() => { store.put(resource); op.activated = true; store.saveOperation(op); });
         }
         op.activated = true; changed = true; store.saveOperation(op);
@@ -215,17 +241,17 @@ export function createController({ store, supervisor, tools, secrets = async () 
       const live = await supervisor.observe(id), run = store.meta("run:" + id);
       if (op.phase === "activate" && live.up && run?.revision === resource.revision) { await startAndCheck(resource); finish(op, "succeeded"); return; }
       const comparable = config => { if (!config) return null; const { name, ...rest } = config; return rest; };
-      if (action === "edit" && original && hash(comparable(resource.config)) === hash(comparable(original.config)) && live.up && hash(resource.receipt) === hash(original.receipt)) {
+      if (action === "edit" && original && hash(comparable(resource.config)) === hash(comparable(original.config)) && live.up && hash(resource.receipt) === hash(original.receipt) && hash(resource.artifact) === hash(original.artifact)) {
         store.setMeta("run:" + id, { ...run, revision: resource.revision, originalLaunchRevision: run.originalLaunchRevision || run.revision });
         await observe(resource); finish(op, "succeeded"); return;
       }
       phase(op, "configure");
-      await supervisor.stop(id, resource.config.shutdownMs);
+      if (action !== 'start') await supervisor.stop(id, resource.config.shutdownMs);
       if (store.domain === "system") {
         const details = await system.configureSystem(resource, system.paths);
         resource = { ...resource, details }; store.put(resource);
       }
-      if (resource.enabled) { phase(op, "activate"); await startAndCheck(resource); }
+      if (resource.enabled && resource.stoppedBoot !== boot) { phase(op, "activate"); await startAndCheck(resource); }
       else await observe(resource);
       finish(op, "succeeded");
     } catch (error) {

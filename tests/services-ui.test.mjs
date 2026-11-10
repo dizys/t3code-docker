@@ -77,13 +77,13 @@ test('the service menu distinguishes a first sign-in from a pending authorizatio
   assert.deepEqual(authentication(await f.menu(resource)), [], 'a failed refresh must not offer actions from stale identity state');
 });
 
-test('Toolchains shows installed service runtimes with their Services management links', async () => {
-  const ssh = { domain: 'system', id: 'openssh', enabled: true, config: { name: 'SSH' }, artifact: { version: '10.2p1' }, observation: { state: 'ready' } };
+test('Toolchains shows Mise service packages, exact component versions and management links', async () => {
+  const ssh = { domain: 'system', id: 'openssh', enabled: true, config: { name: 'SSH' }, artifact: { version: '10.2p1', manager: 'mise', components: [{ name: 'openssh-server', version: '10.2p1' }, { name: 'libwrap0', version: '7.6' }] }, observation: { state: 'ready' } };
   const custom = { domain: 'user', id: 'custom', config: { name: 'Custom preview' }, artifact: {}, observation: { state: 'running' } };
   const f = fixture('#toolchains', true, [ssh, custom]); f.ui.activate(true); await f.settle();
   const markup = f.ui.toolchainsContent();
-  assert.match(markup, /Service runtimes/); assert.match(markup, /SSH/); assert.match(markup, /10.2p1/);
-  assert.match(markup, /Managed in Services/); assert.match(markup, /href="#services\/openssh"/);
+  assert.match(markup, /Service packages/); assert.match(markup, /SSH/); assert.match(markup, /10.2p1/);
+  assert.match(markup, /Mise · Used by SSH/); assert.match(markup, /href="#services\/openssh"/); assert.match(markup, /libwrap0/); assert.match(markup, /7\.6/);
   assert.doesNotMatch(markup, /Custom preview|package\.uninstall|package\.update/);
   f.unavailable(); f.ui.activate(); await f.settle();
   assert.match(f.ui.toolchainsContent(), /Showing last-known installations/);
@@ -99,4 +99,13 @@ test('Toolchains stays quiet when optional system services have not been enabled
     const f = fixture('#toolchains', true, [], [{ domain: 'system', code, error: 'Optional system services need deployment configuration' }]);
     f.ui.activate(true); await f.settle(); assert.equal(f.ui.toolchainsContent(), '');
   }
+});
+
+
+test('a stopped SSH service offers Start without Restart or Stop and shows its connection username', async () => {
+  const ssh = { domain: 'system', id: 'openssh', enabled: true, config: { name: 'SSH' }, artifact: { version: '10.2p1' }, observation: { state: 'stopped', process: { up: false } } };
+  const f = fixture('#services', true, [ssh]); f.ui.activate(true); await f.settle();
+  const labels = await f.menu(ssh); assert.ok(labels.includes('Start')); assert.ok(!labels.includes('Restart')); assert.ok(!labels.includes('Stop for now'));
+  assert.ok(labels.includes('Move packages to Mise…'));
+  assert.match(f.ui.sshContent(), /SSH username: <code>t3<\/code>/);
 });

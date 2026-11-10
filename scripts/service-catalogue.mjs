@@ -23,8 +23,8 @@ async function payload(url, name, format, extra = {}) {
   const data = Buffer.from(await response.arrayBuffer());
   return { name, url, format, bytes: data.length, sha256: createHash("sha256").update(data).digest("hex"), ...extra };
 }
-const tail = await payload(`https://pkgs.tailscale.com/stable/tailscale_${tailscale}_${arch}.tgz`, "tailscale", "tgz", { prefix: `tailscale_${tailscale}_${arch}` });
-const cloud = await payload(`https://github.com/cloudflare/cloudflared/releases/download/${cloudflared}/cloudflared-linux-${arch}`, "cloudflared", "binary");
+const tail = await payload(`https://pkgs.tailscale.com/stable/tailscale_${tailscale}_${arch}.tgz`, "tailscale", "tgz", { version: tailscale, prefix: `tailscale_${tailscale}_${arch}` });
+const cloud = await payload(`https://github.com/cloudflare/cloudflared/releases/download/${cloudflared}/cloudflared-linux-${arch}`, "cloudflared", "binary", { version: cloudflared });
 const catalogue = { schema: 1, revision: 1, arch, baseline: "debian-trixie", trust: "image-pinned", services: {
   openssh: { id: "openssh", name: "SSH", version: entries[0].version, payloads: entries, executable: "usr/sbin/sshd" },
   tailscale: { id: "tailscale", name: "Tailscale", version: tailscale, payloads: [tail], executable: "tailscaled" },

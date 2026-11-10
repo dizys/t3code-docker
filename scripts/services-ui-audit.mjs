@@ -139,14 +139,15 @@ try {
     await page.locator('[data-service-edit=close]').click();
     await shot('ssh');
     await openPage('toolchains');
-    const runtimes = page.getByRole('region', { name: 'Service runtimes', exact: true });
-    await runtimes.getByRole('link', { name: 'Manage SSH in Services', exact: true }).waitFor();
-    assert.match(await runtimes.innerText(), /Managed in Services/);
-    assert.match(await runtimes.innerText(), /separate from mise tools/);
+    const runtimes = page.getByRole('region', { name: 'Service packages', exact: true });
+    await runtimes.getByRole('link', { name: 'Manage openssh-server for SSH', exact: true }).waitFor();
+    assert.match(await runtimes.innerText(), /Mise · Used by SSH/);
+    assert.match(await runtimes.innerText(), /protected Mise storage/);
     await shot('service-runtimes');
-    await runtimes.getByRole('link', { name: 'Manage SSH in Services', exact: true }).click();
+    await runtimes.getByRole('link', { name: 'Manage openssh-server for SSH', exact: true }).click();
     const sshInspector = page.getByRole('dialog', { name: 'SSH', exact: true });
-    await sshInspector.waitFor(); assert.match(await sshInspector.innerText(), /openssh-server, libwrap0, libwtmpdb0, libtalloc2/);
+    await sshInspector.waitFor(); assert.match(await sshInspector.innerText(), /openssh-server@fixture-version, libwrap0@fixture-version, libwtmpdb0@fixture-version, libtalloc2@fixture-version/);
+    assert.match(await sshInspector.innerText(), /SSH username\s+t3/);
     await shot('ssh-components'); await sshInspector.getByRole('button', { name: 'Close', exact: true }).click();
     if (width === 1440) { await page.waitForTimeout(5500); assert.equal(await sshInspector.count(), 0, 'polling must not reopen a closed service deep link'); }
     await openPage('services');
@@ -209,12 +210,22 @@ try {
     await route.getByRole('button', { name: 'Remove route…', exact: true }).click(); await button('Remove route').click(); await route.waitFor({ state: 'detached' });
     if (width === 1440) {
       const sshRow = page.locator('#page-access .tc-service-row').filter({ has: page.locator('.tc-service-name').filter({ hasText: /^SSH$/ }) });
+      assert.match(await sshRow.innerText(), /SSH username: t3/);
+      await button('Manage SSH').click(); await page.getByRole('menuitem', { name: 'Stop for now', exact: true }).click();
+      await page.getByRole('checkbox', { name: 'I have another way to reach Setup or this container.', exact: true }).check(); await button('Stop for now').click();
+      await sshRow.getByText('Stopped for now', { exact: true }).waitFor();
+      await button('Manage SSH').click();
+      assert.equal(await page.getByRole('menuitem', { name: 'Restart', exact: true }).count(), 0);
+      assert.equal(await page.getByRole('menuitem', { name: 'Stop for now', exact: true }).count(), 0);
+      await page.getByRole('menuitem', { name: 'Start', exact: true }).click(); await button('Start service').click();
+      await sshRow.getByText('Locally ready', { exact: true }).waitFor();
       await button('Manage SSH').click(); await page.getByRole('menuitem', { name: 'Disable at startup', exact: true }).click();
       assert.equal(await button('Disable service').isDisabled(), true);
       await page.getByRole('checkbox', { name: 'I have another way to reach Setup or this container.', exact: true }).check(); await button('Disable service').click();
       await sshRow.getByText('Disabled', { exact: true }).waitFor();
       await button('Manage SSH').click(); await page.getByRole('menuitem', { name: 'Uninstall service…', exact: true }).click(); await button('Uninstall service').click();
-      await sshRow.getByText('Payload removed', { exact: true }).waitFor();
+      await sshRow.getByText('Uninstalled', { exact: true }).waitFor();
+      assert.match(await sshRow.innerText(), /Software removed · Settings and identity saved/);
       await button('Manage SSH').click(); await page.getByRole('menuitem', { name: 'Install again…', exact: true }).click();
       assert.ok((await page.locator('#svc-keys').inputValue()).startsWith('ssh-ed25519 '));
       await button('Review changes').click(); await button('Install and enable').click(); await sshRow.getByText('Locally ready', { exact: true }).waitFor();
@@ -223,7 +234,7 @@ try {
     await tab('Devices').focus(); await page.keyboard.press('ArrowRight'); await tab('Connections').waitFor();
     assert.equal(await tab('Connections').getAttribute('aria-selected'), 'true');
     assert.deepEqual(errors, [], tag + ': browser errors');
-    checks.push({ width, theme, embedded, fontSize, checks: ['editor close button alignment', 'create literal argv', 'environment and Vault reference forms', 'review', 'lost submission recovery', 'stale status retains last-known rows', 'observed status', 'logs', 'stop for now', 'disable', 'remove', 'draft preservation', 'SSH key privacy', 'optional SSH install', 'service runtimes link to Services', 'SSH bundled components', 'closed service deep links stay closed', 'first and pending Tailscale sign-in actions', 'resuming sign-in creates no operation', 'expired sign-in recovery', 'Tailscale device approval and signed-in actions', 'unavailable Tailscale state', 'connection review', 'client route and instructions', 'reported client test', 'route removal', 'Access tabs', 'keyboard tabs', 'geometry', 'no browser exceptions'] });
+    checks.push({ width, theme, embedded, fontSize, checks: ['editor close button alignment', 'create literal argv', 'environment and Vault reference forms', 'review', 'lost submission recovery', 'stale status retains last-known rows', 'observed status', 'logs', 'stop for now', 'disable', 'remove', 'draft preservation', 'SSH key privacy', 'optional SSH install', 'Mise components and versions link to service management', 'SSH bundled components', 'closed service deep links stay closed', 'first and pending Tailscale sign-in actions', 'resuming sign-in creates no operation', 'expired sign-in recovery', 'Tailscale device approval and signed-in actions', 'unavailable Tailscale state', 'connection review', 'client route and instructions', 'reported client test', 'route removal', 'Access tabs', 'keyboard tabs', 'geometry', 'no browser exceptions'] });
     await context.close(); console.log(JSON.stringify({ ok: true, ...checks.at(-1) }));
   }
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(checks, null, 2) + '\n');

@@ -30,7 +30,7 @@ async function fixture(t) {
   t.after(async () => { controller.close(); while (!controller.idle()) await new Promise(resolve => setTimeout(resolve, 5)); store.close(); await fs.rm(root, { recursive: true, force: true }); });
   const apply = async review => { const op = controller.apply({ planId: review.id, expectedRevision: review.expectedRevision, idempotencyKey: randomUUID() }); await controller.reconcile(); while (!controller.idle()) await new Promise(resolve => setTimeout(resolve, 5)); return controller.operation(op.id); };
   const add = extra => controller.plan({ action: "add", configuration: configuration(extra), expectedRevision: 0 });
-  return { root, store, receipt, controller, supervisor, starts, stops, running, apply, add, fail: value => { fail = value; } };
+  return { root, store, receipt, controller, supervisor, tools, starts, stops, running, apply, add, fail: value => { fail = value; } };
 }
 test("literal argv, shell selection and privilege metadata are validated independently", () => {
   const normalized = customDefinition(configuration());
@@ -66,6 +66,34 @@ test("stop for now, disable and removal have distinct boot and retention semanti
   resource = f.store.get(resource.id); assert.equal(resource.enabled, false); assert.equal(resource.stoppedBoot, null);
   await f.apply(await f.controller.plan({ action: "remove", id: resource.id, expectedRevision: resource.revision }));
   assert.equal(f.store.get(resource.id), null);
+});
+test('Start resumes a temporarily stopped process without stopping it again or changing startup intent', async t => {
+  const f = await fixture(t), review = await f.add({ enabled: true }); await f.apply(review);
+  let resource = f.store.get(review.target);
+  await f.apply(await f.controller.plan({ action: 'stop', id: resource.id, expectedRevision: resource.revision }));
+  resource = f.store.get(resource.id); const stopCount = f.stops.length;
+  const operation = await f.apply(await f.controller.plan({ action: 'start', id: resource.id, expectedRevision: resource.revision }));
+  assert.equal(operation.state, 'succeeded'); assert.equal(f.stops.length, stopCount); assert.equal(f.starts.length, 2);
+  const resumed = f.store.get(resource.id); assert.equal(resumed.enabled, true); assert.equal(resumed.config.enabled, true); assert.equal(resumed.stoppedBoot, null);
+});
+test('Start refuses disabled, unavailable or already running processes, including a change after review', async t => {
+  const f = await fixture(t), review = await f.add(); await f.apply(review);
+  let resource = f.store.get(review.target);
+  await assert.rejects(f.controller.plan({ action: 'start', id: resource.id, expectedRevision: resource.revision }), /Enable/);
+  await f.apply(await f.controller.plan({ action: 'enable', id: resource.id, expectedRevision: resource.revision }));
+  resource = f.store.get(resource.id);
+  await assert.rejects(f.controller.plan({ action: 'start', id: resource.id, expectedRevision: resource.revision }), /already running/);
+  await f.apply(await f.controller.plan({ action: 'stop', id: resource.id, expectedRevision: resource.revision })); resource = f.store.get(resource.id);
+  const plan = await f.controller.plan({ action: 'start', id: resource.id, expectedRevision: resource.revision }), stopCount = f.stops.length, startCount = f.starts.length;
+  f.running.set(resource.id, true);
+  const operation = await f.apply(plan); assert.equal(operation.state, 'failed'); assert.equal(operation.code, 'conflict');
+  assert.equal(f.stops.length, stopCount); assert.equal(f.starts.length, startCount);
+  f.running.set(resource.id, false);
+  const nextPlan = await f.controller.plan({ action: 'start', id: resource.id, expectedRevision: resource.revision });
+  f.tools.resolve = async () => { f.running.set(resource.id, true); return { receipt: f.receipt }; };
+  assert.equal((await f.apply(nextPlan)).code, 'conflict'); assert.equal(f.stops.length, stopCount); assert.equal(f.starts.length, startCount);
+  f.supervisor.observe = async () => ({ unavailable: true });
+  await assert.rejects(f.controller.plan({ action: 'start', id: resource.id, expectedRevision: resource.revision }), /unavailable/);
 });
 test("tool changes and reserved ports fail before stopping an existing service", async t => {
   const f = await fixture(t);

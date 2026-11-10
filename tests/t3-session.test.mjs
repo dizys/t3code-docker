@@ -4,7 +4,8 @@
 //
 // The console trusts a browser's T3 session only as T3 vouches for it, only
 // with terminal access, and only for a short while without asking again. T3 is
-// a fake fetch here, answering /api/auth/session the way T3 0.0.45 does.
+// a fake fetch here, answering /api/auth/session with both the current
+// permissions field and older runtimes' scopes-only responses.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -13,13 +14,49 @@ import { REQUIRED_SCOPE, createT3Sessions, t3SessionCookies, trusted } from "../
 const COOKIE = "t3_session_3773_550a82367a3d";
 const STANDARD = ["orchestration:read", "orchestration:operate", "terminal:operate", "review:write", "relay:read"];
 
-test('system service maintenance verifies current granular permission on every mutation', async () => {
-  let scopes = ['terminal:operate'], requests = 0;
-  const sessions = createT3Sessions({ baseUrl: 'http://127.0.0.1:3773', ttlMs: 0, missTtlMs: 0, requiredScopes: ['terminal:operate', 'environment:maintain'], fetchImpl: async () => { requests++; return { ok: true, json: async () => ({ authenticated: true, scopes }) }; } });
-  assert.equal(await sessions.verify(COOKIE + '=scoped'), null);
-  scopes = ['terminal:operate', 'environment:maintain']; assert.ok(await sessions.verify(COOKIE + '=scoped'));
-  scopes = ['terminal:operate']; assert.equal(await sessions.verify(COOKIE + '=scoped'), null);
-  assert.equal(requests, 3);
+for (const format of ['current', 'legacy']) {
+  test(`system service maintenance rechecks granular permission on every mutation (${format})`, async () => {
+    let permissions = ['terminal:operate'], requests = 0;
+    const sessions = createT3Sessions({
+      baseUrl: 'http://127.0.0.1:3773', ttlMs: 0, missTtlMs: 0,
+      requiredScopes: ['terminal:operate', 'environment:maintain'],
+      fetchImpl: async () => {
+        requests++;
+        return { ok: true, json: async () => format === 'current'
+          ? { authenticated: true, scopes: STANDARD, permissions }
+          : { authenticated: true, scopes: permissions } };
+      },
+    });
+    assert.equal(await sessions.verify(COOKIE + '=scoped'), null);
+    permissions = ['terminal:operate', 'environment:maintain'];
+    assert.ok(await sessions.verify(COOKIE + '=scoped'));
+    permissions = ['terminal:operate'];
+    assert.equal(await sessions.verify(COOKIE + '=scoped'), null);
+    assert.equal(requests, 3);
+  });
+}
+
+test('current permissions authorize terminal and maintenance access without legacy scopes', async () => {
+  const answer = { authenticated: true, permissions: ['terminal:operate', 'environment:maintain'] };
+  assert.equal(trusted(answer), true);
+  const sessions = createT3Sessions({
+    baseUrl: 'http://127.0.0.1:3773', requiredScopes: answer.permissions,
+    fetchImpl: async () => ({ ok: true, json: async () => answer }),
+  });
+  assert.ok(await sessions.verify(COOKIE + '=current'));
+  assert.equal(trusted({ ...answer, authenticated: false }), false);
+});
+
+test('legacy scopes cannot override narrower or malformed current permissions', async () => {
+  for (const permissions of [[], ['terminal:operate'], ['environment:maintain'], null, undefined, 'terminal:operate environment:maintain', {}, ['terminal:operate', 'environment:maintain', 42]]) {
+    const answer = { authenticated: true, scopes: ['terminal:operate', 'environment:maintain'], permissions };
+    assert.equal(trusted(answer), Array.isArray(permissions) && permissions.length === 1 && permissions[0] === 'terminal:operate');
+    const sessions = createT3Sessions({
+      baseUrl: 'http://127.0.0.1:3773', requiredScopes: ['terminal:operate', 'environment:maintain'],
+      fetchImpl: async () => ({ ok: true, json: async () => answer }),
+    });
+    assert.equal(await sessions.verify(COOKIE + '=narrow'), null);
+  }
 });
 
 /** A fake T3: `sessions` maps a cookie value to its answer. Records every ask. */

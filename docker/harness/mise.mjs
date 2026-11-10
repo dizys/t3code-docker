@@ -22,6 +22,21 @@ export function writeEnv(env) {
   return { ...env, MISE_AUTO_INSTALL: "false" };
 }
 
+/** npm lifecycle scripts need a runtime even when mise's Node is unselected. */
+export function installEnv(ctx, tool) {
+  const env = writeEnv(ctx.env);
+  if (!tool.startsWith("npm:")) return env;
+  // mise resolves configured dependencies itself. An unconfigured ambient
+  // shim must not hide the image's Node from embedded npm lifecycle scripts.
+  // Keep this scoped to the installer; user shells and global pins stay owned
+  // by mise, and read-only calls keep their no-fallback policy.
+  const shims = path.resolve(ctx.home, ctx.dataDir, "shims");
+  const dirs = String(env.PATH ?? "").split(path.delimiter).filter(dir => dir && path.resolve(ctx.home, dir) !== shims);
+  const nodeDir = path.dirname(process.execPath);
+  if (!dirs.some(dir => path.resolve(ctx.home, dir) === nodeDir)) dirs.push(nodeDir);
+  return { ...env, PATH: dirs.join(path.delimiter) };
+}
+
 /** `<miseBin> -C <home> <args...>`, the single argv shape all calls use. */
 export function miseArgs(ctx, args) {
   return [ctx.miseBin, "-C", ctx.home, ...args];
@@ -108,7 +123,7 @@ export function cancelledError() {
 /** Install-and-select in one step; `mise use` records the exact requested pin. */
 export async function use(ctx, tool, version, options = null, { signal } = {}) {
   const result = await ctx.run(miseArgs(ctx, ["use", "-g", toolSpec(tool, version, options)]), {
-    env: writeEnv(ctx.env),
+    env: installEnv(ctx, tool),
     cwd: ctx.home,
     timeoutMs: ctx.timeouts.install,
     ...(signal ? { signal } : {}),

@@ -565,7 +565,7 @@ opencode_v2_out="$(docker exec -i -u t3 \
   -e "OPENCODE2_TEST_VERSION=${T3C_E2E_OPENCODE2_VERSION:-2.0.18}" \
   "$NAME" /usr/local/bin/node --input-type=module - 2>&1 <<'NODE'
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHarnessManager } from "/opt/t3-harness/index.mjs";
 import { execFileSync } from "node:child_process";
 const manager = createHarnessManager();
@@ -580,6 +580,17 @@ await mkdir(process.env.HOME + "/.local/share/opencode", { recursive: true });
 const credential = process.env.HOME + "/.local/share/opencode/auth.json";
 const saved = '{"anthropic":{"type":"api","key":"opencode-v2-e2e-key"}}';
 await writeFile(credential, saved, { mode: 0o600 });
+// An installed but globally unselected Node can leave a shim that hides the
+// image runtime. Neither npm install nor update may require changing that pin.
+const shims = process.env.MISE_DATA_DIR + "/shims";
+await mkdir(shims, { recursive: true });
+process.env.PATH = shims + ":" + process.env.PATH;
+const inheritedPath = process.env.PATH;
+const unselectedNode = async () => {
+  await rm(shims + "/node", { force: true });
+  await writeFile(shims + "/node", '#!/bin/sh\nprintf "No version is set for shim: node\\n" >&2\nexit 93\n', { mode: 0o700, flag: "wx" });
+};
+await unselectedNode();
 const next = await manager.install("opencode", { version: process.env.OPENCODE2_TEST_VERSION });
 assert.equal(next.ok, true, next.error);
 assert.equal(next.harness.miseTool, "npm:@opencode/cli");
@@ -590,9 +601,12 @@ console.log(execFileSync(process.execPath, ["/tmp/opencode-auth-smoke.mjs", next
 }));
 assert.equal(await readFile(credential, "utf8"), saved);
 assert.ok((await manager.latest("opencode")).startsWith("2."));
+await unselectedNode();
 const updated = await manager.update("opencode");
 assert.equal(updated.ok, true, updated.error);
 assert.ok(updated.harness.verifiedVersion.startsWith("2."));
+assert.equal(process.env.PATH, inheritedPath, "managed installs must not rewrite the caller tool environment");
+assert.doesNotMatch(await readFile(process.env.MISE_CONFIG_DIR + "/config.toml", "utf8"), /^\s*node\s*=/m);
 const removed = await manager.uninstall("opencode");
 assert.equal(removed.ok, true, removed.error);
 assert.equal(removed.harness.installed, false);

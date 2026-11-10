@@ -41,10 +41,18 @@ export function t3SessionCookies(header) {
     .join("; ");
 }
 
+// Current runtimes keep granular grants in `permissions` and expose only a
+// legacy projection in `scopes`. When present, permissions is authoritative;
+// an empty or malformed value must never fall back to broader legacy scopes.
+function sessionPermissions(answer) {
+  const permissions = answer && Object.hasOwn(answer, "permissions") ? answer.permissions : answer?.scopes;
+  return Array.isArray(permissions) && permissions.every(permission => typeof permission === "string") ? permissions : [];
+}
+
 /** Whether T3's answer describes a session the console can trust. */
 export function trusted(answer) {
   return Boolean(answer && answer.authenticated === true
-    && Array.isArray(answer.scopes) && answer.scopes.includes(REQUIRED_SCOPE));
+    && sessionPermissions(answer).includes(REQUIRED_SCOPE));
 }
 
 export function createT3Sessions({
@@ -97,7 +105,7 @@ export function createT3Sessions({
         remember(key, null, now() + missTtlMs);
         return null;
       }
-      if (!trusted(answer) || !requiredScopes.every(scope => answer.scopes.includes(scope))) {
+      if (!trusted(answer) || !requiredScopes.every(scope => sessionPermissions(answer).includes(scope))) {
         remember(key, null, now() + missTtlMs);
         return null;
       }

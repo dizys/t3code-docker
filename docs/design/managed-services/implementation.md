@@ -37,7 +37,8 @@ does not close the complete production matrix in `acceptance.csv`.
 
 ## Executed local checks
 
-The full local Node suite passes all 1,723 tests. The Services browser audit
+The full local Node suite passes all 1,790 tests after integration with the
+latest main branch, including Plugins. The Services browser audit
 passes all four layouts with lost-response recovery, route setup and removal,
 reported client evidence, access-impact acknowledgement and private-key input
 clearing. Notifications remain hidden while a service dialog or editor is open,

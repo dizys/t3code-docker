@@ -4,7 +4,7 @@ This document records the design-stage prototype evidence. Current backend,
 integrated-console evidence and remaining gates are tracked in
 [implementation.md](implementation.md).
 
-Result: the proposed design and its interactive reference include custom user-account services and are complete for review. The service backend is not implemented. The 122 gates in [acceptance.csv](acceptance.csv) remain required before production.
+Design-stage result: the proposed design and its interactive reference include custom user-account services and are complete for review. Backend implementation had not begun at that stage. [implementation.md](implementation.md) tracks the subsequent implementation and evidence against the 122 gates in [acceptance.csv](acceptance.csv).
 
 ## Artifact and source
 

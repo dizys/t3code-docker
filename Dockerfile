@@ -317,10 +317,8 @@ ENV T3CODE_HOME=/home/t3/.t3 \
     PUID=1000 \
     PGID=1000
 
-RUN mkdir -p /workspace /home/t3/.t3 /home/t3/go /var/lib/t3code/ssh-host-keys \
-    && chown -R t3:t3 /workspace /home/t3 \
-    && chown root:root /var/lib/t3code/ssh-host-keys \
-    && chmod 0700 /var/lib/t3code/ssh-host-keys
+RUN mkdir -p /workspace /home/t3/.t3 /home/t3/go \
+    && chown -R t3:t3 /workspace /home/t3
 
 VOLUME ["/home/t3", "/workspace"]
 WORKDIR /workspace

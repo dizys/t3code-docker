@@ -244,8 +244,16 @@ const geometry = () => {
 
       // The deployed failure: a persisted v2 cache target on a v1 install
       // advertised a major upgrade, but both Update controls sent {id} only.
-      const previousHarnesses = structuredClone(fixture.harnesses), previousServer = structuredClone(fixture.server), previousRuntime = structuredClone(runtime);
-      for (const row of fixture.harnesses) { row.latestVersion = null; row.newestVersion = null; }
+      const previousFacts = Object.fromEntries(['harnesses', 'toolchains', 'packages', 'sourceControl', 'operations', 'server'].map(name => [name, structuredClone(fixture[name])]));
+      const previousRuntime = structuredClone(runtime);
+      // This scenario owns the whole Updates page. Live homes can have newer
+      // tools, held releases or an earlier failed update in any category.
+      // Clearing only agent caches made the empty-state assertion depend on
+      // whichever tool versions the native image had checked during startup.
+      for (const rows of [fixture.harnesses, fixture.toolchains, fixture.packages, fixture.sourceControl]) for (const row of rows || []) {
+        Object.assign(row, { latestVersion: null, newestVersion: null, inProgress: false, failed: false, failure: null, operation: null, operationState: 'ok' });
+      }
+      fixture.operations = {};
       Object.assign(fixture.harnesses.find(row => row.id === 'opencode'), { installed: true, runnable: true, signedIn: true, installedVersion: '1.19.5', version: '1.19.5', latestVersion: '2.2.5', failed: false, failure: null, inProgress: false, operation: null });
       Object.assign(fixture.server, { ok: true, version: '0.1.7' }); runtime.version = '0.1.7';
       await refreshStatus(); await failedRow.getByRole('button', { name: 'Upgrade to v2…', exact: true }).waitFor();
@@ -255,6 +263,20 @@ const geometry = () => {
       await host.screenshot({ path: path.join(output, `${tag}-opencode-v2-row.png`) });
       await page.evaluate(() => { location.hash = 'updates'; });
       await page.getByRole('heading', { name: 'Major upgrades', exact: true }).waitFor();
+      // An ordinary tool update can coexist with the major upgrade. Only the
+      // ordinary update belongs in Update all. All changes stay intercepted.
+      const bun = fixture.toolchains.find(row => row.id === 'bun');
+      assert.ok(bun, 'fixture includes Bun');
+      Object.assign(bun, { installed: true, version: '1.0.0', latestVersion: '2.0.0' });
+      await refreshStatus();
+      await page.locator('#page-updates [data-key="row-toolchain:bun"]').waitFor();
+      await page.getByRole('button', { name: 'Update all · 1', exact: true }).waitFor();
+      const regular = page.locator('#page-updates section[data-key="up-available"]');
+      assert.equal(await regular.count(), 1);
+      assert.equal(await regular.locator('[data-key="row-harness:opencode"]').count(), 0, 'the major upgrade stays out of regular updates when a tool update exists');
+      assert.equal(await page.locator('#page-updates section[data-key="up-major"] [data-key="row-harness:opencode"]').count(), 1);
+      bun.latestVersion = null;
+      await refreshStatus();
       await page.getByText('No regular updates available', { exact: true }).waitFor();
       assert.equal(await page.locator('[data-cmd="updates.all"]').count(), 0, 'reviewed major upgrades are not batch update candidates');
       await check('separate major upgrades');
@@ -286,7 +308,7 @@ const geometry = () => {
       assert.equal(opencodeUpdates.length, 1);
       await versions.getByRole('button', { name: 'Cancel', exact: true }).click(); await versions.waitFor({ state: 'hidden' });
       opencodeV2Unavailable = false;
-      fixture.harnesses = previousHarnesses; fixture.server = previousServer; Object.assign(runtime, previousRuntime);
+      Object.assign(fixture, previousFacts); Object.assign(runtime, previousRuntime);
       await refreshStatus();
 
       // Automatic updates: a switch per category on the Updates page, each

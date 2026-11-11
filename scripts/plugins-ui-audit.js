@@ -6,6 +6,7 @@ const path=require('node:path');
 let chromium;try{({chromium}=require('playwright'));}catch{({chromium}=require('playwright-core'));}
 const {statusFor}=require('./lib/console-fixtures.cjs');
 const {createSkillsFixtures}=require('./lib/skills-fixtures.cjs');
+const auditPluginBatches=require('./lib/plugins-batch-ui.cjs');
 const base=process.argv[2]||'http://127.0.0.1:23785/__setup/';
 const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkdirSync(output,{recursive:true});
 (async()=>{
@@ -77,6 +78,7 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
    await dialog.locator('summary').filter({hasText:'removed.txt'}).click();
    await dialog.locator('pre').filter({hasText:'Old file being deleted.'}).waitFor();
    await page.getByRole('button',{name:'Close plugin inspector',exact:true}).click();
+   posts.length=0;
    await library.getByRole('button',{name:'Install from source',exact:true}).filter({visible:true}).click();
    dialog=page.getByRole('dialog');await dialog.getByLabel('Repository or container folder').fill(plan.source);
    await dialog.getByRole('button',{name:'Read',exact:true}).click();
@@ -94,6 +96,7 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
    await dialog.locator('[data-plugin-agent="codex"]').uncheck();
    await dialog.locator('[data-plugin-agent="opencode"]').check();
    await dialog.getByRole('button',{name:'Review 2 installations',exact:true}).click();
+   await dialog.locator('[data-plugin-replan]:enabled').waitFor();
    assert.deepEqual(posts.filter(p=>p.suffix==='/plan').map(p=>p.input.provider),['opencode','opencode']);
    await dialog.getByText('OpenCode may immediately load or reload this module',{exact:false}).waitFor();
    assert(await dialog.getByRole('button',{name:'Install 2 plugins',exact:true}).isDisabled(),'code access requires consent');
@@ -102,13 +105,14 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
    await dialog.locator('[data-plugin-agent="pi"]').check();
    assert(await dialog.locator('[data-plugin-agent="cursor"]').isDisabled(),'detected integrations without a Setup adapter require native setup');
    await dialog.getByRole('button',{name:'Review 4 installations',exact:true}).click();
-   await dialog.getByText('Automatic commands',{exact:true}).waitFor();
+   await dialog.locator('[data-plugin-replan]:enabled').waitFor();
+   assert.equal(await dialog.getByText('Automatic commands',{exact:true}).count(),4);
    assert.deepEqual(posts.filter(p=>p.suffix==='/plan').map(p=>p.input.provider),['opencode','opencode','claude','pi','claude','pi']);
    assert.equal(await page.evaluate(()=>window.pluginInjected),undefined);
    assert.equal(posts.filter(p=>p.suffix==='/apply').length,0,'source preview never installs');
    await dialog.locator('details > summary').first().click();
-   await dialog.locator('summary').filter({hasText:'.codex-plugin/plugin.json'}).click();
-   await dialog.locator('pre').filter({hasText:'{"name":"tokeneconomizer"}'}).waitFor();
+   await dialog.locator('summary').filter({hasText:'.codex-plugin/plugin.json'}).first().click();
+   await dialog.locator('pre').filter({hasText:'{"name":"tokeneconomizer"}'}).first().waitFor();
    assert(await dialog.getByRole('button',{name:'Install 4 plugins',exact:true}).isDisabled(),'code access requires consent');
    await dialog.locator('[data-plugin-consent]').check();
    await page.screenshot({path:path.join(output,theme+'-'+width+'-review.png')});
@@ -116,8 +120,8 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
    await dialog.getByRole('button',{name:'Install 4 plugins',exact:true}).click();
    await dialog.getByText('Installed for Claude Code, Pi',{exact:true}).waitFor();
    await dialog.getByText('Check it works',{exact:true}).waitFor();
-   await dialog.getByText('/tokeneconomizer:',{exact:false}).waitFor();
-   assert.equal(await dialog.getByText('~/.tokeneconomizer/bin/te',{exact:false}).count(),0,'verify guidance uses the installed name and never asserts a plugin binary');
+   await dialog.getByText('Follow each installed package’s README',{exact:false}).waitFor();
+   assert.equal(await dialog.getByText('~/.tokeneconomizer/bin/te',{exact:false}).count(),0,'verification guidance never assumes a plugin-specific binary');
    assert.equal(posts.filter(p=>p.suffix==='/apply').length,4);
    await dialog.getByRole('button',{name:'Close plugin installation',exact:true}).click();
    rows.push({...rows[0],id:'c'.repeat(32),provider:'claude',nativeId:'tokeneconomizer@claude-fixture',enabled:false,path:'/home/fixture/.claude/plugins/cache/tokeneconomizer'});
@@ -157,8 +161,9 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
    await library.getByText('No plugins to show',{exact:true}).waitFor();
    await library.getByRole('button',{name:'Clear filters',exact:true}).click();
    await library.getByRole('button',{name:'curated-default',exact:true}).filter({visible:true}).waitFor();
-   assert.equal(posts.filter(p=>p.suffix==='/apply').length,2,'hiding and showing never change plugin settings');
+   assert.equal(posts.filter(p=>p.suffix==='/apply').length,4,'hiding and showing never change plugin settings');
    assert.deepEqual(errors,[]);console.log('Passed Plugins',theme,width);await page.close();
   }
+  await auditPluginBatches({browser,base,output});
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

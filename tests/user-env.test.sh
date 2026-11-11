@@ -82,10 +82,15 @@ for shell in dash bash; do
   printf '%s\n' '/state/path with spaces/opencode' > "$WORK/run/opencode-config-dir"
   out="$(probe "$shell" PATH=/usr/bin:/bin T3_TEST_UID=1000 T3_RUN_DIR="$WORK/run")"
   is "CLI shells use the entrypoint's chosen OpenCode config" '/state/path with spaces/opencode' "$(field "$out" opencode)"
+  case "$(field "$out" path)" in
+    /usr/local/lib/t3-node-runtime:*) ok "Node runtime dispatch precedes persisted mise shims" ;;
+    *) no "Node runtime dispatch precedes persisted mise shims" ;;
+  esac
   out="$(probe "$shell" PATH=/usr/bin:/bin T3_TEST_UID=1000 T3_RUN_DIR="$WORK/run" OPENCODE_CONFIG_DIR=/custom/opencode)"
   is "an explicit CLI override takes precedence" '/custom/opencode' "$(field "$out" opencode)"
   out="$(probe "$shell" PATH=/usr/bin:/bin T3_TEST_UID=0 T3_RUN_DIR="$WORK/run")"
   is "root never reads the user's runtime config" '' "$(field "$out" opencode)"
+  is "root never enters the user runtime dispatch" '/usr/bin:/bin' "$(field "$out" path)"
 done
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

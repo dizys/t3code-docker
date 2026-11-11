@@ -1205,6 +1205,12 @@ launcher_runs_the_agent() {
 }
 check "a launcher runs its agent" launcher_runs_the_agent
 
+node_runtime_survives_unselected_shims() {
+  docker cp scripts/node-runtime-smoke.mjs "$NAME:/tmp/node-runtime-smoke.mjs" >/dev/null 2>&1 || return 1
+  docker exec -u t3 "$NAME" /usr/local/bin/node /tmp/node-runtime-smoke.mjs >>"$UI_AUDIT_LOG" 2>&1
+}
+check "Node tools and Pi checks work with unselected shims and respect project pins" node_runtime_survives_unselected_shims
+
 pi_profile_has_signin_warning() {
   docker exec -u t3 "$NAME" node --input-type=module -e '
     import assert from "node:assert/strict";

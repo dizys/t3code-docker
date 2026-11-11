@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { stripTypeScriptTypes } from 'node:module';
+import { stripTypeScriptTypes } from './lib/strip-types.mjs';
 import test from 'node:test';
 import { assets, creates, files, patchGatewayContext } from '../docker/runtime/patches/gateway-context.mjs';
 import { patches } from '../docker/runtime/patches/index.mjs';

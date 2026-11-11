@@ -1,5 +1,31 @@
 import { FilesError } from './paths.mjs';
 import { execFile } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+
+/** Directory names as raw bytes, on any runtime. Node streams `Dirent`
+ * objects with a buffer `name`; other runtimes may hand back the name
+ * buffers themselves, or lack buffer `opendir` entirely and fall back to
+ * one `readdir`. Either way the result iterates `{ name: Buffer }` and
+ * offers `close()` for `finally`, so the pinned-descriptor lookup and the
+ * fatal UTF-8 decoding at the call sites stay exactly as they are. */
+export async function opendirRaw(pinned) {
+  try {
+    const directory = await fs.opendir(pinned, { encoding: 'buffer', bufferSize: 64 });
+    return {
+      close: () => directory.close(),
+      [Symbol.asyncIterator]: async function* () {
+        for await (const entry of directory) yield { name: Buffer.isBuffer(entry) ? entry : entry.name };
+      },
+    };
+  } catch (error) {
+    if (error?.code !== 'ERR_INVALID_ARG_TYPE') throw error;
+    const names = await fs.readdir(pinned, { encoding: 'buffer' });
+    return {
+      close: async () => {},
+      [Symbol.asyncIterator]: async function* () { for (const name of names) yield { name: Buffer.from(name) }; },
+    };
+  }
+}
 
 // No shell, ever. Both the process deadline and captured output are bounded.
 // CLIs that consume paths must put -- before them at their call site.

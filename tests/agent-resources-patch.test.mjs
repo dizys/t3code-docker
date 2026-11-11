@@ -3,7 +3,7 @@ import test from 'node:test';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { stripTypeScriptTypes } from 'node:module';
+import { stripTypeScriptTypes } from './lib/strip-types.mjs';
 import { pathToFileURL } from 'node:url';
 import { files, creates, patchAgentResources } from '../docker/runtime/patches/agent-resources.mjs';
 import { patches } from '../docker/runtime/patches/index.mjs';

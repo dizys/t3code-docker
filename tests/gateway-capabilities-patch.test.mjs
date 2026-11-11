@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { stripTypeScriptTypes } from 'node:module';
+import { stripTypeScriptTypes } from './lib/strip-types.mjs';
 import test from 'node:test';
 import { source, stableSource } from './fixtures/gateway-capabilities-source.mjs';
 import { files, patchGatewayCapabilities } from '../docker/runtime/patches/gateway-capabilities.mjs';

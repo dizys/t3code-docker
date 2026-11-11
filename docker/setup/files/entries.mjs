@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { fail, normalizePath, validateName } from './paths.mjs';
 import { statRevision } from './text.mjs';
-import { createCommandRunner } from './io.mjs';
+import { createCommandRunner, opendirRaw } from './io.mjs';
 
 // GNU mv uses renameat2(RENAME_NOREPLACE), avoiding the lstat/rename gap.
 // --no-copy also makes an unexpected device change fail without a partial copy.
@@ -114,7 +114,7 @@ export async function treeRevision(value,{signal,maxEntries=200_000,timeoutMs=20
       hash.update(relative+'\0'+statRevision(stat)+'\0');const inode=String(stat.dev)+':'+String(stat.ino);if(!inodes.has(inode)){inodes.add(inode);bytes+=Number(stat.blocks)*512;}await onEntry?.({path:value+relative,relative,stat});
       if(stat.isDirectory()&&!stat.isSymbolicLink()){
         const handle=await fs.open(pin.pinned,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
-        try{if(identity(await handle.stat({bigint:true}))!==identity(stat))fail('changed','The folder changed. Review it again.');const names=[],directory=await fs.opendir(`/proc/self/fd/${handle.fd}`,{encoding:'buffer'}),decoder=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});for await(const entry of directory){if(names.length+entries>=maxEntries)fail('too-large','This folder is too large to review here.');let name;try{name=decoder.decode(entry.name);}catch{fail('invalid','This folder contains a filename that cannot be represented as UTF-8. Use a terminal to review it without changing its name.');}names.push(name);}names.sort();for(const name of names)await visit(`/proc/self/fd/${handle.fd}/${name}`,relative+'/'+name,depth+1);if(!same(stat,await handle.stat({bigint:true})))fail('changed','The folder changed. Review it again.');}finally{await handle.close();}
+        try{if(identity(await handle.stat({bigint:true}))!==identity(stat))fail('changed','The folder changed. Review it again.');const names=[],directory=await opendirRaw(`/proc/self/fd/${handle.fd}`),decoder=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});for await(const entry of directory){if(names.length+entries>=maxEntries)fail('too-large','This folder is too large to review here.');let name;try{name=decoder.decode(entry.name);}catch{fail('invalid','This folder contains a filename that cannot be represented as UTF-8. Use a terminal to review it without changing its name.');}names.push(name);}names.sort();for(const name of names)await visit(`/proc/self/fd/${handle.fd}/${name}`,relative+'/'+name,depth+1);if(!same(stat,await handle.stat({bigint:true})))fail('changed','The folder changed. Review it again.');}finally{await handle.close();}
       }
     }finally{await pin.close();}
   };

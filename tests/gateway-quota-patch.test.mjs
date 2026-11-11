@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { stripTypeScriptTypes } from 'node:module';
+import { stripTypeScriptTypes } from './lib/strip-types.mjs';
 import test from 'node:test';
 import { files, quotaFile, quotaSource, patchGatewayQuota } from '../docker/runtime/patches/gateway-quota.mjs';
 import { patches, createdFiles } from '../docker/runtime/patches/index.mjs';

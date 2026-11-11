@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { stripTypeScriptTypes } from 'node:module';
+import { stripTypeScriptTypes } from './lib/strip-types.mjs';
 import vm from 'node:vm';
 import test from 'node:test';
 import { clientSource } from '../docker/runtime/patches/setup-palette.mjs';

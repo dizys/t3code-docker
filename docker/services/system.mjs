@@ -82,7 +82,7 @@ export async function configureSystem(resource, p) {
     await protectedPath(runtime);
     await protectedWrite(runtime + "/ssh-authorized-keys", keys.map(key => key.publicKey).join("\n") + "\n", 0o644);
     const file = instance + "/sshd_config";
-    const settings = `Port ${config.port}\nAddressFamily inet\nListenAddress ${config.listen}\nHostKey ${host.key}\nPidFile none\nAuthorizedKeysFile ${runtime}/ssh-authorized-keys\nSshdSessionPath ${artifact.path}/usr/lib/openssh/sshd-session\nSshdAuthPath ${artifact.path}/usr/lib/openssh/sshd-auth\nStrictModes yes\nPubkeyAuthentication yes\nAuthenticationMethods publickey\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\nAllowUsers t3\nAllowTcpForwarding yes\nGatewayPorts no\nPermitTTY yes\nX11Forwarding no\nAllowAgentForwarding no\nPermitTunnel no\nUsePAM no\nPermitUserEnvironment no\nPrintMotd no\nSubsystem sftp internal-sftp\nLogLevel INFO\n`;
+    const settings = `Port ${config.port}\nAddressFamily inet\nListenAddress ${config.listen}\nHostKey ${host.key}\nPidFile none\nAuthorizedKeysFile ${runtime}/ssh-authorized-keys\nSshdSessionPath ${servicePackagePath(artifact, 'openssh-server')}/usr/lib/openssh/sshd-session\nSshdAuthPath ${servicePackagePath(artifact, 'openssh-server')}/usr/lib/openssh/sshd-auth\nStrictModes yes\nPubkeyAuthentication yes\nAuthenticationMethods publickey\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\nAllowUsers t3\nAllowTcpForwarding yes\nGatewayPorts no\nPermitTTY yes\nX11Forwarding no\nAllowAgentForwarding no\nPermitTunnel no\nUsePAM no\nPermitUserEnvironment no\nPrintMotd no\nSubsystem sftp internal-sftp\nLogLevel INFO\n`;
     await protectedWrite(file, settings);
     const cmd = await systemCommand(resource, p);
     try { await command(cmd.executable, ["-t", "-f", file], { env: cmd.env }); }
@@ -95,11 +95,14 @@ export async function configureSystem(resource, p) {
   }
   return id === 'tailscale' ? { ...resource.details } : {};
 }
+export const servicePackagePath = (artifact, name) => artifact?.manager === 'mise' ? artifact.components?.find(item => item.name === name)?.path : artifact?.path;
 export async function systemCommand(resource, p) {
   const { id, artifact, config } = resource;
-  if (!artifact?.path?.startsWith(p.root + "/artifacts/")) throw new ServiceError("artifact", "Install the verified service payload first.");
-  await protectedPath(artifact.path);
-  const env = { ...systemEnv, LD_LIBRARY_PATH: artifact.path + "/usr/lib/" + (process.arch === "arm64" ? "aarch64-linux-gnu" : "x86_64-linux-gnu") };
+  const locations = artifact?.manager === 'mise' ? artifact.components?.map(item => item.path) : [artifact?.path];
+  const prefix = p.root + (artifact?.manager === 'mise' ? '/mise/data/installs/' : '/artifacts/');
+  if (!locations?.length || locations.some(location => typeof location !== 'string' || !location.startsWith(prefix) || path.resolve(location) !== location)) throw new ServiceError("artifact", "Install the verified service packages first.");
+  for (const location of locations) await protectedPath(location);
+  const env = { ...systemEnv, LD_LIBRARY_PATH: locations.map(location => location + "/usr/lib/" + (process.arch === "arm64" ? "aarch64-linux-gnu" : "x86_64-linux-gnu")).join(':') };
   const instance = path.join(p.root, "instances", id);
   if (id === "openssh") return { executable: artifact.path + "/usr/sbin/sshd", argv: ["-D", "-e", "-f", instance + "/sshd_config"], env };
   if (id === "tailscale") return { executable: artifact.path + "/tailscaled", argv: ["--tun=userspace-networking", "--state=" + instance + "/tailscaled.state", "--socket=/run/t3code-services/tailscale.sock", "--statedir=" + instance], env };

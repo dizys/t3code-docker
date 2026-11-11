@@ -10,7 +10,7 @@ Separate three things that might otherwise be called a formula:
 2. A signed artifact catalogue resolves approved exact versions to immutable architecture-specific payloads and their verification metadata.
 3. A user-selected instance supplies typed configuration and references to credentials, connections and artifacts.
 
-The user opts into the installation through a task such as Set up SSH. They do not select a package manager. Normal mise tools continue to be unprivileged tools. Reuse the existing catalogue presentation, operation patterns and install receipts where suitable; keep privileged execution and protected storage separate.
+The user opts into the installation through a task such as Set up SSH. Mise owns the image-approved HTTP packages in an isolated root-owned store inside the Services volume. A trusted adapter unpacks Debian package data without maintainer scripts. User and project config, hooks and plugins are excluded from privileged Mise commands. Normal Mise tools remain unprivileged. Reuse the existing catalogue presentation, operation patterns and install receipts where suitable; keep privileged execution and protected storage separate.
 
 A reviewed generic user-process adapter supports arbitrary custom executables and explicit scripts as part of the first Services release. It executes only in the user-account worker and reuses shared lifecycle/operation/inspector contracts. A new root privilege profile requires an image/controller release and review. Neither a custom definition nor a catalogue update can silently grant a root capability. See [custom-services.md](custom-services.md).
 

@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { serviceRequest } from '/opt/t3-services/client.mjs';
+import { miseEnvironment } from '/opt/t3-services/mise-packages.mjs';
 const exec = promisify(execFile), phase = process.argv[2] || 'prepare';
 const root = '/var/lib/t3code/services/smoke-fixture';
 const call = (domain, action, input = {}) => serviceRequest(domain, action, input);
@@ -50,6 +51,11 @@ if (phase === 'prepare') {
   await apply('system', { action: 'install', id: 'openssh', expectedRevision: 0, configuration: { port: 22222, listen: '127.0.0.1', keys: [key], enabled: true } });
   const ssh = await saved('system', 'openssh');
   assert.equal(ssh.observation.state, 'ready');
+  assert.equal(ssh.artifact.manager, 'mise');
+  assert.deepEqual(ssh.artifact.components.map(item => item.name), ['openssh-server', 'libwrap0', 'libwtmpdb0', 'libtalloc2']);
+  const component = ssh.artifact.components[0], miseRoot = '/var/lib/t3code/services/mise';
+  const inventory = JSON.parse((await exec('/usr/local/bin/mise', ['-C', miseRoot, 'ls', '--installed', '--json'], { env: miseEnvironment(miseRoot, miseRoot + '/recipes/' + component.key + '/mise.toml') })).stdout);
+  for (const item of ssh.artifact.components) assert.ok(inventory[item.tool].some(entry => entry.installed && entry.version === item.miseVersion && entry.install_path === item.path));
   assert.equal(ssh.artifact.arch, process.arch === 'x64' ? 'amd64' : process.arch);
   const { stdout: known } = await exec('/usr/bin/ssh-keyscan', ['-p', '22222', '127.0.0.1'], { timeout: 10000 });
   await fs.writeFile(root + '/known_hosts', known, { mode: 0o600 });
@@ -87,12 +93,14 @@ if (phase === 'prepare') {
   const { stdout: tailCli } = await exec(process.execPath, [fileURLToPath(new URL('./services-tailscale-cli-smoke.mjs', import.meta.url)), tail.artifact.path + '/tailscale'], { timeout: 30000 });
   process.stdout.write(tailCli);
   await edit('system', 'tailscale', 'uninstall');
+  for (const item of tail.artifact.components) await assert.rejects(fs.access(item.path));
   const token = 'services-test-canary-'.replaceAll('-', '_').repeat(6);
   await apply('system', { action: 'install', id: 'cloudflared', expectedRevision: 0, configuration: { token, enabled: false } });
   const cloud = await saved('system', 'cloudflared');
   assert.ok(!JSON.stringify(await call('system', 'snapshot')).includes(token));
   assert.ok((await exec(cloud.artifact.path + '/cloudflared', ['--version'])).stdout.includes(catalogue.services.cloudflared.version));
   await edit('system', 'cloudflared', 'uninstall');
+  for (const item of cloud.artifact.components) await assert.rejects(fs.access(item.path));
   const id = await custom(); await edit('user', id, 'stop');
   const receipt = { id, fingerprint: ssh.details.hostFingerprint, artifact: ssh.artifact.digest, architecture: ssh.artifact.arch, sshRevision: ssh.revision };
   await fs.writeFile(root + '/receipt.json', JSON.stringify(receipt), { mode: 0o600 });
@@ -106,17 +114,28 @@ if (phase === 'prepare') {
   const { stdout: account } = await exec('/usr/bin/ssh', ['-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=' + root + '/known_hosts', '-i', root + '/client', '-p', '22222', 't3@127.0.0.1', 'id', '-u'], { timeout: 10000 });
   assert.equal(Number(account.trim()), Number(process.env.PUID || 1000));
   if (phase === 'recreate') {
-    await edit('system', 'openssh', 'uninstall');
+    // Linux forbids writing an executable while a process is using it. Stop
+    // the owned SSH process tree before deliberately corrupting its package.
+    await edit('system', 'openssh', 'stop');
+    assert.equal((await saved('system', 'openssh')).observation.state, 'stopped');
     const config = (await saved('system', 'openssh')).config;
     const executable = ssh.artifact.path + '/usr/sbin/sshd', original = await fs.readFile(executable);
     await fs.appendFile(executable, 'test-only-cache-tamper');
     await edit('system', 'openssh', 'edit', { port: config.port, listen: config.listen, keys: config.keys, enabled: true }, 'failed');
-    assert.equal((await saved('system', 'openssh')).uninstalled, true);
+    assert.notEqual((await saved('system', 'openssh')).uninstalled, true);
+    assert.equal((await saved('system', 'openssh')).observation.state, 'stopped');
     await fs.writeFile(executable, original);
     await edit('system', 'openssh', 'edit', { port: config.port, listen: config.listen, keys: config.keys, enabled: true });
     assert.equal((await saved('system', 'openssh')).details.hostFingerprint, receipt.fingerprint);
+    await edit('system', 'openssh', 'stop');
+    assert.equal((await saved('system', 'openssh')).observation.state, 'stopped');
+    await edit('system', 'openssh', 'start');
+    assert.equal((await saved('system', 'openssh')).observation.state, 'ready');
     await edit('user', receipt.id, 'remove'); await edit('system', 'openssh', 'uninstall');
+    for (const item of ssh.artifact.components) await assert.rejects(fs.access(item.path));
+    assert.equal((await saved('system', 'openssh')).removal.softwareRemoved, true);
+    await fs.access('/var/lib/t3code/services/instances/openssh/identity/ed25519');
     await fs.rm(root, { recursive: true, force: true });
   }
-  console.log(JSON.stringify({ ok: true, phase, arch: process.arch, checks: ['same protected host identity', 'same artifact digest', 'boot reconciliation', 'stop-for-now resumes', ...(phase === 'recreate' ? ['changed PUID/PGID login', 'tampered cache rejected', 'offline cached reinstall', 'temporary test access removed'] : [])] }));
+  console.log(JSON.stringify({ ok: true, phase, arch: process.arch, checks: ['same protected host identity', 'same artifact digest', 'boot reconciliation', 'stop-for-now resumes', ...(phase === 'recreate' ? ['changed PUID/PGID login', 'tampered Mise package rejected', 'offline verified package reuse', 'Start resumes stopped SSH', 'Mise uninstall removes software and dependencies', 'host identity retained after uninstall', 'temporary test access removed'] : [])] }));
 }

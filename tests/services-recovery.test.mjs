@@ -8,7 +8,7 @@ import { openStore, ServiceError } from '../docker/services/store.mjs';
 import { createController } from '../docker/services/controller.mjs';
 import { createNetwork } from '../docker/services/network.mjs';
 import { createServicesAPI } from '../docker/services/client.mjs';
-import { customDefinition } from '../docker/services/definition.mjs';
+import { customDefinition, systemDefinition } from '../docker/services/definition.mjs';
 import { inspectTar } from '../docker/services/archive.mjs';
 import { logWriter, readLogs } from '../docker/services/logs.mjs';
 
@@ -98,6 +98,54 @@ test('new cross-domain dependents block system uninstall before the payload is s
   const op = controller.apply({ planId: plan.id, expectedRevision: 1, idempotencyKey: randomUUID(), acknowledgeAccessImpact: true });
   await controller.reconcile(); while (!controller.idle()) await new Promise(resolve => setTimeout(resolve, 5));
   assert.equal(controller.operation(op.id).code, 'dependencies'); assert.equal(stops, 0); assert.equal(store.get('openssh').enabled, true);
+});
+test('uninstall waits for actual software removal and leaves a truthful retryable registration on failure', async t => {
+  const { store } = await fixture(t, { domain: 'system' });
+  const artifact = { path: '/fixture/installed', manager: 'mise', components: [] };
+  store.put({ ...service, id: 'openssh', artifact, config: { ...service.config, shutdownMs: 100, enabled: true } });
+  let fail = true, removals = 0;
+  const controller = createController({ store, boot: 'fixture', supervisor: { stop: async () => {}, observe: async () => ({ up: false }) },
+    artifacts: { remove: async () => { removals++; if (fail) throw new ServiceError('package-manager', 'Removal failed'); return { softwareRemoved: true, settingsRetained: true, identitiesRetained: true }; } } });
+  t.after(() => controller.close());
+  const apply = async () => {
+    const plan = await controller.plan({ action: 'uninstall', id: 'openssh', expectedRevision: store.get('openssh').revision });
+    const args = { planId: plan.id, expectedRevision: plan.expectedRevision, idempotencyKey: randomUUID(), acknowledgeAccessImpact: true };
+    const op = controller.apply(args); await controller.reconcile(); while (!controller.idle()) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(controller.apply(args).id, op.id); return controller.operation(op.id);
+  };
+  assert.equal((await apply()).state, 'failed'); assert.deepEqual(store.get('openssh').artifact, artifact); assert.equal(store.get('openssh').uninstalled, undefined); assert.equal(store.get('openssh').enabled, false);
+  fail = false; assert.equal((await apply()).state, 'succeeded'); assert.equal(removals, 2);
+  assert.equal(store.get('openssh').artifact, null); assert.equal(store.get('openssh').uninstalled, true); assert.equal(store.get('openssh').removal.softwareRemoved, true);
+});
+test('reviewed Mise migration keeps a temporarily stopped legacy service stopped and retains rollback software', async t => {
+  const { store } = await fixture(t, { domain: 'system' });
+  const oldArtifact = { path: '/fixture/old', version: '1.0.0' }, nextArtifact = { manager: 'mise', version: '1.0.0', path: '/fixture/mise', payloads: [] };
+  const config = { name: 'Tailscale', enabled: true, shutdownMs: 100, endpoints: [] };
+  store.put({ id: 'tailscale', kind: 'service', revision: 1, enabled: true, config, artifact: oldArtifact, stoppedBoot: 'fixture' });
+  let starts = 0, removals = 0;
+  const controller = createController({ store, boot: 'fixture', supervisor: { stop: async () => {}, start: async () => { starts++; }, observe: async () => ({ up: false }) },
+    artifacts: { selection: () => nextArtifact, install: async () => nextArtifact, remove: async () => { removals++; } }, system: { configureSystem: async () => ({}), paths: {} } });
+  t.after(() => controller.close());
+  await controller.reconcile(); assert.equal(store.get('tailscale').artifact.manager, undefined);
+  const plan = await controller.plan({ action: 'migrate', id: 'tailscale', expectedRevision: 1 }); assert.match(plan.review.effect, /stopped or disabled service stays stopped/);
+  const op = controller.apply({ planId: plan.id, expectedRevision: 1, idempotencyKey: randomUUID(), acknowledgeAccessImpact: true });
+  await controller.reconcile(); while (!controller.idle()) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(controller.operation(op.id).state, 'succeeded'); assert.equal(store.get('tailscale').artifact.manager, 'mise');
+  assert.equal(store.get('tailscale').stoppedBoot, 'fixture'); assert.equal(starts, 0); assert.equal(removals, 0);
+});
+test('editing a legacy service does not silently migrate its package ownership', async t => {
+  const { store } = await fixture(t, { domain: 'system' });
+  const config = systemDefinition('tailscale', { hostname: 'fixture', enabled: false }), artifact = { path: '/fixture/old', version: '1.0.0' };
+  store.put({ id: 'tailscale', kind: 'service', revision: 1, enabled: false, config, artifact });
+  let installs = 0;
+  const controller = createController({ store, supervisor: { stop: async () => {}, observe: async () => ({ up: false }) },
+    artifacts: { selection: () => ({ manager: 'mise' }), install: async () => { installs++; } }, system: { configureSystem: async () => ({}), paths: {} } });
+  t.after(() => controller.close());
+  const plan = await controller.plan({ action: 'edit', id: 'tailscale', expectedRevision: 1, configuration: { hostname: 'fixture-renamed', enabled: false } });
+  assert.deepEqual(plan.review.downloads, []);
+  const op = controller.apply({ planId: plan.id, expectedRevision: 1, idempotencyKey: randomUUID() });
+  await controller.reconcile(); while (!controller.idle()) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(controller.operation(op.id).state, 'succeeded'); assert.equal(installs, 0); assert.deepEqual(store.get('tailscale').artifact, artifact);
 });
 
 test('restart budget is bounded and temporary stop takes precedence over an expired backoff', async t => {

@@ -249,7 +249,7 @@
         if (state.route === 'vault' && (location.hash === shownHash || !location.hash.includes('/'))) credentialsUI.activate();
         if (state.route === 'gateways' && (location.hash === shownHash || !location.hash.includes('/'))) gatewaysUI.activate();
         if (state.route === 'files') filesUI.activate();
-        if (['services', 'access'].includes(state.route)) servicesUI.activate();
+        if (['services', 'access', 'toolchains'].includes(state.route)) servicesUI.activate();
         if (state.route === 'instructions' && state.contextTab === 'instructions') void loadInstructionsPreview();
       } else if (!locked) {
         // Name the URL and the reason. "Could not read status" sent someone
@@ -638,10 +638,9 @@
   const noticeLine = (n) => n ? html`<span class="tc-status" role="${n.tone === 'danger' ? 'alert' : 'status'}">${dot(n.tone === 'danger' ? 'danger' : 'warn')}<span class="tc-status-text">${n.text}</span></span>` : '';
   const versionLabel = (row) => {
     if (!row.version) return '';
-    if (row.versionTo) return html`<span class="tc-version">${row.version} <span class="tc-version-arrow" aria-label="to">→</span> ${row.versionTo}</span>`;
     // A newer release says where it goes; while work runs the row shows its progress instead.
-    const next = row.updateAvailable && row.state !== 'running' && row.state !== 'queued';
-    return html`<span class="tc-version">${row.version}${next ? html` <span class="tc-version-arrow" aria-label="update available:">→</span> <span class="tc-version-to">${row.latest}</span>` : ''}</span>`;
+    const next = row.versionTo || (row.updateAvailable && row.state !== 'running' && row.state !== 'queued' ? row.latest : null);
+    return html`<span class="tc-version"><span class="tc-version-current">${row.version}</span>${next ? html` <span class="tc-version-target"><span class="tc-version-arrow" aria-label="${row.versionTo ? 'to' : 'update available:'}">→</span> <span class="${row.versionTo ? 'tc-version-current' : 'tc-version-to'}">${next}</span></span>` : ''}</span>`;
   };
   const progressBar = (p) => html`<div class="tc-progress"${p && p.pct !== null ? '' : raw(' data-indeterminate')} style="--value: ${p && p.pct !== null ? p.pct : 0}%" role="progressbar" aria-label="Progress"${p && p.pct !== null ? raw(' aria-valuenow="' + p.pct + '" aria-valuemin="0" aria-valuemax="100"') : ''}><span></span></div>`;
   const phaseText = (p, kind) => {
@@ -1343,6 +1342,7 @@
             : toolsEmpty()}
         ${added.length ? html`<div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>Tools added with <code class="tc-nowrap">mise use -g</code> in a terminal show up here too.</span></div>` : ''}
       </div>`, { actions: html`${filter}${addButton}` })}
+      ${servicesUI.toolchainsContent()}
       <p class="tc-page-foot">Also in the image: ${M.listOf([...IN_THE_IMAGE, ...(browserImage ? ['headless Chromium'] : [])])}.</p>`;
   };
 
@@ -1621,7 +1621,7 @@
           <div class="tc-row-title"><span class="tc-row-name">T3 Code</span><span class="tc-version">${view.version || 'unknown version'}${targetVersion ? html` <span class="tc-version-arrow" aria-label="to">→</span> ${targetVersion}` : ''}</span>${busy ? html`<span class="tc-badge tc-badge--info"><span class="tc-spinner" aria-hidden="true"></span>${view.busy || submitting ? 'Updating' : 'Checking'}</span>` : ''}</div>
           <span class="tc-status">${view.available || view.busy ? '' : view.checkError ? dot('warn') : ''}<span class="tc-status-text"><span>${state}</span>${view.checkedAt && !busy ? ' · checked ' + M.relTime(view.checkedAt, now()) : ''}</span></span>
         </div>
-        <div class="tc-row-actions">${view.available || view.error ? html`<button class="tc-btn tc-btn--primary tc-btn--sm" type="button" data-cmd="t3.update" data-channel="${view.error ? view.operation.channel : view.channel}"${busy || !view.supported || !view.latest ? raw(' disabled') : ''}>${view.error ? 'Retry update' : 'Update and restart'}</button>` : ''}</div>
+        <div class="tc-row-actions tc-row-actions--wrap">${view.available || view.error ? html`<button class="tc-btn tc-btn--primary tc-btn--sm" type="button" data-cmd="t3.update" data-channel="${view.error ? view.operation.channel : view.channel}"${busy || !view.supported || !view.latest ? raw(' disabled') : ''}>${view.error ? 'Retry update' : 'Update and restart'}</button>` : ''}</div>
       </div>
       <div class="tc-row tc-row--compact tc-runtime-channel">
         <div class="tc-row-main"><span class="tc-row-name">Release channel</span><span class="tc-status">${view.channel === 'nightly' ? 'New features first. Nightly builds can be less reliable.' : 'Published releases, for everyday work.'}</span></div>
@@ -2100,7 +2100,7 @@
     if (route === 'vault' && state.status) credentialsUI.activate(true);
     if (route === 'gateways' && state.status) gatewaysUI.activate(true);
     if (route === 'files' && state.status) filesUI.activate();
-    if (['services', 'access'].includes(route)) servicesUI.activate(true);
+    if (['services', 'access', 'toolchains'].includes(route)) servicesUI.activate(true);
   };
   const navigateFromHash = async focus => {
     const version = ++navigationVersion;

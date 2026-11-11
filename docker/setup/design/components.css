@@ -265,7 +265,11 @@
   border: 1px solid var(--border-strong); color: var(--fg-muted); font: 400 0.6875rem/1 var(--font-mono); white-space: nowrap; }
 .tc-tag b { font-weight: 400; color: var(--fg); }
 
-.tc-version { display: inline-flex; align-items: center; gap: 0.375rem; font: 400 0.75rem/1.125rem var(--font-mono); color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.tc-version { display: inline-flex; align-items: center; gap: 0.375rem; flex-wrap: wrap; min-width: 0; max-width: 100%; overflow-wrap: anywhere; font: 400 0.75rem/1.125rem var(--font-mono); color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.tc-version-current, .tc-version-to { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+/* The comparison can wrap, while its arrow stays with the target version. */
+.tc-version-target { display: inline-flex; align-items: baseline; gap: 0.375rem; min-width: 0; max-width: 100%; }
+.tc-version-target > .tc-version-arrow { flex: none; }
 .tc-version-next { display: inline-flex; align-items: center; color: var(--accent-text); }
 .tc-version-next .tc-icon { width: 0.875rem; height: 0.875rem; }
 

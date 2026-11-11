@@ -15,8 +15,8 @@ export async function verifyGatewayQuota({ api, gatewayT3, until }) {
     { id: "go", provider: "opencode-go", supports_quota: true, quota_plugin_id: "opencode-plugin" },
   ].map(file => ({ ...file, auth_index: file.id }));
   const grouped = { subscription: { plan: "Pro" }, groups: [{ displayName: "All models", buckets: [
-    { window: "5h", remainingFraction: 0, resetTime: reset },
-    { window: "weekly", remainingFraction: 0.75, resetTime: reset },
+    { bucketId: "3p-session", window: "5h", remainingFraction: 0, resetTime: reset },
+    { bucketId: "3p-weekly", window: "weekly", remainingFraction: 0.75, resetTime: reset },
   ] }] };
   const server = http.createServer(async (req, res) => {
     try {
@@ -46,9 +46,23 @@ export async function verifyGatewayQuota({ api, gatewayT3, until }) {
       assert.equal(body.header.Authorization, "Bearer $TOKEN$");
       let upstream;
       if (body.auth_index === "antigravity") {
-        assert.equal(body.method, "POST"); assert.deepEqual(JSON.parse(body.data), { project: "fixture-project" });
-        upstream = body.url.includes("sandbox") ? grouped : null;
-        if (!upstream) return send({ status_code: 503, body: "private-fixture-error" });
+        if (body.url === "https://www.googleapis.com/oauth2/v2/userinfo") {
+          assert.equal(body.method, "GET"); assert.equal(body.data, undefined);
+          upstream = { id: "private-fixture-google-account" };
+        } else {
+          assert.equal(body.method, "POST"); assert.deepEqual(JSON.parse(body.data), { project: "fixture-project" });
+          assert.ok([
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+          ].includes(body.url));
+          // Retain the legacy reader's host-retry check. The new native reader
+          // uses its own user agent and reads the daily host directly.
+          if (body.header["User-Agent"] === "antigravity/hub/2.23.0 darwin/arm64" && !body.url.includes("sandbox")) {
+            return send({ status_code: 503, body: "private-fixture-error" });
+          }
+          upstream = grouped;
+        }
       } else if (body.auth_index === "codex") upstream = body.url.endsWith("/rate-limit-reset-credits") ? { credits: [] } : { plan_type: "pro", rate_limit: { primary_window: { used_percent: 30, reset_at: 4070908800, limit_window_seconds: 18000 } } };
       else { assert.ok(body.auth_index.startsWith("claude-")); upstream = { five_hour: { utilization: 10, resets_at: reset }, seven_day: { utilization: 20, resets_at: reset } }; }
       return send({ status_code: 200, body: JSON.stringify(upstream) });

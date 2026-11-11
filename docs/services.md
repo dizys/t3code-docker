@@ -10,6 +10,26 @@ installation review. The image contains their exact architecture, source,
 version and SHA-256 metadata, plus the small supervision infrastructure. It
 continues to include the outbound SSH client used by Git and Vault.
 
+**Toolchains → Service packages** lists each installed service package, its
+exact version and the service that needs it. Mise manages these installations
+in protected storage inside the services volume. SSH uses `openssh-server`,
+`libwrap0`, `libwtmpdb0` and `libtalloc2`. Update or uninstall packages with
+their service so dependency references and process recovery stay consistent.
+Custom services use exact versions in your ordinary user Mise store.
+
+The protected Mise instance ignores user and project configuration, environment
+hooks and plugins. It uses only image-approved HTTP recipes with exact checksums.
+Downloads are size-limited and verified before Mise installs them. A trusted
+adapter inspects Debian and Tailscale archives before unpacking; no Debian
+maintainer script or downloaded installer runs. Mise owns the resulting package
+directories, installation inventory and uninstall.
+
+Existing service installations continue to work. **Move packages to Mise** is
+an explicit reviewed migration. It switches to the image-approved package
+versions, preserving settings and identity. A running service restarts; a
+temporarily stopped or disabled service stays stopped. Previous software stays
+available for rollback until you uninstall the service.
+
 ## Storage and process ownership
 
 The supplied Compose file mounts `t3-services:/var/lib/t3code/services`. This
@@ -59,6 +79,8 @@ OpenSSH accepts public keys for `t3` only. Root, password, keyboard-interactive,
 agent forwarding, X11 and tunnel-device access are disabled. TCP forwarding is
 enabled for editor connections. Local readiness verifies the SSH listener. A
 reported client test is explicitly labeled as user-reported evidence.
+The SSH row, configuration and review show **SSH username: `t3`**. Copied
+commands and editor configuration use that same account.
 
 For an existing LAN or VPN, add an **Existing LAN, VPN or network** connection.
 Publish the chosen port through your deployment, separately. For example, add
@@ -148,8 +170,18 @@ make it reachable. Declaring an endpoint alone never publishes it.
 | Disable at startup | Stops it and persists the off state across restarts. Configuration, verified artifacts and identity remain. |
 | Restart | Starts a reviewed run with the same pinned configuration. |
 | Remove registration | Removes a custom registration and its console logs. Installed tools, application files and Vault entries remain. |
-| Uninstall service | Removes the system service's active payload reference and stops it. Verified cached artifacts, configuration and identity remain for recovery. |
+| Start | Starts an enabled but stopped service with its pinned configuration. It does not stop or restart an already running process. |
+| Move packages to Mise | Reviewed migration of a legacy installation to protected Mise packages. Settings, identity and rollback software are kept. |
+| Uninstall service | Stops it and removes installed software, old cached versions and unused dependencies. Packages referenced by another service or pending operation stay installed. Settings and identity are kept for reinstall; user tools are retained. |
 | Sign out connector | Requests provider logout separately from stopping the daemon. Existing routes lose access until sign-in completes. |
+
+Stopped services offer **Start**, without redundant Restart or Stop actions.
+Uninstall is reported as complete only after file removal succeeds. Failed
+cleanup leaves a disabled registration and a retryable operation error. Older
+uninstall records may still have cached software: **Remove leftover software**
+cleans it up explicitly. Reinstalling after removal requires downloading the
+approved packages again. SSH host keys, tailnet state and saved configuration
+stay in the persistent services volume.
 
 Reviews expire after five minutes. Applying one commits an operation ID before
 side effects begin. Closing the console does not cancel it. A lost submission

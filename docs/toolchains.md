@@ -12,6 +12,15 @@ before checking or installing an update. Rolling names such as `stable` and
 respect the release-age policy, and keep a newer installed release selected.
 Checking for updates does not change the installed toolchain.
 
+## Service runtimes
+
+Installed SSH, Tailscale and Cloudflare Tunnel runtimes appear in a separate
+**Service runtimes** group. **Manage** opens the service's details, including its
+version and included components. These opt-in installations use protected service
+storage and are updated or removed with the service. They are separate from mise
+tools and are not included in Toolchains' **Update all**. Custom services use
+the exact mise tools you select here. See [Services](services.md).
+
 ## Any other tool
 
 **Add a tool** on the Toolchains page searches mise's built-in registry of

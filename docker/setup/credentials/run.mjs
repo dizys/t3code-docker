@@ -18,6 +18,10 @@ async function pump(stream, write, secrets) {
   if (!stream) return;
   const filter = byteFilter(secrets, write);
   try { for await (const chunk of stream) filter.write(chunk); }
+  // A command that never starts closes its pipes before any output, which
+  // some runtimes report as a premature close. The `closed` promise carries
+  // the real spawn error, so that is the one that matters here.
+  catch (error) { if (error?.code !== 'ERR_STREAM_PREMATURE_CLOSE') throw error; }
   finally { filter.end(); }
 }
 

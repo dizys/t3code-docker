@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { promises as fs } from "node:fs";
+import { accessSync, constants, promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn, execFile } from "node:child_process";
@@ -13,6 +13,14 @@ import { createRuntimeManager, packageRelease, installRelease, executableVersion
 import { recoverUpdate, restoreDatabase, snapshotDatabase, syncAuthentication, pruneRuntimes, projectScopes } from "../docker/runtime/supervisor.mjs";
 
 const NIGHTLY = "0.0.46-nightly.20261011.2980";
+// The WAL writer child needs a real Node sqlite. `process.execPath` is the
+// test runner, which is Bun under `bun test` (whose sqlite never leaves a
+// WAL file behind). Prefer it when it is Node, else the image's runtime.
+const nodeBinary = () => {
+  if (path.basename(process.execPath) !== "bun") return process.execPath;
+  const infra = "/usr/local/lib/t3-node-runtime/node";
+  try { accessSync(infra, constants.X_OK); return infra; } catch { return "node"; }
+};
 const cleanups = new WeakMap();
 async function world(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "t3-runtime-test-"));
@@ -51,7 +59,7 @@ async function databaseContent(file) {
 }
 
 async function databaseWithWal(t, file, value) {
-  const writer = spawn(process.execPath, ["--input-type=module", "-e", `
+  const writer = spawn(nodeBinary(), ["--input-type=module", "-e", `
     import { DatabaseSync } from "node:sqlite";
     const db = new DatabaseSync(process.argv[1]);
     db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE IF NOT EXISTS content (body TEXT); DELETE FROM content");
@@ -456,7 +464,8 @@ test("a ready upgrade commits without replacing the supervisor; stable can be se
   assert.doesNotThrow(() => process.kill(sup.child.pid, 0));
 });
 
-test("first database preparation can exceed thirty seconds before activation", async (t) => {
+// Bun caps a test at five seconds by default; this one honestly takes over thirty.
+test("first database preparation can exceed thirty seconds before activation", { timeout: 120_000 }, async (t) => {
   const { paths, env } = await world(t);
   await seedDatabase(path.join(paths.home, "userdata/statev2.sqlite"), "original data");
   await fakeRuntime(paths, "0.0.45", "ready", true);

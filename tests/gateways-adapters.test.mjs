@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { parse as parseToml } from '../docker/setup/vendor/toml-patch.mjs';
 import { desiredInstance, differences, fileText, filesFor, instanceIdFor, mergeInstance, modelsFor, modelsToHide } from '../docker/setup/gateways/adapters.mjs';
 import { GATEWAY_KEY_ENV, NO_KEY, agentOf } from '../docker/setup/gateways/catalog.mjs';
@@ -13,6 +17,15 @@ const gateway = (over = {}) => ({ id: 'my-proxy', name: 'My Proxy', url: 'http:/
   models: { ids: ['claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-5', 'claude-sonnet-4-5-20250929', 'gemini-2.5-pro', 'gpt-5.6-sol', 'gpt-6-astra'], manual: [] },
   agents: { claude: { on: true }, codex: { on: true }, opencode: { on: true } }, ...over });
 const env = (instance, name) => instance.environment.find(row => row.name === name);
+// `data:` imports resolve differently across runtimes; a temp file imports
+// the generated extension the same way everywhere.
+const importExtension = async (t, source) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 't3-gw-pi-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'extension.mjs');
+  await fs.writeFile(file, source);
+  return import(pathToFileURL(file).href);
+};
 
 test('token limits are parsed without raising the default to an opt-in maximum or accepting impossible output', () => {
   const caps = parseModelCapabilities({ models: [
@@ -35,7 +48,7 @@ test('token limits are parsed without raising the default to an opt-in maximum o
   assert.deepEqual(cleanModelLimits({ context: 200000, input: 128000, output: 150000 }), { context: 200000, input: 128000 });
 });
 
-test('OpenCode, Pi and Codex receive per-model limits while unknown routes retain CLI fallbacks', async () => {
+test('OpenCode, Pi and Codex receive per-model limits while unknown routes retain CLI fallbacks', async t => {
   const gw = gateway({ models: { ids: ['gemini-large', 'small', 'unknown'], capabilities: {
     'gemini-large': { limits: { context: 1048576, output: 65536 } },
     small: { limits: { context: 200000, input: 128000, output: 8192 } },
@@ -47,7 +60,7 @@ test('OpenCode, Pi and Codex receive per-model limits while unknown routes retai
     assert.deepEqual(entries.small.limit, { context: 200000, input: 128000, output: 8192 });
     assert.equal(entries.unknown.limit, undefined);
   }
-  const extension = await import(`data:text/javascript,${encodeURIComponent(fileText(pi, gw, '/d'))}`);
+  const extension = await importExtension(t, fileText(pi, gw, '/d'));
   let models;
   extension.default({ registerProvider: (id, config) => { models = config.models; } });
   assert.equal(models.find(row => row.id === 'gemini-large').contextWindow, 1048576);
@@ -144,7 +157,7 @@ test('Claude and Codex use exact advertised controls only with negotiated runtim
   }
 });
 
-test('Pi uses a launch-only extension and provider-qualified custom model ids', async () => {
+test('Pi uses a launch-only extension and provider-qualified custom model ids', async t => {
   const gw = gateway(), instance = desiredInstance(pi, gw, { dir: '/private files', instances: { pi: { config: { binaryPath: '/pi', launchArgs: '--approve' } } } });
   assert.equal(instance.config.binaryPath, '/pi');
   assert.match(instance.config.launchArgs, /^--approve --extension /);
@@ -152,7 +165,7 @@ test('Pi uses a launch-only extension and provider-qualified custom model ids', 
   assert.ok(env(instance, GATEWAY_KEY_ENV).secret);
   assert.ok(instance.config.customModels.every(id => id.startsWith('t3gw_my_proxy/')));
   const source = fileText(pi, gw, '/private files');
-  const module = await import(`data:text/javascript,${encodeURIComponent(source)}`);
+  const module = await importExtension(t, source);
   let registered;
   module.default({ registerProvider: (id, config) => { registered = { id, config }; } });
   assert.equal(registered.id, 't3gw_my_proxy');
@@ -160,9 +173,9 @@ test('Pi uses a launch-only extension and provider-qualified custom model ids', 
   assert.ok(registered.config.models.every(model => !model.reasoning && Object.values(model.thinkingLevelMap).every(value => value === null)));
 });
 
-test('Pi exposes only representable advertised efforts and hides direct provider models', async () => {
+test('Pi exposes only representable advertised efforts and hides direct provider models', async t => {
   const gw = gateway({ models: { ids: ['unknown', 'reasoner'], capabilities: { reasoner: { supported: true, effort: ['none', 'low', 'max', 'ultra'] } } } });
-  const module = await import(`data:text/javascript,${encodeURIComponent(fileText(pi, gw, '/files'))}`);
+  const module = await importExtension(t, fileText(pi, gw, '/files'));
   let models;
   module.default({ registerProvider: (id, config) => { models = config.models; } });
   assert.deepEqual(models.find(model => model.id === 'reasoner').thinkingLevelMap,

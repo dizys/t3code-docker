@@ -144,9 +144,11 @@ than `t3 connect` directly: `docker exec` runs as root, and Connect writes into
 the state directory, where root-owned files would stop the server from
 writing.
 
-**Tailscale.** Run Tailscale on the host and set the public URL to the
-machine's tailnet name. (`t3 serve --tailscale-serve` needs `tailscaled` inside
-the container, which this image doesn't include.)
+**Tailscale.** For web and phone access, run Tailscale on the host, route the
+published T3 Code port through it, and set the public URL to that reachable
+tailnet address. Setup can also install an optional userspace Tailscale
+connector for registered service TCP routes, including SSH. See
+[Services](services.md#connections-and-tunnels) for that separate setup.
 
 **Nothing.** On a trusted LAN, set `T3_BIND_ADDR=0.0.0.0` and the public URL
 to `http://<server-lan-ip>:3773`. The pairing token is then sent

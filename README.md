@@ -38,8 +38,9 @@ mkdir -p workspace
 docker run -d --name t3code --restart unless-stopped \
   -p 127.0.0.1:3773:3773 -p 127.0.0.1:3774:3774 \
   -v t3-home:/home/t3 -v "$PWD/workspace:/workspace" \
+  -v t3-services:/var/lib/t3code/services \
   -e PUID="$(id -u)" -e PGID="$(id -g)" \
-  --shm-size 1g \
+  --shm-size 1g --stop-timeout 45 \
   dizys/t3code-docker
 ```
 
@@ -54,6 +55,9 @@ On first start, the agents and toolchains install onto the `t3-home` volume in
 the background. That takes a few minutes, and the setup page shows the
 progress. Both ports listen on localhost only; see
 [Reaching it from your phone](#reaching-it-from-your-phone) to go further.
+
+The separate `t3-services` volume preserves optional service software and
+identities; creating it does not install or enable a service.
 
 ### With Docker Compose
 
@@ -71,21 +75,29 @@ services:
       - "127.0.0.1:3774:3774"   # setup page
     volumes:
       - t3-home:/home/t3        # state, sign-ins, agents and toolchains
+      - t3-services:/var/lib/t3code/services  # optional services and identities
       - ./workspace:/workspace  # your repositories, one project per git checkout
     environment:
       PUID: 1000                # `id -u` on the host
       PGID: 1000                # `id -g` on the host
+      TZ: UTC                   # or an IANA zone such as America/Los_Angeles
     shm_size: 1gb
+    stop_grace_period: 45s
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
 volumes:
   t3-home:
+  t3-services:
 ```
 
 The setup key is in `docker compose logs t3code | grep -A1 T3_SETUP_KEY`.
 Upgrade the image with `docker compose pull && docker compose up -d`.
+
+Keep both named volumes when recreating the container. To change its timezone,
+set `TZ` to your IANA zone and recreate it; with `docker run`, pass
+`-e TZ=America/Los_Angeles` when creating the replacement.
 
 Prefer to build from source, or want the optional Caddy HTTPS sidecar? Clone
 the repository and use its [`compose.yaml`](compose.yaml) with
@@ -97,13 +109,19 @@ cp .env.example .env      # set PUID/PGID and T3_WORKSPACE_HOST
 docker compose up -d --build
 ```
 
+The repository's Compose file and `.env.example` set `T3_PREINSTALL=all`, which
+installs every managed agent and the toolchains. The quick-start examples above
+use the image default: Claude Code, Codex, OpenCode and the toolchains. Use
+`T3_PREINSTALL=none` to install everything on demand.
+
 ## Images
 
 | Tag | Image | Download |
 | --- | --- | --- |
 | `latest`, `browser` | Everything, including headless Chromium for the agents | ~1.0 GB |
 | `core` | The same without the browser | ~0.7 GB |
-| `X.Y.Z`, `X.Y`, `X.Y.Z-core`, `X.Y-core` | A pinned [release](https://github.com/dizys/t3code-docker/releases) | |
+| `X.Y.Z`, `X.Y.Z-browser`, `X.Y.Z-core` | A fixed [release](https://github.com/dizys/t3code-docker/releases) | |
+| `X.Y`, `X.Y-browser`, `X.Y-core` | The latest stable patch in that release series | |
 
 Published to Docker Hub as [`dizys/t3code-docker`](https://hub.docker.com/r/dizys/t3code-docker)
 and to GHCR as `ghcr.io/dizys/t3code-docker`, each for `linux/amd64` and
@@ -121,6 +139,9 @@ and to GHCR as `ghcr.io/dizys/t3code-docker`, each for `linux/amd64` and
   [Setup → Gateways](docs/gateways.md), then choose it per thread.
 - **Toolchains that survive upgrades.** Go, Rust, Bun, Deno and uv, plus about
   a thousand more tools through mise, live on the volume at exact versions.
+- **Optional services.** Install SSH, Tailscale or Cloudflare Tunnel, or run a
+  custom command, from [Setup → Services](docs/services.md). Service packages
+  are managed through Mise and visible in Toolchains.
 - **A browser for the agents.** Headless Chromium with Playwright and Chrome
   DevTools MCP servers.
 - **Publish a dev server.** Any port gets a public `https://` URL and a QR
@@ -141,12 +162,17 @@ and to GHCR as `ghcr.io/dizys/t3code-docker`, each for `linux/amd64` and
 | Go, Rust, Bun, Deno, uv | first start | first start |
 | glab, fj, tea, az (GitLab, Forgejo, Gitea, Azure DevOps) | one click | one click |
 | mise, for per-project versions | ✅ | ✅ |
-| cloudflared, for publishing a port | ✅ | ✅ |
-| Headless Chromium and browser MCP servers | ✅ | — |
+| SSH server, Tailscale, Cloudflare Tunnel | on demand | on demand |
+| cloudflared adapter, for publishing a port | downloads on first tunnel | downloads on first tunnel |
+| Headless Chromium and browser MCP servers | ✅ | not included |
 
 "First start" installs onto the `/home/t3` volume once, in the background;
 "one click" installs from the setup page when you ask. `T3_PREINSTALL` changes
-what the first start installs. Neither image contains credentials or model
+what the first start installs. Optional service payloads download only after
+you approve their installation. Node, npm and npx use the image runtime until
+you select a version through Mise; selected versions take precedence. See
+[Toolchains](docs/toolchains.md) for project versions and runtime selection.
+Neither image contains credentials or model
 access: you bring your own subscriptions or API keys.
 
 ## Using an AI gateway
@@ -196,6 +222,7 @@ instead. Details: [Reaching the server from a phone](docs/remote-access.md).
 | [Agents](docs/agents.md) | Installing, signing in and updating each agent |
 | [Upgrading T3 Code](docs/t3code-updates.md) | Stable and Nightly, auto-update, rollback |
 | [Toolchains](docs/toolchains.md) | Go, Rust and friends, any mise tool, per-project versions |
+| [Services](docs/services.md) | Optional SSH, Tailscale, Cloudflare Tunnel, custom commands and service packages |
 | [Source control](docs/source-control.md) | gh, glab, fj, tea and az sign-in |
 | [Vault](docs/vault.md) | Saved keys, tokens and passwords that every agent can use by name, added in Setup or from chat |
 | [Publishing a port](docs/ports.md) | Public URLs for dev servers |

@@ -115,6 +115,9 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
    assert(await dialog.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=-1&&r.right<=innerWidth+1&&r.top>=-1&&r.bottom<=innerHeight+1;}),'installer fits viewport');
    await dialog.getByRole('button',{name:'Install 4 plugins',exact:true}).click();
    await dialog.getByText('Installed for Claude Code, Pi',{exact:true}).waitFor();
+   await dialog.getByText('Check it works',{exact:true}).waitFor();
+   await dialog.getByText('/tokeneconomizer:',{exact:false}).waitFor();
+   assert.equal(await dialog.getByText('~/.tokeneconomizer/bin/te',{exact:false}).count(),0,'verify guidance uses the installed name and never asserts a plugin binary');
    assert.equal(posts.filter(p=>p.suffix==='/apply').length,4);
    await dialog.getByRole('button',{name:'Close plugin installation',exact:true}).click();
    rows.push({...rows[0],id:'c'.repeat(32),provider:'claude',nativeId:'tokeneconomizer@claude-fixture',enabled:false,path:'/home/fixture/.claude/plugins/cache/tokeneconomizer'});

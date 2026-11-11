@@ -184,6 +184,7 @@ export async function unpackRelease(stage, release, { fetcher = fetch, run = exe
   const pkg = await readJson(path.join(destination, "package.json"));
   if (pkg && (pkg.name !== "t3-runtime" || pkg.version !== release.version)) throw new Error("The downloaded archive does not match the requested release.");
   if (release.patchRevision && (pkg?.containerPatch?.revision !== release.patchRevision || !/^[a-f0-9]{40}$/.test(pkg.containerPatch.source) || !/^sha256-[a-f0-9]{64}$/.test(pkg.containerPatch.upstreamIntegrity))) throw new Error("The downloaded runtime is missing its verified container patch metadata.");
+  if (release.patchRevision && ![3, 4].includes(pkg.containerPatch.launcherProtocol)) throw new Error("The downloaded runtime requires an unsupported service launcher protocol.");
   // CLI archives omit the staging package.json. Keep a container-owned audit
   // manifest so bundled version resolution also works with older supervisors.
   if (!pkg) await writeJson(path.join(destination, "package.json"), { name: "t3-runtime", version: release.version, distribution: release.url, integrity: release.integrity });

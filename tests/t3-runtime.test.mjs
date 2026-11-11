@@ -249,10 +249,10 @@ test("legacy cached releases are shown without claiming a verified channel times
   assert.equal(status.checkedAt, null);
 });
 
-async function fakeRuntime(paths, version, mode = "ready", bundled = false, auth = {}, patchRevision) {
+async function fakeRuntime(paths, version, mode = "ready", bundled = false, auth = {}, patchRevision, launcherProtocol) {
   const dir = bundled ? path.dirname(paths.binary) : releaseDirectory(paths, { version, patchRevision });
   await fs.mkdir(dir, { recursive: true });
-  await writeJson(path.join(dir, "package.json"), { version });
+  await writeJson(path.join(dir, "package.json"), { version, ...(launcherProtocol ? { containerPatch: { launcherProtocol } } : {}) });
   await writeJson(path.join(dir, ".installed.json"), { version, ...(patchRevision ? { patchRevision } : {}) });
   const code = `#!${process.execPath}
 const fs = require('node:fs');
@@ -269,6 +269,7 @@ if (process.argv[2] === 'auth') {
   setTimeout(() => process.exit(auth.exitCode || 0), process.argv[3] === 'session' ? (auth.delayMs || 0) : 0);
   return;
 }
+if (context.protocol !== ${launcherProtocol ?? 3}) process.exit(8);
 fs.appendFileSync(path.join(home, 'starts'), version + ' ' + process.pid + '\\n');
 fs.writeFileSync(path.join(home, 'project-environment.json'), JSON.stringify({ projectsDir: process.env.T3CODE_PROJECTS_DIR, home, version }));
 if (context.update) {
@@ -380,6 +381,22 @@ test("the workspace is the New project default across native release changes", a
   await requestTrial(paths, NIGHTLY);
   await waitFor(async () => (await readJson(paths.operation))?.phase === "succeeded");
   assert.deepEqual(await recorded(), { projectsDir: env.T3_WORKSPACE, home: paths.home, version: NIGHTLY });
+  assert.doesNotThrow(() => process.kill(sup.child.pid, 0));
+});
+
+test("the supervisor changes IPC contracts with the selected runtime and can return to a legacy artifact", async t => {
+  const { paths, env } = await world(t);
+  await seedDatabase(path.join(paths.home, "userdata/statev2.sqlite"), "original data");
+  await fakeRuntime(paths, "0.1.8", "ready", true);
+  await fakeRuntime(paths, "0.1.10-nightly.20261111.4529", "ready", false, {}, undefined, 4);
+  await fakeRuntime(paths, "0.1.8");
+  const sup = await supervisor(t, env);
+  const nightly = await requestTrial(paths, "0.1.10-nightly.20261111.4529");
+  await waitFor(async () => {const operation = await readJson(paths.operation); return operation?.id === nightly.id && operation.phase === "succeeded";});
+  assert.equal((await readSelection(paths)).version, "0.1.10-nightly.20261111.4529");
+  const stable = await requestTrial(paths, "0.1.8", "stable");
+  await waitFor(async () => {const operation = await readJson(paths.operation); return operation?.id === stable.id && operation.phase === "succeeded";});
+  assert.equal((await readSelection(paths)).version, "0.1.8");
   assert.doesNotThrow(() => process.kill(sup.child.pid, 0));
 });
 

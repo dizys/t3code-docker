@@ -38,14 +38,20 @@ try {
   const port = reserve.address().port; await new Promise((resolve) => reserve.close(resolve));
   const log = await fs.open(path.join(root, "supervisor.log"), "wx", 0o600);
   const args = ["serve", "--host", "127.0.0.1", "--port", String(port), "--no-browser", workspace];
-  const driver = `import {runSupervisor} from ${JSON.stringify(new URL("../docker/runtime/supervisor.mjs", import.meta.url).href)}; process.exitCode=await runSupervisor(${JSON.stringify(args)});`;
+  // The checksum-verified public archive omits a manifest. Its exact source
+  // tag's protocol was recorded by the matching patched build under test.
+  const driver = `import {runSupervisor} from ${JSON.stringify(new URL("../docker/runtime/supervisor.mjs", import.meta.url).href)}; process.exitCode=await runSupervisor(${JSON.stringify(args)}, ${JSON.stringify({ bundledLauncherProtocol: manifest.containerPatch.launcherProtocol ?? 3 })});`;
   supervisor = spawn(process.execPath, ["--input-type=module", "-e", driver], { env, stdio: ["ignore", log.fd, log.fd] });
   stopped = new Promise((resolve, reject) => { supervisor.once("exit", resolve); supervisor.once("error", reject); });
   await log.close();
   api = createT3Api({ url: `ws://127.0.0.1:${port}/ws`, issueSession: async () => session, renewWithinMs: 0, connectTimeoutMs: 1000 });
   const until = async (read) => {
     const deadline = Date.now() + 120_000;
-    while (Date.now() < deadline) { try { const value = await read(); if (value) return value; } catch { /* startup reconnect */ } await new Promise((resolve) => setTimeout(resolve, 200)); }
+    while (Date.now() < deadline) {
+      if (supervisor.exitCode !== null) throw new Error(`The native integration supervisor exited with code ${supervisor.exitCode} before readiness.`);
+      try { const value = await read(); if (value) return value; } catch { /* startup reconnect */ }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
     throw new Error("The native integration smoke did not finish within its deadline.");
   };
   const before = await until(() => api.call("server.getConfig", {}));

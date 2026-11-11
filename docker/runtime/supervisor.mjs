@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { refreshSetupBridge } from "./client-shell.mjs";
 import { supervisorRecord } from "./supervision.mjs";
-import { CHANNELS, exactVersion, databaseName, validScopes, validPatchRevision, runtimePaths, readJson, writeJson, readSelection, selectedRuntime } from "./state.mjs";
+import { CHANNELS, exactVersion, databaseName, validScopes, validPatchRevision, runtimePaths, runtimeLauncherProtocol, readJson, writeJson, readSelection, selectedRuntime } from "./state.mjs";
 
 const sqlite = /\.(?:sqlite3?|db)(?:-wal|-shm|-journal)?$/;
 const exists = async (file) => { try { await fs.access(file); return true; } catch (error) { if (error.code === "ENOENT") return false; throw error; } };
@@ -302,7 +302,7 @@ export async function recoverUpdate(paths) {
   await removeSnapshots(paths);
 }
 
-export async function runSupervisor(args, { env = process.env, preparedTimeoutMs = 120_000, authenticationTimeoutMs = 120_000 } = {}) {
+export async function runSupervisor(args, { env = process.env, preparedTimeoutMs = 120_000, authenticationTimeoutMs = 120_000, bundledLauncherProtocol } = {}) {
   const paths = runtimePaths(env);
   await fs.mkdir(paths.run, { recursive: true, mode: 0o700 });
   const pidFile = path.join(paths.run, "t3.pid");
@@ -329,13 +329,16 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
 
   const launch = async (runtime, update = null) => {
     if (stopping) throw new Error("The container is stopping.");
+    // Source builds declare the exact tag's IPC contract. Retained artifacts
+    // predate this metadata and speak protocol 3. Never guess a future protocol.
+    const protocol = await runtimeLauncherProtocol(runtime.binary, runtime.bundled ? bundledLauncherProtocol : undefined);
     const bridge = env.T3_SETUP_BRIDGE || (await exists('/usr/local/share/t3-client/setup-bridge.js') ? '/usr/local/share/t3-client/setup-bridge.js' : null);
     await refreshSetupBridge(runtime, bridge);
     if (stopping) throw new Error("The container is stopping.");
     const process_ = spawn(runtime.binary, args, {
       env: { ...env,
         ...(env.T3_WORKSPACE && !env.T3CODE_PROJECTS_DIR?.trim() ? { T3CODE_PROJECTS_DIR: env.T3_WORKSPACE } : {}),
-        T3_SERVICE_LAUNCHER_CONTEXT: JSON.stringify({ protocol: 3, childVersion: runtime.version, ...(update ? { update } : {}) }) },
+        T3_SERVICE_LAUNCHER_CONTEXT: JSON.stringify({ protocol, childVersion: runtime.version, ...(update ? { update } : {}) }) },
       stdio: ["inherit", "inherit", "inherit", "ipc"],
     });
     const done = new Promise((resolve) => {

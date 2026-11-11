@@ -25,18 +25,18 @@ async function world(t) {
   return root;
 }
 
-async function fixture(t, { manifest, banner = VERSION, compatible = true, link = false, native = false, revision = PATCH_REVISION } = {}) {
+async function fixture(t, { manifest, banner = VERSION, compatible = true, link = false, native = false, revision = PATCH_REVISION, launcherProtocol = 3 } = {}) {
   const root = await world(t);
   const stem = archiveStem(VERSION);
   const contents = path.join(root, stem);
   await fs.mkdir(path.join(contents, "client"), { recursive: true });
-  if (manifest || native) await writeJson(path.join(contents, "package.json"), { name: "t3-runtime", version: manifest || VERSION, ...(native ? { containerPatch: { revision, source: "a".repeat(40), upstreamIntegrity: "sha256-" + "b".repeat(64) } } : {}) });
+  if (manifest || native) await writeJson(path.join(contents, "package.json"), { name: "t3-runtime", version: manifest || VERSION, ...(native ? { containerPatch: { revision, source: "a".repeat(40), upstreamIntegrity: "sha256-" + "b".repeat(64), launcherProtocol } } : {}) });
   await fs.writeFile(path.join(contents, "client/index.html"), "<html><body>client</body></html>");
   await fs.writeFile(path.join(contents, "t3"), `#!${process.execPath}
 const fs = require('node:fs');
 const path = require('node:path');
 if (process.argv[2] === '--version') console.log(${JSON.stringify(banner)});
-else if (process.argv[2] === '__service-preflight') console.log(JSON.stringify({status: ${JSON.stringify(compatible ? "ready" : "blocked")}, version: ${JSON.stringify(VERSION)}, launcherProtocol: 3, reason: 'requires a newer supervisor'}));
+else if (process.argv[2] === '__service-preflight') console.log(JSON.stringify({status: process.argv[process.argv.indexOf('--launcher-protocol') + 1] === ${JSON.stringify(String(launcherProtocol))} ? ${JSON.stringify(compatible ? "ready" : "blocked")} : 'blocked', version: ${JSON.stringify(VERSION)}, launcherProtocol: ${JSON.stringify(launcherProtocol)}, reason: 'requires a newer supervisor'}));
 else if (process.argv[2] === 'auth') {
   const dir = path.join(process.env.T3CODE_HOME, 'userdata');
   fs.mkdirSync(dir, {recursive:true});
@@ -82,6 +82,24 @@ test("an archive with a valid checksum but a different native patch never execut
   assert.equal(executed, false);
   assert.equal(await readJson(f.paths.selection), null);
   assert.deepEqual(await fs.readdir(f.paths.versions), []);
+});
+
+test("an unsupported launcher protocol is rejected before an archive can execute or become selectable", async t => {
+  const f = await fixture(t, {native: true, launcherProtocol: 5});
+  let executed = false;
+  await assert.rejects(installRelease(f.paths, f.release, {...f, run: async (command, args, options) => {
+    if (command !== "/usr/bin/tar") {executed = true; throw new Error("Native code must not run");}
+    return execute(command, args, options);
+  }}), /unsupported service launcher protocol/);
+  assert.equal(executed, false);
+  assert.equal(await readJson(f.paths.selection), null);
+});
+
+test("fresh and cached protocol 4 artifacts use their recorded contract during native preflight", async t => {
+  const f = await fixture(t, {native: true, launcherProtocol: 4});
+  const target = await installRelease(f.paths, f.release, f);
+  assert.equal((await readJson(path.join(target, "package.json"))).containerPatch.launcherProtocol, 4);
+  assert.equal(await installRelease(f.paths, f.release, {...f, fetcher: () => {throw new Error("The cached artifact must be retained");}}), target);
 });
 
 test("verified OCI archive sizes bound downloads even when the storage response has no length", async (t) => {

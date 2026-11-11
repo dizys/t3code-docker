@@ -50,6 +50,13 @@ export function executableBuildPlan(arch, { platform = process.platform, hostArc
   };
 }
 
+export function serviceLauncherProtocol(source) {
+  const declarations = [...source.matchAll(/^export const SERVICE_LAUNCHER_PROTOCOL = (\d+) as const;$/gm)];
+  const protocol = declarations.length === 1 ? Number(declarations[0][1]) : null;
+  if (![3, 4].includes(protocol)) throw new Error("The release's service launcher protocol requires review before building.");
+  return protocol;
+}
+
 // These values are explicitly public in upstream's checked-in .env.example.
 // Do not build from the operator's environment or copy unrelated env fields.
 export function publicBuildEnvironment(example) {
@@ -100,6 +107,7 @@ export async function buildRuntime(version, arch, destination, { run = execute, 
     if (!/^[a-f0-9]{40}$/.test(commit) || commit !== tag || (await command("git", ["status", "--porcelain"])).stdout.trim()) throw new Error("Build from a clean checkout of the exact upstream release tag.");
     await assertPublicBuildEnvironment(checkout);
     const publicEnvironment = publicBuildEnvironment(await fs.readFile(path.join(checkout, ".env.example"), "utf8"));
+    const launcherProtocol = serviceLauncherProtocol(await fs.readFile(path.join(checkout, "apps/server/src/cloud/serviceProtocol.ts"), "utf8"));
     const buildEnvironment = { ...Object.fromEntries(Object.entries(options.env).filter(([name]) => !/^(?:T3CODE_|VITE_|EXPO_PUBLIC_)/.test(name))), ...publicEnvironment };
     for (const file of createdFiles) {
       try { await fs.lstat(path.join(checkout, file)); }
@@ -125,7 +133,7 @@ export async function buildRuntime(version, arch, destination, { run = execute, 
     await command("corepack", build.args, { env: buildEnvironment });
     await fs.copyFile(path.join(checkout, "apps/server/dist-exe", build.output), path.join(unpacked, "t3"));
     await fs.chmod(path.join(unpacked, "t3"), 0o755);
-    const containerPatch = { revision: PATCH_REVISION, source: commit, upstreamIntegrity: release.integrity };
+    const containerPatch = { revision: PATCH_REVISION, source: commit, upstreamIntegrity: release.integrity, launcherProtocol };
     const manifest = { name: "t3-runtime", version, distribution: release.url, integrity: release.integrity, containerPatch };
     await fs.writeFile(path.join(unpacked, "package.json"), JSON.stringify(manifest) + "\n");
     if (arch === process.arch) {

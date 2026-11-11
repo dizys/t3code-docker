@@ -81,16 +81,16 @@ const T3PluginsUI = (() => {
     };
     const install = (options={}) => {
       if(!close())return;
-      const view={source:options.source||'',preview:null,prefix:null,provider:options.provider||'',plan:null,result:null,error:null,pending:false,step:1,selected:new Set(),agents:new Set(options.provider?[options.provider]:[]),queue:[],cursor:0,completed:[],retryInstall:false,consent:false,closed:false,layer:null,railOpen:!Kit.isPhone()};
+      const view={source:options.source||'',preview:null,prefix:null,provider:options.provider||'',plan:null,plans:[],result:null,error:null,pending:false,step:1,selected:new Set(),agents:new Set(options.provider?[options.provider]:[]),queue:[],completed:[],retryInstall:false,consent:false,closed:false,layer:null,railOpen:!Kit.isPhone()};
       active=view;
       const draw=(step=false)=>{if(view.closed)return;view.layer.render();if(step){const main=view.layer.panel.querySelector('.tc-wizard-main');main.scrollTop=0;const heading=main.querySelector('h3')||main;heading.tabIndex=-1;heading.focus({preventScroll:true});}};
       const chosen=()=>view.preview?.packages.find(p=>p.prefix===view.prefix);
       const selected=()=>(view.preview?.packages||[]).filter(p=>view.selected.has(p.prefix));
       const support=(pkg,id)=>pkg?.providers?.find(p=>p.id===id)||{id,detected:false,compatible:false,reason:'This source has no detected integration for this agent.'};
       const compatible=id=>selected().length>0&&selected().every(p=>support(p,id).compatible);
-      const resetQueue=()=>{view.queue=[];view.cursor=0;};
+      const resetQueue=()=>{view.queue=[];};
       const dispose=id=>{if(id)void call('discard',{planId:id}).catch(()=>{});};
-      const invalidate=()=>{dispose(view.plan?.planId);view.plan=null;view.consent=false;view.result=null;};
+      const invalidate=()=>{dispose(view.plan?.planId);for(const entry of view.plans)dispose(entry.plan?.planId);view.plan=null;view.plans=[];view.consent=false;view.result=null;};
       const safe=task=>async()=>{if(view.pending)return;const previousStep=view.step;view.pending=true;view.error=null;draw();try{await task();}catch(e){if(!view.closed)view.error=e.message;}finally{view.pending=false;draw(view.step!==previousStep);}};
       const readSource=safe(async()=>{
         invalidate();dispose(view.preview?.previewId);view.preview=null;view.prefix=null;view.selected.clear();resetQueue();view.step=1;
@@ -99,28 +99,65 @@ const T3PluginsUI = (() => {
         view.preview=response;
         if(response.packages.length===1){view.prefix=response.packages[0].prefix;view.selected.add(view.prefix);}
       });
-      const plan=safe(async()=>{
-        invalidate();
-        if(!view.queue.length)view.queue=selected().flatMap(p=>[...view.agents].map(provider=>({prefix:p.prefix,provider})));
-        const target=view.queue[view.cursor];if(!target)throw Error('Choose at least one compatible agent.');
-        view.prefix=target.prefix;view.provider=target.provider;
-        view.plan=await call('plan',{previewId:view.preview.previewId,prefix:view.prefix,provider:view.provider});
-      });
-      const run=safe(async()=>{
-        view.retryInstall=true;
-        const response=await call('apply',{planId:view.plan.planId});
-        for(let i=0;i<360;i++){
-          const status=await api('/context/plugins/job?id='+encodeURIComponent(response.jobId));
-          if(!status.ok)throw Error(status.error+' Retry this same reviewed operation to recover its result.');
-          if(status.data.state!=='running'){
-            view.retryInstall=false;view.result=status.data;view.step=3;
-            view.completed.push({name:chosen()?.name,prefix:view.prefix,provider:view.provider,state:status.data.state});
-            if(status.data.state==='failed')view.error=status.data.error;
-            await load();return;
-          }
-          await new Promise(resolve=>setTimeout(resolve,500));
+      const buildQueue=()=>{view.queue=selected().flatMap(p=>[...view.agents].map(provider=>({prefix:p.prefix,provider})));};
+      const planAll=safe(async()=>{
+        for(const entry of view.plans)dispose(entry.plan?.planId);
+        view.plans=[];view.consent=false;view.result=null;view.completed=[];
+        if(!view.queue.length)buildQueue();
+        if(!view.queue.length)throw Error('Choose at least one compatible agent.');
+        if(![...view.agents].every(compatible))throw Error('One selected agent has no compatible package. Deselect it to continue.');
+        for(const target of view.queue){
+          try{
+            const plan=await call('plan',{previewId:view.preview.previewId,prefix:target.prefix,provider:target.provider});
+            if(view.closed){dispose(plan.planId);return;}
+            view.plans.push({...target,plan});
+          }catch(e){view.plans.push({...target,error:e.message});}
+          draw();
         }
-        throw Error('The job is still running. Retry this same plan to recover its result.');
+        const first=view.plans.find(entry=>entry.plan);
+        if(first){view.prefix=first.prefix;view.provider=first.provider;}
+      });
+      const runAll=safe(async()=>{
+        view.retryInstall=true;
+        const display=view.plans.map(entry=>({...entry}));
+        for(const entry of display)if(entry.plan)void call('discard',{planId:entry.plan.planId}).catch(()=>{});
+        view.plans=[];view.completed=[];
+        const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+        for(const target of view.queue){
+          try{
+            const plan=await call('plan',{previewId:view.preview.previewId,prefix:target.prefix,provider:target.provider});
+            if(view.closed){dispose(plan.planId);return;}
+            const prev=display.find(entry=>entry.prefix===target.prefix&&entry.provider===target.provider)?.plan;
+            if(prev&&!same([prev.digest,prev.canApply,prev.blocked,prev.effects],[plan.digest,plan.canApply,plan.blocked,plan.effects]))throw Error('Changed since review for '+names[target.provider]+'. Review again.');
+            if(!plan.canApply)throw Error((plan.blocked||[]).join(' ')||('Not installable for '+names[target.provider]));
+            const response=await call('apply',{planId:plan.planId});
+            let settled=null;
+            for(let i=0;i<360;i++){
+              const status=await api('/context/plugins/job?id='+encodeURIComponent(response.jobId));
+              if(!status.ok)throw Error(status.error+' Retry this same reviewed operation to recover its result.');
+              if(status.data.state!=='running'){settled=status.data;break;}
+              await new Promise(resolve=>setTimeout(resolve,500));
+            }
+            if(!settled)throw Error('The job is still running. Retry this same plan to recover its result.');
+            view.completed.push({name:plan.name,prefix:target.prefix,provider:target.provider,state:settled.state,message:settled.message||settled.error,digest:plan.digest});
+            if(settled.state!=='succeeded')throw Error(settled.error||('Install failed for '+names[target.provider]));
+          }catch(e){
+            if(!view.completed.some(entry=>entry.provider===target.provider&&entry.prefix===target.prefix))view.completed.push({name:target.prefix||target.provider,prefix:target.prefix,provider:target.provider,state:'failed',message:e.message});
+            view.error=e.message;
+          }
+          draw();
+        }
+        view.retryInstall=false;
+        const ok=view.completed.length>0&&view.completed.every(entry=>entry.state==='succeeded');
+        const agentList=[...new Set(view.completed.filter(entry=>entry.state==='succeeded').map(entry=>names[entry.provider]))].join(', ');
+        view.result={state:ok?'succeeded':'failed',message:ok?'Installed for '+agentList:'Some installations need attention.',error:ok?null:view.error};
+        view.step=3;
+        await load();
+        for(const entry of view.completed){
+          if(entry.state!=='succeeded'||entry.provider!=='codex'||entry.nativeId)continue;
+          const row=(data?.plugins||[]).find(p=>p.provider==='codex'&&p.owned&&p.digest===entry.digest&&p.nativeId);
+          if(row)entry.nativeId=row.nativeId;
+        }
       });
       const packageFiles=p=>html`<details class="tc-plugin-files"><summary>${p.files?.length||0} package files</summary><ul class="tc-plugin-file-list">${(p.files||[]).map(f=>html`<li><details><summary><code>${f.name}</code><span>${T3Model.formatBytes(f.bytes)}${f.executable?' · executable':''}</span></summary>${typeof f.text==='string'?html`<pre class="tc-code tc-plugin-code" tabindex="0">${f.text}</pre>`:html`<p class="tc-hint">Text preview unavailable for this binary or large file.</p>`}</details></li>`)}</ul></details>`;
       const integrations=p=>{
@@ -130,15 +167,28 @@ const T3PluginsUI = (() => {
       };
       const sourcePicker=()=>html`<div class="tc-source"><label class="tc-label" for="plugin-source">Repository or container folder</label><div class="tc-source-input">${icon('link')}<input class="tc-input" id="plugin-source" data-key="plugin-source" value="${view.source}" placeholder="https://github.com/microsoft/TokenEconomizer" maxlength="2048" autocapitalize="none" spellcheck="false"${off(view.pending)}><button class="tc-btn tc-btn--sm" type="button" data-plugin-read${off(view.pending||!view.source.trim())}>${view.preview?'Read again':'Read'}</button></div><p class="tc-hint">Public GitHub repositories and absolute folders in this container. Reading a source never runs its plugin code.</p></div>
         ${view.preview?html`<div class="tc-source-found">${icon('check')}<strong>Source read</strong><code>${view.preview.source}</code><span>· ${T3Model.plural(view.preview.packages.length,'plugin')}</span></div><div class="tc-picklist"><div class="tc-picklist-head"><span class="tc-hint">Choose complete packages</span></div><div class="tc-picklist-body">${view.preview.packages.map((p,i)=>html`<div class="tc-pick tc-plugin-pick" data-key="plugin-pick-${i}"><input class="tc-checkbox" id="plugin-pick-${i}" type="checkbox" data-plugin-pick="${p.prefix}"${view.selected.has(p.prefix)?raw(' checked'):''}${off(view.pending)}><div><label class="tc-pick-name" for="plugin-pick-${i}">${p.name}</label><p class="tc-pick-desc">${p.description||'No description provided.'}</p><span class="tc-hint">${T3Model.plural(p.files?.length||0,'file')} · ${p.version||'Version not declared'} · ${p.prefix||'Repository root'}</span>${integrations(p)}${packageFiles(p)}</div></div>`)}</div></div>`:html`<div class="tc-empty"><span class="tc-empty-icon">${icon('puzzle')}</span><span class="tc-empty-title">Install a complete plugin</span><span class="tc-empty-desc">Choose a package, choose its agent, then review every change. Skill folders alone belong in Skills.</span></div>`}`;
-      const review=()=>{
-        const p=view.plan;
-        return html`<section class="tc-insp-section"><h3 class="tc-step-title">Review installation for ${names[p.provider]||names[view.provider]}</h3><p class="tc-hint">${p.description||''}</p><div class="tc-notice tc-notice--warn"><div class="tc-notice-body"><strong>What will change</strong><ul>${p.effects.map(effect=>html`<li>${effect}</li>`)}</ul></div></div>${(p.blocked||[]).map(reason=>html`<p class="tc-notice tc-notice--danger" role="alert">${reason}</p>`)}<div class="tc-plugin-components">${(p.components||[]).map(c=>html`<span class="tc-badge">${c.type}: ${c.name}</span>`)}</div>${p.hooks?.length?html`<h4>Automatic commands</h4>${p.hooks.map(h=>html`<div><strong>${h.event}</strong><pre class="tc-code tc-plugin-code" tabindex="0">${h.command||'Native '+h.handlerType+' hook'}</pre></div>`)}`:''}${packageFiles(p)}<label class="tc-import-consent"><input class="tc-checkbox" type="checkbox" data-plugin-consent${view.consent?raw(' checked'):''}${off(view.pending||!p.canApply)}><span><strong>I reviewed this plugin and its code access</strong><span class="tc-hint">${view.provider==='codex'?'Codex hooks still need separate trust. Tools and other components keep their native permissions.':view.provider==='opencode'?'OpenCode may immediately load or reload this module, including in running sessions. There is no separate Codex per-hook trust gate.':'Hooks and extensions may run automatically in a new session. This agent has no Codex per-hook trust gate.'} Plugin code can access this container’s projects, home files and network.</span></span></label></section>`;
+      const reviewAll=()=>{
+        const allOk=view.plans.length>0&&view.plans.every(entry=>entry.plan&&entry.plan.canApply);
+        const needsCodex=view.plans.some(entry=>entry.provider==='codex'&&entry.plan);
+        const needsOpenCode=view.plans.some(entry=>entry.provider==='opencode'&&entry.plan);
+        return html`${view.plans.map(entry=>{
+          if(entry.error||!entry.plan)return html`<section class="tc-insp-section"><h3 class="tc-step-title">Review installation for ${names[entry.provider]}</h3><p class="tc-notice tc-notice--danger" role="alert">${entry.error||'Could not review this destination.'}</p></section>`;
+          const p=entry.plan;
+          return html`<section class="tc-insp-section"><h3 class="tc-step-title">Review installation for ${names[p.provider]}</h3><p class="tc-hint">${p.description||''}</p><div class="tc-notice tc-notice--warn"><div class="tc-notice-body"><strong>What will change</strong><ul>${p.effects.map(effect=>html`<li>${effect}</li>`)}</ul></div></div>${(p.blocked||[]).map(reason=>html`<p class="tc-notice tc-notice--danger" role="alert">${reason}</p>`)}<div class="tc-plugin-components">${(p.components||[]).map(c=>html`<span class="tc-badge">${c.type}: ${c.name}</span>`)}</div>${p.hooks?.length?html`<h4>Automatic commands</h4>${p.hooks.map(h=>html`<div><strong>${h.event}</strong><pre class="tc-code tc-plugin-code" tabindex="0">${h.command||'Native '+h.handlerType+' hook'}</pre></div>`)}`:''}${packageFiles(p)}</section>`;
+        })}<label class="tc-import-consent"><input class="tc-checkbox" type="checkbox" data-plugin-consent${view.consent?raw(' checked'):''}${off(view.pending||!allOk)}><span><strong>I reviewed ${view.plans.length>1?'these plugins and their code access':'this plugin and its code access'} for ${view.plans.map(entry=>names[entry.provider]).join(', ')}</strong><span class="tc-hint">${needsCodex?'Codex hooks still need separate trust. ':''}${needsOpenCode?'OpenCode may immediately load or reload this module, including in running sessions. ':''}${!needsCodex&&!needsOpenCode?'Hooks and extensions may run automatically in a new session. ':''}Plugin code can access this container’s projects, home files and network.</span></span></label></section>`;
       };
-      const agentPicker=()=>html`<div class="tc-import-step-head"><div><h3 class="tc-step-title">Which agents get these plugins?</h3><p class="tc-hint">Each agent needs its own package format and permissions. Choose agents now; review and install each destination in turn.</p></div></div><div class="tc-group tc-route-list">${Object.entries(names).map(([id,name])=>{
+      const agentPicker=()=>html`<div class="tc-import-step-head"><div><h3 class="tc-step-title">Which agents get these plugins?</h3><p class="tc-hint">Each agent needs its own package format and permissions. Choose agents now; one review covers all, one install does them all.</p></div></div><div class="tc-group tc-route-list">${Object.entries(names).map(([id,name])=>{
         const capability={compatible:compatible(id),detected:selected().every(p=>{const a=support(p,id);return a.detected||a.compatible;})}, reason=selected().map(p=>support(p,id).reason||support(p,id).format||'Native package').filter((r,i,a)=>a.indexOf(r)===i).join(' ');
-        return html`<label class="tc-route-row"${!view.agents.has(id)?raw(' data-off'):''}><input class="tc-checkbox" type="checkbox" data-plugin-agent="${id}"${view.agents.has(id)?raw(' checked'):''}${off(view.pending||view.retryInstall||!capability.compatible||view.completed.length>0)}>${mark(id)}<span class="tc-row-main"><span class="tc-avail-name">${name}</span><span class="tc-avail-note">${!installed().includes(id)?'Not detected. ':''}${reason}</span></span>${!capability.compatible?html`<span class="tc-badge">${capability.detected?'Native setup':'No integration'}</span>`:''}</label>`;
-      })}</div>${view.queue.length?html`<p class="tc-hint">Destination ${view.cursor+1} of ${view.queue.length}: ${chosen()?.name} for ${names[view.provider]}. Every destination requires its own review.</p>`:''}${view.plan?review():html`<p class="tc-hint">Choose available agents, then review each exact destination and permission change.</p>`}`;
-      const resultPage=()=>html`<div class="tc-result-hero" data-state="${view.result.state==='succeeded'?'ok':'partial'}"><span class="tc-result-mark">${icon(view.result.state==='succeeded'?'check':'triangle-alert')}</span><div><h3>${view.result.state==='succeeded'?'Installed for '+names[view.provider]:'Installation needs attention'}</h3><p class="tc-hint">${view.result.message||view.result.error}</p></div></div><ul class="tc-plan-list">${view.completed.map(r=>html`<li>${mark(r.provider)}${r.name} · ${names[r.provider]}<span class="tc-plan-end">${r.state==='succeeded'?'Installed':'Needs attention'}</span></li>`)}</ul><div class="tc-notice tc-notice--info"><div class="tc-notice-body">${view.provider==='opencode'?'OpenCode can load or reload changes in running sessions. Start a new session if it has not reloaded.':'Start a new '+names[view.provider]+' session to use this plugin.'} Service sign-in and native permissions remain separate.</div></div>`;
+        return html`<label class="tc-route-row"${!view.agents.has(id)?raw(' data-off'):''}><input class="tc-checkbox" type="checkbox" data-plugin-agent="${id}"${view.agents.has(id)?raw(' checked'):''}${off(view.pending||view.retryInstall||!capability.compatible)}>${mark(id)}<span class="tc-row-main"><span class="tc-avail-name">${name}</span><span class="tc-avail-note">${!installed().includes(id)?'Not detected. ':''}${reason}</span></span>${!capability.compatible?html`<span class="tc-badge">${capability.detected?'Native setup':'No integration'}</span>`:''}</label>`;
+      })}</div>${view.queue.length?html`<p class="tc-hint">${view.queue.length} ${view.queue.length===1?'destination':'destinations'}: ${view.queue.map(target=>names[target.provider]).join(', ')}.</p>`:''}${view.plans.length?reviewAll():html`<p class="tc-hint">Choose available agents, then review every destination and permission change together.</p>`}`;
+      const resultPage=()=>{
+        const ok=view.completed.length>0&&view.completed.every(entry=>entry.state==='succeeded');
+        const total=view.queue.length||view.completed.length||1;
+        const agentList=[...new Set(view.completed.map(entry=>names[entry.provider]))].join(', ');
+        const nextSteps={codex:'Start a new Codex session, trust hooks when asked, then run $tokeneconomizer:status. From a terminal: ~/.tokeneconomizer/bin/te --host codex status.',claude:'Start a new Claude Code session, then run /tokeneconomizer:status.',opencode:'OpenCode has no plugin commands in its UI. From a terminal in a repository run ~/.tokeneconomizer/bin/te --host opencode status. Restart OpenCode if it has not reloaded the module.',pi:'Start Pi and run /te status.',cursor:'Reload Cursor and check the plugin in Customize; status from a terminal: ~/.tokeneconomizer/bin/te --host cursor status.',grok:'Start Grok and check with ~/.tokeneconomizer/bin/te --host grok status.',antigravity:'Rebuild the bundle if needed; status from a terminal: ~/.tokeneconomizer/bin/te --host antigravity status.',muse:'Follow the Muse native setup for this integration.'};
+        const succeededAgents=[...new Set(view.completed.filter(entry=>entry.state==='succeeded').map(entry=>entry.provider))];
+        return html`<div class="tc-result-hero" data-state="${ok?'ok':'partial'}"><span class="tc-result-mark">${icon(ok?'check':'triangle-alert')}</span><div><h3>${ok?(view.completed.length===1?'Installed for '+names[view.completed[0].provider]:'Installed for '+agentList):'Installation needs attention'}</h3><p class="tc-hint">${ok?'Installed '+view.completed.length+' of '+total+'.':(view.result?.message||view.result?.error||view.error||'Some installations need attention.')}</p></div></div><ul class="tc-plan-list">${view.completed.map(r=>html`<li>${mark(r.provider)}${r.name} · ${names[r.provider]}<span class="tc-plan-end">${r.state==='succeeded'?'Installed':'Needs attention'}</span>${r.message&&r.state!=='succeeded'?html`<span class="tc-hint">${r.message}</span>`:''}</li>`)}</ul>${succeededAgents.length?html`<div class="tc-notice tc-notice--info"><div class="tc-notice-body"><strong>Check it works</strong><ul>${succeededAgents.map(id=>html`<li><strong>${names[id]}:</strong> ${nextSteps[id]||('Start a new '+names[id]+' session to use this plugin.')}</li>`)}</ul>Service sign-in and native permissions remain separate.</div></div>`:''}${view.completed.some(entry=>entry.state==='succeeded'&&entry.provider==='codex'&&entry.nativeId)?html`<p class="tc-hint">Codex runs hooks only after their exact definitions are trusted. This never happens automatically: ${view.completed.filter(entry=>entry.state==='succeeded'&&entry.provider==='codex'&&entry.nativeId).map(entry=>html`<button class="tc-btn tc-btn--sm" type="button" data-plugin-trust-hooks="${entry.nativeId}">Review hooks for ${entry.name}</button>`)}</p>`:''}`;
+      };
       const rail=()=>html`<div class="tc-plan-source"><span class="tc-plan-label">Source</span><code>${view.preview?.source||view.source||'Choose a source'}</code>${view.preview?.commit?html`<span class="tc-hint">Snapshot ${view.preview.commit.slice(0,7)}</span>`:''}</div><div class="tc-plan-section"><span class="tc-plan-label">Packages</span><strong>${selected().map(p=>p.name+' ('+(p.prefix||'root')+')').join(', ')||'Choose plugins'}</strong><span class="tc-hint">${chosen()?.version||''}</span></div><div class="tc-plan-section"><span class="tc-plan-label">Agents</span>${view.agents.size?html`${[...view.agents].map(id=>html`<span class="tc-plugin-agent-label">${mark(id)}${names[id]}</span>`)}`:html`<span class="tc-hint">Choose on the next step</span>`}<p class="tc-plan-note">Personal · this container</p></div><p class="tc-plan-note tc-plan-bottom">The reviewed snapshot is held for 10 minutes. Nothing is installed until you approve the exact plan. Plugin packages keep their provider’s native format.</p>`;
       const next=async()=>{
         if(view.pending)return;
@@ -146,13 +196,13 @@ const T3PluginsUI = (() => {
           view.step=2;view.error=null;
           view.agents=new Set([...view.agents].filter(compatible));
           if(!view.agents.size){const initial=Object.keys(names).find(id=>compatible(id)&&installed().includes(id))||Object.keys(names).find(compatible);if(initial)view.agents.add(initial);}
-          draw(true);return;
+          buildQueue();draw(true);return;
         }
-        if(view.step===2&&!view.plan&&view.agents.size&&[...view.agents].every(compatible))return plan();
-        if(view.step===2&&view.plan?.canApply&&view.consent)return run();
+        if(view.step===2&&!view.plans.length&&view.agents.size&&[...view.agents].every(compatible))return planAll();
+        if(view.step===2&&view.plans.length&&view.consent&&view.plans.every(entry=>entry.plan&&entry.plan.canApply))return runAll();
       };
-      const beforeUnload=e=>{if(view.pending&&view.plan){e.preventDefault();e.returnValue='';}};
-      view.layer=Kit.open({kind:'center',returnTo:document.activeElement,panel:{class:'tc-wizard tc-skill-import tc-plugin-import'+(Kit.isPhone()?' tc-sheet--bottom':''),role:'dialog','aria-modal':'true','aria-labelledby':'plugin-install-title'},focus:'#plugin-source',backdrop:'ignore',onEscape:close,onClose:()=>{view.closed=true;if(active===view)active=null;dispose(view.preview?.previewId);dispose(view.plan?.planId);window.removeEventListener('beforeunload',beforeUnload);},render:()=>html`<div class="tc-wizard-head"><span class="tc-tile tc-tile--icon tc-tile--lg">${icon('download')}</span><div class="tc-sheet-head-text"><h2 class="tc-sheet-title" id="plugin-install-title">Install from source</h2><span class="tc-small tc-muted">Complete plugins, with their skills, tools and hooks.</span></div><ol class="tc-steps" aria-label="Installation steps">${['Plugins','Agents','Install'].flatMap((label,i)=>[i?html`<li class="tc-step-line"${view.step>i?raw(' data-done'):''} aria-hidden="true"></li>`:'',html`<li class="tc-step" data-state="${view.step===i+1?'active':view.step>i+1?'done':'pending'}"${view.step===i+1?raw(' aria-current="step"'):''}><span class="tc-step-mark">${view.step>i+1?icon('check'):i+1}</span><span>${label}</span></li>`])}</ol><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-plugin-exit aria-label="Close plugin installation"${off(view.pending)}>${icon('x')}</button></div><div class="tc-wizard-grid"><div class="tc-wizard-main" aria-busy="${String(view.pending)}">${view.error?html`<p class="tc-notice tc-notice--danger" role="alert">${view.error}</p>`:''}${view.step===1?sourcePicker():view.step===2?agentPicker():resultPage()}${view.pending?html`<p class="tc-hint" role="status"><span class="tc-spinner"></span>${view.plan?'Applying the reviewed operation…':'Reading package information…'}</p>`:''}</div><div class="tc-wizard-rail-wrap"${view.railOpen?raw(' data-open'):''}><button class="tc-wizard-rail-toggle" type="button" data-plugin-rail aria-controls="plugin-install-plan" aria-expanded="${String(view.railOpen)}">Install plan${icon('chevron-down')}</button><aside class="tc-wizard-rail" id="plugin-install-plan" aria-label="Install plan">${rail()}</aside></div></div><div class="tc-wizard-foot">${view.step===3?html`<button class="tc-btn" type="button" data-plugin-another${off(view.result.state!=='succeeded')}>${view.cursor+1<view.queue.length?'Review next installation':'Install for another agent'}</button><span class="tc-spacer"></span><button class="tc-btn tc-btn--primary" type="button" data-plugin-exit>Done</button>`:html`<span class="tc-hint tc-wizard-keyboard">${view.step===1?'Choose packages to continue':'Review permissions before installing'}</span><span class="tc-spacer"></span>${view.step===2?html`<button class="tc-btn" type="button" data-plugin-previous${off(view.pending||view.retryInstall||view.completed.length>0)}>Back</button>`:html`<button class="tc-btn tc-btn--ghost" type="button" data-plugin-exit${off(view.pending)}>Close</button>`}<button class="tc-btn tc-btn--primary" type="button" data-plugin-next${off(view.pending||(view.step===1?!view.selected.size:view.plan?(!view.plan.canApply||!view.consent):!view.agents.size))}>${view.step===1?'Choose agents':view.plan?(view.retryInstall?'Retry installation':'Install for '+names[view.provider]):'Review installation'}</button>`}</div>`});
+      const beforeUnload=e=>{if(view.pending){e.preventDefault();e.returnValue='';}};
+      view.layer=Kit.open({kind:'center',returnTo:document.activeElement,panel:{class:'tc-wizard tc-skill-import tc-plugin-import'+(Kit.isPhone()?' tc-sheet--bottom':''),role:'dialog','aria-modal':'true','aria-labelledby':'plugin-install-title'},focus:'#plugin-source',backdrop:'ignore',onEscape:close,onClose:()=>{view.closed=true;if(active===view)active=null;dispose(view.preview?.previewId);dispose(view.plan?.planId);for(const entry of view.plans)dispose(entry.plan?.planId);window.removeEventListener('beforeunload',beforeUnload);},render:()=>html`<div class="tc-wizard-head"><span class="tc-tile tc-tile--icon tc-tile--lg">${icon('download')}</span><div class="tc-sheet-head-text"><h2 class="tc-sheet-title" id="plugin-install-title">Install from source</h2><span class="tc-small tc-muted">Complete plugins, with their skills, tools and hooks.</span></div><ol class="tc-steps" aria-label="Installation steps">${['Plugins','Agents','Install'].flatMap((label,i)=>[i?html`<li class="tc-step-line"${view.step>i?raw(' data-done'):''} aria-hidden="true"></li>`:'',html`<li class="tc-step" data-state="${view.step===i+1?'active':view.step>i+1?'done':'pending'}"${view.step===i+1?raw(' aria-current="step"'):''}><span class="tc-step-mark">${view.step>i+1?icon('check'):i+1}</span><span>${label}</span></li>`])}</ol><button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" data-plugin-exit aria-label="Close plugin installation"${off(view.pending)}>${icon('x')}</button></div><div class="tc-wizard-grid"><div class="tc-wizard-main" aria-busy="${String(view.pending)}">${view.error?html`<p class="tc-notice tc-notice--danger" role="alert">${view.error}</p>`:''}${view.step===1?sourcePicker():view.step===2?agentPicker():resultPage()}${view.pending?html`<p class="tc-hint" role="status"><span class="tc-spinner"></span>${view.step===3||view.retryInstall?'Applying the reviewed operations…':'Reading package information…'}</p>`:''}</div><div class="tc-wizard-rail-wrap"${view.railOpen?raw(' data-open'):''}><button class="tc-wizard-rail-toggle" type="button" data-plugin-rail aria-controls="plugin-install-plan" aria-expanded="${String(view.railOpen)}">Install plan${icon('chevron-down')}</button><aside class="tc-wizard-rail" id="plugin-install-plan" aria-label="Install plan">${rail()}</aside></div></div><div class="tc-wizard-foot">${view.step===3?html`<button class="tc-btn" type="button" data-plugin-another${off(view.pending)}>Install for another agent</button><span class="tc-spacer"></span><button class="tc-btn tc-btn--primary" type="button" data-plugin-exit>Done</button>`:html`<span class="tc-hint tc-wizard-keyboard">${view.step===1?'Choose packages to continue':'Review permissions before installing'}</span><span class="tc-spacer"></span>${view.step===2?html`<button class="tc-btn" type="button" data-plugin-previous${off(view.pending||view.retryInstall)}>Back</button>`:html`<button class="tc-btn tc-btn--ghost" type="button" data-plugin-exit${off(view.pending)}>Close</button>`}<button class="tc-btn tc-btn--primary" type="button" data-plugin-next${off(view.pending||(view.step===1?!view.selected.size:view.plans.length?(!view.consent||!view.plans.every(entry=>entry.plan&&entry.plan.canApply)):(!view.agents.size||![...view.agents].every(compatible))))}>${view.step===1?'Choose agents':view.plans.length?('Install '+view.queue.length+' plugin'+(view.queue.length===1?'':'s')):'Review '+(view.queue.length||selected().length*view.agents.size||'')+' installation'+((view.queue.length||selected().length*view.agents.size)===1?'':'s')}</button>`}</div>`});
       window.addEventListener('beforeunload',beforeUnload);
       view.layer.panel.addEventListener('input',e=>{
         if(e.target.id==='plugin-source'){view.source=e.target.value;invalidate();dispose(view.preview?.previewId);view.preview=null;view.prefix=null;view.selected.clear();resetQueue();draw();}
@@ -167,11 +217,12 @@ const T3PluginsUI = (() => {
       view.layer.panel.addEventListener('click',e=>{
         const b=e.target.closest('button');if(!b||b.disabled)return;
         if(b.hasAttribute('data-plugin-exit'))close();
+        else if(b.hasAttribute('data-plugin-trust-hooks')){const nativeId=b.getAttribute('data-plugin-trust-hooks');close();reviewHooks(nativeId);}
         else if(b.hasAttribute('data-plugin-rail')){view.railOpen=!view.railOpen;draw();}
         else if(b.hasAttribute('data-plugin-read'))void readSource();
         else if(b.hasAttribute('data-plugin-next'))void next();
-        else if(b.hasAttribute('data-plugin-previous')){invalidate();view.step=1;view.error=null;draw(true);}
-        else if(b.hasAttribute('data-plugin-another')){invalidate();if(view.cursor+1<view.queue.length){view.cursor++;}else{resetQueue();view.completed=[];view.agents.clear();}view.step=2;view.error=null;draw(true);}
+        else if(b.hasAttribute('data-plugin-previous')){invalidate();resetQueue();view.step=1;view.error=null;draw(true);}
+        else if(b.hasAttribute('data-plugin-another')){invalidate();resetQueue();view.completed=[];view.agents.clear();view.step=2;view.error=null;draw(true);}
       });
       view.layer.panel.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='plugin-source'){e.preventDefault();void readSource();}else if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();void next();}});
       if(options.source)void readSource();

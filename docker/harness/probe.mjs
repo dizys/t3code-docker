@@ -5,12 +5,13 @@
 // to turn "a path exists" into the facts the console and T3 need - an exact
 // running version and an authenticated/not/unknown verdict.
 import path from "node:path";
+import {readEnv} from './mise.mjs';
 
 /** Run the harness's version flag and extract a concrete version. */
 export async function probeVersion(ctx, entry, executable) {
   if (!executable) return { ok: false, version: null, error: "no executable" };
   const result = await ctx.run([executable, ...entry.versionArgs], {
-    env: ctx.env,
+    env: readEnv(ctx.env),
     cwd: ctx.home,
     timeoutMs: ctx.timeouts.probe,
   });
@@ -134,7 +135,7 @@ function hasEnv(ctx, key) {
 
 async function probeCommand(ctx, executable, args, env = null) {
   const result = await ctx.run([executable, ...args], {
-    env: env ? { ...ctx.env, ...env } : ctx.env,
+    env: readEnv(env ? { ...ctx.env, ...env } : ctx.env),
     cwd: ctx.home,
     timeoutMs: ctx.timeouts.probe,
   });

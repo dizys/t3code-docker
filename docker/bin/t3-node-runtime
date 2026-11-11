@@ -1,0 +1,32 @@
+#!/bin/bash
+# Installed as node, npm and npx in an image-owned, user-only PATH directory.
+# Use mise for a declared runtime and the image tools when none is declared.
+set -euo pipefail
+
+command="${0##*/}"
+case "$command" in node|npm|npx) ;; *) echo 't3-node-runtime: invoke as node, npm or npx' >&2; exit 2 ;; esac
+
+: "${T3_INFRA_NODE:=/usr/local/bin/node}"
+: "${T3_NODE_RUNTIME_CLI:=/opt/t3-harness/node-runtime.mjs}"
+: "${T3_MISE_BIN:=/usr/local/bin/mise}"
+system_bin="${T3_INFRA_NODE%/*}/$command"
+
+# Root never follows a runtime selected by a project or the t3 user's home.
+if [ "$EUID" -eq 0 ]; then
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  export PATH
+  exec "$system_bin" "$@"
+fi
+
+mode="$("$T3_INFRA_NODE" "$T3_NODE_RUNTIME_CLI" "$command")"
+case "$mode" in
+  system) exec "$system_bin" "$@" ;;
+  mise)
+    # Resolve inside mise's execution environment, then use that exact path.
+    # `mise exec -- node` can find this dispatcher again when auto-install is
+    # disabled and a declared version is missing. `which` fails in that case.
+    executable="$("$T3_MISE_BIN" exec -- "$T3_MISE_BIN" which "$command")"
+    exec "$executable" "$@"
+    ;;
+  *) echo 't3-node-runtime: invalid runtime selection' >&2; exit 1 ;;
+esac

@@ -269,6 +269,10 @@ COPY docker/bin/ /usr/local/bin/
 # helpers: the harness manager owns install/resolve, and the provider
 # integration turns its selection into T3's per-provider `binaryPath`.
 COPY docker/harness/ /opt/t3-harness/
+RUN set -eux; mkdir -p /usr/local/lib/t3-node-runtime; \
+    for command in node npm npx; do \
+      ln -s /usr/local/bin/t3-node-runtime "/usr/local/lib/t3-node-runtime/$command"; \
+    done
 COPY docker/provider-integration/ /opt/t3-provider/
 COPY docker/setup/ /opt/t3-setup/
 COPY docker/services/ /opt/t3-services/

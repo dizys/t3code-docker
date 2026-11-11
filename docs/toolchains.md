@@ -6,6 +6,12 @@ home, and work in every directory. The **Toolchains** page updates or removes
 each one, installs any you left out of `T3_PREINSTALL`, and adds other tools
 (see below). Node and Python are part of the image.
 
+Node, npm and npx use the image's tools when no Node or npm version is selected
+in mise. An older, unselected installation cannot shadow them with a stale shim.
+Global and project selections still take precedence, and a declared runtime
+that is unavailable still reports an error instead of silently using the image.
+This applies to agents and their update checks as well as terminals.
+
 Managed Rust follows the stable channel, resolved to an exact numbered release
 before checking or installing an update. Rolling names such as `stable` and
 `beta` are not separate upgrade versions. Updates retain clippy and rustfmt,

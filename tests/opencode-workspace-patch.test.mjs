@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { source } from "./fixtures/opencode-workspace-source.mjs";
 import { normalizedSource } from "./fixtures/opencode-workspace-normalized-source.mjs";
+import { settledSource } from "./fixtures/opencode-workspace-settled-source.mjs";
 import { files, patchOpenCodeSkills } from "../docker/runtime/patches/opencode-skills.mjs";
 import { patches } from "../docker/runtime/patches/index.mjs";
 
-for (const [version, input] of [["retained and Stable", source], ["normalized Nightly", normalizedSource]]) {
+for (const [version, input] of [["retained and Stable", source], ["normalized Nightly", normalizedSource], ["settled Nightly 4606", settledSource]]) {
   test(`${version}: runtime registers native plugin readiness before workspace inventory is cached`, () => {
     const before = structuredClone(input), result = patchOpenCodeSkills(input);
     assert.deepEqual(input, before);
@@ -58,4 +59,19 @@ test("normalized Nightly paths are preserved and loaded-location shortcuts canno
   assert.doesNotMatch(result[files[0]], /events|stream\._tag|client\.debug\.location|Deferred|Stream/);
   assert.doesNotMatch(result[files[1]], /wasLoaded|loaded:|first\.commands|timeoutOption/);
   assert.throws(() => patchOpenCodeSkills({ ...normalizedSource, [files[0]]: normalizedSource[files[0]].replace('pathService.resolve(cwd)', 'cwd') }), /no longer matches/);
+});
+
+test("settled Nightly replaces the upstream catalog barrier with native plugin readiness", () => {
+  const result = patchOpenCodeSkills(settledSource);
+  assert.match(result[files[0]], /const directory = pathService\.resolve\(cwd\);/);
+  assert.match(result[files[0]], /client\.plugin\.list\(\{ location \}\)/);
+  assert.doesNotMatch(result[files[0]], /client\.provider\.list|client\.debug\.location|Deferred|Stream|stream\._tag/);
+  assert.doesNotMatch(result[files[1]], /settled|wasLoaded|loaded:|first\.commands|timeoutOption/);
+  for (const [file, before, after] of [
+    [files[0], 'client.provider.list({ location })', 'client.provider.list({ directory })'],
+    [files[1], 'settled: Effect.Effect<void> = Effect.void,', 'settled: Effect.Effect<void>,'],
+  ]) {
+    const changed = { ...settledSource, [file]: settledSource[file].replace(before, after) };
+    assert.throws(() => patchOpenCodeSkills(changed), /no longer matches/, "unreviewed settlement changes fail closed");
+  }
 });

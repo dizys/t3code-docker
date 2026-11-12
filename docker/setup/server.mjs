@@ -1436,7 +1436,7 @@ const replaceKey = () => {
   }
   KEY = key;
   KEY_SOURCE = "volume";
-  failures.clear();
+  keyGuesses.clearFailures();
   recordEvent("key.replaced", "Setup key replaced");
   return { http: 200, body: { ok: true, key, source: KEY_SOURCE } };
 };

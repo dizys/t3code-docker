@@ -39,3 +39,15 @@ test('failed delay implementations release slots and do not poison a queue', asy
   assert.equal(await throttle.check('one', 'bad'), false);
   assert.equal(await throttle.check('one', 'good'), true);
 });
+
+test('clearing failure history preserves in-flight admission and lets the next failure start fresh', async () => {
+  const gate = deferred(), delays = [];
+  const throttle = createKeyThrottle({ matches: key => key === 'good', perAddress: 1, wait: async ms => { delays.push(ms); await gate.promise; } });
+  const pending = throttle.check('one', 'bad');
+  await Promise.resolve();
+  throttle.clearFailures();
+  await assert.rejects(throttle.check('one', 'good'), { code: 'login-limit' });
+  gate.resolve(); assert.equal(await pending, false);
+  assert.equal(await throttle.check('one', 'bad'), false);
+  assert.deepEqual(delays, [250, 250]);
+});

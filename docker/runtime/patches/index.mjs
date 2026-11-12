@@ -7,7 +7,7 @@ import * as gatewayContext from "./gateway-context.mjs";
 import * as gatewayQuota from "./gateway-quota.mjs";
 
 // Included in the registry fingerprint. Bump when the build contract changes.
-export const BUILD_REVISION = 4;
+export const BUILD_REVISION = 5;
 export const patches = [{ name: "agent-resources", module: new URL("./agent-resources.mjs", import.meta.url), files: agentResources.files, creates: agentResources.creates, assets: agentResources.assets, apply: agentResources.patchAgentResources },
   { name: "project-directory", module: new URL("./project-directory.mjs", import.meta.url), files: projectDirectory.files, apply: projectDirectory.patchProjectDirectory },
   { name: "gateway-capabilities", module: new URL("./gateway-capabilities.mjs", import.meta.url), files: gatewayCapabilities.files, apply: gatewayCapabilities.patchGatewayCapabilities },

@@ -17,6 +17,15 @@ archive's native modules and resource monitor. Its manifest records the patch
 revision, upstream source commit and original archive checksum. Compiler
 dependencies remain outside the final image.
 
+The build also records the exact tag's service launcher IPC protocol. Stable
+and retained artifacts use protocol 3; current Nightly sources require protocol
+4. The supervisor reads this metadata for every start and trial, including a
+return to an older runtime. The prepared/committed handshake is unchanged;
+container selection writes remain coordinated by the supervisor, and native
+service-manager update requests remain directed to Setup. Unknown protocols
+fail before compilation or launch. The same-version smoke gives the matching
+official archive this source-derived protocol without modifying its executable.
+
 The Setup palette patch adds an authenticated command provider to the native
 client's action list, before its normal ranking and virtualization. The image's
 bridge supplies validated command metadata and resolves selected IDs; T3 owns

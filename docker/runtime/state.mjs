@@ -35,6 +35,13 @@ export async function readJson(file, missing = null) {
   catch (error) { if (error.code === "ENOENT") return missing; throw error; }
 }
 
+export async function runtimeLauncherProtocol(binary, fallback = 3) {
+  const manifest = await readJson(path.join(path.dirname(binary), "package.json"));
+  const protocol = manifest?.containerPatch?.launcherProtocol ?? fallback;
+  if (![3, 4].includes(protocol)) throw new Error("This runtime requires an unsupported service launcher protocol.");
+  return protocol;
+}
+
 /** Replace durably. Recovery must never boot from a half-written selection. */
 export async function writeJson(file, value) {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });

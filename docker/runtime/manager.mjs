@@ -7,7 +7,7 @@ import { unpackRelease, executableVersion } from "./releases.mjs";
 import { packageRelease, releaseForVersion } from "./distribution.mjs";
 import { PATCH_REVISION } from "./distribution-spec.mjs";
 import { injectSetupBridge } from "./client-shell.mjs";
-import { CHANNELS, channelOf, exactVersion, databaseName, validScopes, runtimePaths, readJson, writeJson, readSelection, selectedRuntime, releaseDirectory, operationBusy } from "./state.mjs";
+import { CHANNELS, channelOf, exactVersion, databaseName, validScopes, runtimePaths, runtimeLauncherProtocol, readJson, writeJson, readSelection, selectedRuntime, releaseDirectory, operationBusy } from "./state.mjs";
 // The checkout and image deliberately have different infrastructure prefixes.
 const localHarness = new URL("../harness/", import.meta.url);
 const harnessBase = existsSync(new URL("version.mjs", localHarness)) ? localHarness : new URL("file:///opt/t3-harness/");
@@ -40,11 +40,12 @@ export async function discoverRuntime(binary, paths, { run = execute, env = proc
 export async function installRelease(paths, release, { fetcher = fetch, run = execute, env = process.env, bridge = "/usr/local/share/t3-client/setup-bridge.js", onPhase = async () => {} } = {}) {
   const destination = releaseDirectory(paths, release);
   const preflight = async (binary) => {
+    const launcherProtocol = await runtimeLauncherProtocol(binary);
     const version = await run(binary, ["--version"], { timeout: 30_000 });
     if (executableVersion(version.stdout) !== release.version) throw new Error(`The executable reports a different T3 Code version (${version.stdout.trim().slice(0, 160)}).`);
-    const result = await run(binary, ["__service-preflight", "--database-path", path.join(paths.home, "userdata/statev2.sqlite"), "--launcher-protocol", "3"], { timeout: 30_000 });
+    const result = await run(binary, ["__service-preflight", "--database-path", path.join(paths.home, "userdata/statev2.sqlite"), "--launcher-protocol", String(launcherProtocol)], { timeout: 30_000 });
     const ready = JSON.parse(result.stdout.trim());
-    if (ready.status !== "ready" || ready.version !== release.version || ready.launcherProtocol !== 3) throw new Error(ready.reason || "This release requires a newer container supervisor.");
+    if (ready.status !== "ready" || ready.version !== release.version || ready.launcherProtocol !== launcherProtocol) throw new Error(ready.reason || "This release requires a newer container supervisor.");
   };
   const cached = await readJson(path.join(destination, ".installed.json"));
   if (cached?.version === release.version) {

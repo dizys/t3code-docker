@@ -207,7 +207,7 @@ COPY --from=t3-build-node /usr/local/bin/node /usr/local/bin/node
 COPY docker/runtime/ /src/docker/runtime/
 COPY scripts/build-t3-runtime.mjs /src/scripts/build-t3-runtime.mjs
 # The one bundled version pin; scripts/bump-versions.sh refreshes it.
-ARG T3_VERSION=0.1.8
+ARG T3_VERSION=0.1.9
 ARG TARGETARCH
 ENV npm_config_store_dir=/var/cache/pnpm
 RUN --mount=type=cache,target=/var/cache/pnpm set -eux; \
@@ -359,7 +359,7 @@ FROM core AS browser
 
 # Browser automation over MCP. T3 Code's own preview tools are hosted by the
 # web/desktop client, so a phone-only setup has no eyes without this.
-ARG CHROME_DEVTOOLS_MCP_VERSION=1.12.0
+ARG CHROME_DEVTOOLS_MCP_VERSION=1.13.0
 ARG PLAYWRIGHT_MCP_VERSION=0.0.85
 USER root
 

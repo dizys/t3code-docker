@@ -9,9 +9,18 @@
 // never parsed at all.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { createServer } from "node:net";
+import { fileURLToPath } from "node:url";
 
 import { cookieValue, forwardedPrefix } from "../docker/setup/request-auth.mjs";
 import { validKey } from "../docker/setup/setup-key.mjs";
+
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const headerFor = (key) => `other=1; t3setup=${encodeURIComponent(key)}; theme=dark`;
 
@@ -66,4 +75,77 @@ test("anything that is not a plain path is refused", () => {
   }
   assert.equal(forwardedPrefix({}), "");
   assert.equal(forwardedPrefix(undefined), "");
+});
+
+// Concurrent wrong guesses against the real server must queue per IP and
+// spill past the in-flight cap with 429: before, N parallel guesses shared
+// one delay window and were all answered together, so trying many keys at
+// once cost little more than trying one.
+test("concurrent bad guesses queue per IP and flood past the cap with 429", { timeout: 30000 }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "t3-login-queue-"));
+  const socket = createServer().listen(0, "127.0.0.1");
+  await once(socket, "listening");
+  const port = socket.address().port;
+  await new Promise((resolve) => socket.close(resolve));
+  const home = path.join(root, "home");
+  await fs.mkdir(home);
+  const child = spawn(process.execPath, [fileURLToPath(new URL("../docker/setup/server.mjs", import.meta.url))], {
+    env: {
+      ...process.env, HOME: home, T3CODE_HOME: path.join(home, ".t3"),
+      CLAUDE_CONFIG_DIR: path.join(home, ".claude"), T3_WORKSPACE: root,
+      MISE_DATA_DIR: path.join(root, "mise-data"), MISE_STATE_DIR: path.join(root, "mise-state"),
+      MISE_CONFIG_DIR: path.join(root, "mise-config"),
+      T3_HARNESS_MODULE: fileURLToPath(new URL("../docker/harness/index.mjs", import.meta.url)),
+      T3_SETUP_KEY: "queue-fixture-setup-key", T3_SETUP_KEY_SOURCE: "env",
+      T3_SETUP_PORT: String(port), T3CODE_PORT: "1", T3_INFRA_LAUNCHER: "/bin/false",
+      T3_RUN_DIR: path.join(root, "run"),
+      T3_RUNTIME_MODULE: fileURLToPath(new URL("../docker/runtime/manager.mjs", import.meta.url)),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let logs = "";
+  child.stdout.on("data", (x) => { logs += x; });
+  child.stderr.on("data", (x) => { logs += x; });
+  t.after(async () => {
+    if (child.exitCode === null) {
+      const exit = once(child, "exit");
+      child.kill();
+      await exit;
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${port}`;
+  for (let i = 0; i < 200; i++) {
+    if (child.exitCode !== null) throw new Error(logs);
+    try { await fetch(`${base}/hello`); break; } catch { await pause(20); }
+  }
+  const login = (guess) => fetch(`${base}/login`, {
+    method: "POST",
+    headers: { accept: "application/json" },
+    body: new URLSearchParams({ key: guess }),
+  });
+  // Six wrong guesses at once: the admitted ones wait in turn (0ms, 250ms,
+  // 500ms, 750ms, ...), so the batch takes well over one delay window, and
+  // the flood past the in-flight cap is refused outright.
+  const at = Date.now();
+  const answers = await Promise.all(Array.from({ length: 6 }, (_, i) => login(`wrong-${i}`)));
+  const ms = Date.now() - at;
+  const statuses = answers.map((r) => r.status);
+  assert.ok(statuses.includes(429), `a flood of parallel guesses should spill past the cap, got ${statuses}`);
+  assert.ok(statuses.every((s) => s === 401 || s === 429), `guesses answer 401 or 429, got ${statuses}`);
+  assert.ok(ms >= 1200, `queued guesses should take their delays in turn, took ${ms}ms`);
+  // The same queue protects the cookie/header oracle even on public pages.
+  for (const [index, route, header] of [[1, '/', 'cookie'], [2, '/hello', 'x-t3-setup-key'], [3, '/status', 'cookie']]) {
+    const ip = `192.0.2.${index}`;
+    const headers = { 'x-forwarded-for': ip, [header]: header === 'cookie' ? 't3setup=wrong' : 'wrong' };
+    const guesses = Array.from({ length: 4 }, () => fetch(base + route, { headers }));
+    await pause(40);
+    const excess = await fetch(base + '/hello', { headers: { 'x-forwarded-for': ip, 'x-t3-setup-key': 'queue-fixture-setup-key' } });
+    assert.equal(excess.status, 429, `${route}: no comparisons, even correct guesses, at capacity`);
+    const answers = await Promise.all(guesses);
+    assert.ok(answers.every(response => response.status === (route === '/status' ? 401 : 200)));
+    const signedIn = await fetch(base + '/hello', { headers: { 'x-forwarded-for': ip, 'x-t3-setup-key': 'queue-fixture-setup-key' } });
+    assert.equal((await signedIn.json()).signedIn, true, 'authentication recovers after draining');
+  }
+
 });

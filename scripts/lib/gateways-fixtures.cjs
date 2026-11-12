@@ -117,7 +117,7 @@ function createGatewaysFixtures({ scenario = 'set-up', installed = ['claude', 'c
     const { createGatewayService, gatewayFailure } = await modules;
     const io = memoryFiles(), t3 = memoryT3(), vault = memoryVault();
     let tick = 0;
-    const service = createGatewayService({ baseDir: '/state', home: '/home/t3', env: {}, io, t3, vault, processes: { stop: async () => 0 }, fetchImpl: async (url, init) => { await new Promise(resolve => setTimeout(resolve, 120)); return respond(url, init); },
+    const service = createGatewayService({ baseDir: '/state', home: '/home/t3', env: {}, io, t3, vault, processes: { stop: async () => 0 }, lookup: async () => '192.0.2.1', fetchImpl: async (url, init) => { await new Promise(resolve => setTimeout(resolve, 120)); return respond(url, init); },
       now: () => Date.now() + tick, wait: ms => new Promise(resolve => setTimeout(resolve, Math.min(ms, 400))) });
     const set = { service, gatewayFailure, io, t3, vault, name };
     if (name === 'pi-error') {

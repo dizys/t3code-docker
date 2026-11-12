@@ -63,7 +63,9 @@ jobs:
           node scripts/harness-ui-audit.js
           scripts/generate-mise-idiomatic.sh --check
       - name: Compose file is valid
-        run: docker compose config >/dev/null
+        run: |
+          docker compose config >/dev/null
+          docker compose -f compose.yaml -f compose.tailscale.yaml config >/dev/null
       - name: Services and Access browser regression
         env:
           CHROME_PATH: /usr/bin/google-chrome
@@ -265,6 +267,17 @@ jobs:
             scripts/test-services-e2e.sh "${REGISTRY}/${{ steps.image.outputs.slug }}@${PLATFORM_DIGEST}"
           else
             scripts/test-services-e2e.sh "t3code:${VARIANT}"
+          fi
+
+      - name: Tailscale full networking E2E (native architecture)
+        if: matrix.target == 'core'
+        env:
+          PLATFORM_DIGEST: ${{ steps.platform.outputs.digest }}
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            scripts/test-services-tailscale-e2e.sh "${REGISTRY}/${{ steps.image.outputs.slug }}@${PLATFORM_DIGEST}"
+          else
+            scripts/test-services-tailscale-e2e.sh "t3code:core"
           fi
 
       # The assembled product: install and launch all five managed harnesses

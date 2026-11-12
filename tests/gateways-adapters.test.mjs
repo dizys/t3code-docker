@@ -416,6 +416,23 @@ test('braces can never reach a model list', () => {
   assert.deepEqual(cleanModelIds(['{file:/etc/passwd}', 'a{b', 'a}b', 'ok-model', 'org/model:free', 'a~b|c']), ['a~b|c', 'ok-model', 'org/model:free']);
 });
 
+test('provider model identifiers remain literal data in generated JSON and Pi extensions', async t => {
+  const ids = ['@cf/meta/llama', 'model+vision', 'model"quoted', 'model`literal', 'model$literal', 'model;literal'];
+  assert.deepEqual(cleanModelIds(ids), [...ids].sort((a, b) => a.localeCompare(b, 'en', { numeric: true, sensitivity: 'base' })));
+  const capabilities = Object.fromEntries(ids.map(id => [id, { limits: { context: 128000 } }]));
+  const gw = gateway({ models: { ids, manual: [], capabilities }, agents: { codex: { on: true, scope: 'all' } } });
+  for (const major of [1, 2]) {
+    const config = JSON.parse(fileText(opencode, gw, '/d', { major }));
+    const models = (config.providers ?? config.provider)['t3gw-my-proxy'].models;
+    for (const id of ids) assert.ok(Object.hasOwn(models, id), id);
+  }
+  const extension = await importExtension(t, fileText(pi, gw, '/d'));
+  let models; extension.default({ registerProvider: (_id, config) => { models = config.models; } });
+  for (const id of ids) assert.ok(models.some(model => model.id === id), id);
+  const catalog = JSON.parse(fileText(codex, gw, '/d', { nativeModels }));
+  for (const id of ids) assert.ok(catalog.models.some(model => model.slug === id), id);
+});
+
 test('model lists are read from each shape gateways use, in one stable order', () => {
   assert.deepEqual(parseModelList({ data: [{ id: 'b' }, { id: 'a' }] }), ['a', 'b']);
   assert.deepEqual(parseModelList({ models: [{ name: 'a' }, { slug: 'b' }] }), ['a', 'b']);

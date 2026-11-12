@@ -64,7 +64,7 @@ RUN set -eux; \
         unzip zip xz-utils \
         less nano vim-tiny \
         procps psmisc htop file tzdata \
-        qrencode iproute2 iputils-ping dnsutils; \
+        qrencode iproute2 iputils-ping dnsutils nftables; \
     update-ca-certificates; \
     # Re-point apt at the merged store so later stages trust both the system
     # roots and any extra anchors, whatever the supplied bundle contained.

@@ -191,7 +191,7 @@ const T3GatewayModel = (() => {
   };
 
   /** A failed test's button: some failures are worth going past, and some aren't. */
-  const canContinueAnyway = result => Boolean(result && !result.ok && !['invalid', 'unauthorized'].includes(result.code));
+  const canContinueAnyway = result => Boolean(result && !result.ok && !['invalid', 'unauthorized', 'private-host'].includes(result.code));
 
   const CONFLICT_SENTENCES = Object.freeze({
     ANTHROPIC_BASE_URL: 'sends every Claude instance to',

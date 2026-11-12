@@ -21,14 +21,14 @@ no() { printf '  FAIL %s\n' "$1"; fail=$((fail + 1)); }
 
 # Load only announce_setup_key from the entrypoint: sourcing the whole file
 # would remap users and start services. Function boundaries are exact.
-extracted="$(sed -n '/^announce_setup_key() {/,/^}/p' "$ENTRYPOINT")"
+extracted="$(sed -n '/^setup_key_fingerprint() {/,/^}/p; /^announce_setup_key() {/,/^}/p' "$ENTRYPOINT")"
 if [ -z "$extracted" ]; then
   no "announce_setup_key exists in the entrypoint"
   printf '\n%d passed, %d failed\n' "$pass" "$fail"
   exit 1
 fi
 load_announce() {
-  unset -f announce_setup_key log 2>/dev/null || true
+  unset -f announce_setup_key setup_key_fingerprint log 2>/dev/null || true
   eval "$extracted"
   log() { printf '%s\n' "$*"; }
 }
@@ -40,15 +40,39 @@ run_announce() { # source key
 SECRET="s3cr3t-key-value"
 
 out="$(load_announce; run_announce new "$SECRET")"
-case "$out" in
-  *"$SECRET"*) ok "a new key is printed once, so first start can be found in the log" ;;
-  *) no "a new key is printed once (got: $out)" ;;
-esac
+if ! printf '%s' "$out" | grep -qF "$SECRET"; then
+  case "$out" in
+    *fingerprint*) ok "a new key is announced by fingerprint, never in full" ;;
+    *) no "a new key is announced by fingerprint (got: $out)" ;;
+  esac
+else
+  no "a new key is announced by fingerprint (got: $out)"
+fi
 
 out="$(load_announce; run_announce boot "$SECRET")"
+if ! printf '%s' "$out" | grep -qF "$SECRET"; then
+  case "$out" in
+    *fingerprint*) ok "an ephemeral key is announced by fingerprint, since it changes every start" ;;
+    *) no "an ephemeral key is announced by fingerprint (got: $out)" ;;
+  esac
+else
+  no "an ephemeral key is announced by fingerprint (got: $out)"
+fi
+
+LONG="abcdef0123456789abcdef0123456789"
+out="$(load_announce; run_announce new "$LONG")"
+if ! printf '%s' "$out" | grep -qF "$LONG" &&
+    printf '%s' "$out" | grep -q "sha256:$(printf '%s' "$LONG" | sha256sum | cut -c1-12)" &&
+    ! printf '%s' "$out" | grep -q 'abcd.*6789'; then
+  ok "a generated key logs a hash, without raw key fragments"
+else
+  no "a generated key logs a hash, without raw key fragments (got: $out)"
+fi
+
+out="$(load_announce; T3_PRINT_SETUP_KEY=1 run_announce new "$SECRET")"
 case "$out" in
-  *"$SECRET"*) ok "an ephemeral key is printed, since it changes every start" ;;
-  *) no "an ephemeral key is printed (got: $out)" ;;
+  *"$SECRET"*) ok "T3_PRINT_SETUP_KEY=1 still prints the full key for a first start" ;;
+  *) no "T3_PRINT_SETUP_KEY=1 still prints the full key (got: $out)" ;;
 esac
 
 out="$(load_announce; run_announce volume "$SECRET")"
@@ -69,7 +93,7 @@ fi
 # Redirect fixed image paths to fixtures, leaving the functions and their
 # call/unset sequence intact. Never source the privileged entrypoint itself.
 sed -n '/^# --- unprivileged half/,/^if ! mkdir/{ /^if ! mkdir/d; p; }' "$ENTRYPOINT" > "$WORK/prelude.sh"
-sed -n '/^announce_setup_key() {/,/^start_router() {/{ /^start_router() {/d; p; }' "$ENTRYPOINT" \
+sed -n '/^setup_key_fingerprint() {/,/^start_router() {/{ /^start_router() {/d; p; }' "$ENTRYPOINT" \
   | sed "s|/opt/t3-setup/|$WORK/setup/|g" > "$WORK/startup.sh"
 mkdir "$WORK/setup"
 touch "$WORK/setup/server.mjs"
@@ -133,13 +157,31 @@ else
   no "configured key inheritance or logging"
 fi
 
+boot short T3_SETUP_KEY="tiny" T3_SETUP_KEY_SOURCE=env
+if grep -q "WARNING: the setup key is short" "$CASE_DIR/log" &&
+    ! grep -qF "tiny" "$CASE_DIR/log"; then
+  ok "a short configured key warns in the log without printing the key"
+else
+  no "short key log warning"
+fi
+
 boot generated
 generated="$(cat "$CASE_DIR/state/setup-key")"
 if [ "$(cat "$CASE_DIR/setup-env")" = "new $generated" ] &&
-    [ "$(grep -cF "$generated" "$CASE_DIR/log")" = 1 ] && children_have_no_key; then
-  ok "a generated key reaches Setup and the first-start log only"
+    ! grep -qF "$generated" "$CASE_DIR/log" &&
+    grep -q "fingerprint: sha256:$(printf '%s' "$generated" | sha256sum | cut -c1-12)" "$CASE_DIR/log" &&
+    ! grep -q "WARNING: the setup key is short" "$CASE_DIR/log" && children_have_no_key; then
+  ok "a generated key reaches Setup; the first-start log carries its fingerprint only"
 else
   no "generated key inheritance or first-start logging"
+fi
+
+boot optin T3_PRINT_SETUP_KEY=1
+opted="$(cat "$CASE_DIR/state/setup-key")"
+if grep -qF "$opted" "$CASE_DIR/log"; then
+  ok "T3_PRINT_SETUP_KEY=1 prints the full generated key for a first start"
+else
+  no "opt-in full key logging"
 fi
 boot generated
 if [ "$(cat "$CASE_DIR/setup-env")" = "volume $generated" ] &&
@@ -150,8 +192,13 @@ else
 fi
 
 boot ephemeral T3CODE_HOME="$WORK/no-such-volume"
+ephemeral="$(cat "$CASE_DIR/setup-env")"
+ephemeral="${ephemeral#boot }"
 if [[ "$(cat "$CASE_DIR/setup-env")" == 'boot '* ]] &&
-    children_have_no_key && grep -q 'generated one for this start' "$CASE_DIR/log"; then
+    children_have_no_key && grep -q 'generated one for this start' "$CASE_DIR/log" &&
+    grep -q 'Set T3_SETUP_KEY.*recreate' "$CASE_DIR/log" &&
+    grep -q 'T3_PRINT_SETUP_KEY=1' "$CASE_DIR/log" &&
+    ! grep -qF "$ephemeral" "$CASE_DIR/log"; then
   ok "Setup still gets an ephemeral key when no file can be written"
 else
   no "ephemeral key inheritance"

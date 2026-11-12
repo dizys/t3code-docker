@@ -10,6 +10,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { EVIDENCE_FILES, REPOSITORY, releaseVersion } from './lib/dockerhub-release.mjs';
 import { attachEvidence, attachPlan, checkRun, findRelease, ghcrReader, sha256, verifyRelease } from './lib/release-evidence.mjs';
+import { contributorInventory, withContributorAcknowledgements, checkContributorAcknowledgements } from './lib/release-contributors.mjs';
 
 const exec = promisify(execFile);
 const gh = async (args) => (await exec('gh', args, { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 })).stdout;
@@ -46,10 +47,25 @@ const files = await Promise.all(EVIDENCE_FILES.map(async (name) => {
 }));
 
 const summary = [];
+let release = await findRelease(gh, tag);
+let notes, inventory;
+if (!tag.includes('-')) {
+  inventory = await contributorInventory({ tag, sourceSha, api });
+  // Inventory lookups can take time; keep notes edited during that work.
+  release = await findRelease(gh, tag);
+  notes = withContributorAcknowledgements(release?.body || '', inventory);
+  await fs.writeFile(path.join(dir, 'contributor-inventory.json'), JSON.stringify(inventory, null, 2) + '\n');
+  if (release && !release.isDraft) checkContributorAcknowledgements(release.body, inventory);
+  else if (!dryRun && release && release.body !== notes) {
+    await gh(['release', 'edit', tag, '-R', REPOSITORY, '--notes', notes]);
+    checkContributorAcknowledgements((await findRelease(gh, tag)).body, inventory);
+  }
+}
 if (dryRun) {
   summary.push(`Dry run. This would do: ${JSON.stringify(attachPlan(await findRelease(gh, tag)))}`);
 } else {
-  const plan = await attachEvidence({ tag, files, gh });
+  const plan = await attachEvidence({ tag, files, gh, notes });
+  if (inventory) checkContributorAcknowledgements((await findRelease(gh, tag)).body, inventory);
   if (plan.create) summary.push('Created a draft release with the evidence attached.');
   else if (plan.upload.length) summary.push(`Attached ${plan.upload.length} evidence files.`);
   else summary.push('The published release already has its evidence, so nothing changed.');

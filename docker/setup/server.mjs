@@ -47,6 +47,7 @@ import { createGatewayVault } from "./gateways/vault.mjs";
 import { createSessionStore, TERMINAL_STATES } from "./signin-sessions.mjs";
 import { clientAddress } from "./client-address.mjs";
 import { cookieValue, forwardedPrefix } from "./request-auth.mjs";
+import { createKeyThrottle } from "./key-throttle.mjs";
 import { newKey, readKeyFile, validKey, writeKeyFile } from "./setup-key.mjs";
 import { createCredentialStore, credentialFailure, CredentialError, credentialDirectory } from "./credentials.mjs";
 import { createCredentialsService, CREDENTIAL_ROUTES } from "./credentials/service.mjs";
@@ -128,6 +129,14 @@ if (!KEY) {
   process.exit(1);
 }
 
+// Short keys stay allowed: the operator chose it. But say so loudly, here
+// and to authenticated operators: use a longer key on reachable ports.
+const SHORT_KEY_CHARS = 16;
+const shortKey = KEY.length < SHORT_KEY_CHARS;
+if (shortKey) {
+  console.warn(`[setup] WARNING: the setup key is short (${KEY.length} chars, under ${SHORT_KEY_CHARS}); it is brute-forceable if this port is reachable. Set a longer T3_SETUP_KEY.`);
+}
+
 /** Constant-time compare that tolerates length differences. */
 const keyMatches = (candidate) => {
   const a = Buffer.from(String(candidate ?? ""));
@@ -140,19 +149,7 @@ const keyMatches = (candidate) => {
   return timingSafeEqual(a, b);
 };
 
-// A trivial throttle: the key is the only thing between a stranger and a
-// pairing token, so make guessing expensive.
-// Bounded: behind a proxy that names each visitor, a guesser rotating
-// addresses would otherwise grow this forever. The oldest go first.
-const FAILURES_KEPT = 1000;
-const failures = new Map();
-const throttle = (ip) => {
-  const n = failures.get(ip) ?? 0;
-  failures.delete(ip);
-  failures.set(ip, n + 1);
-  if (failures.size > FAILURES_KEPT) failures.delete(failures.keys().next().value);
-  return new Promise((r) => setTimeout(r, Math.min(n * 250, 3000)));
-};
+const keyGuesses = createKeyThrottle({ matches: keyMatches });
 
 // Bounded like the agent probes are. Without a timeout a single stuck
 // subcommand - a locked state database during an upgrade, an agent CLI waiting
@@ -976,6 +973,7 @@ const status = async () => {
     // `prefix` there. The page shows it beside the two ports it fronts.
     singlePort: SINGLE_PORT ? { port: SINGLE_PORT, prefix: SINGLE_PREFIX } : null,
     setupKeySource: KEY_SOURCE,
+    setupKeyShort: KEY.length < SHORT_KEY_CHARS,
     // Settings an older image baked in that this container still carries, which
     // the user environment dropped for everything the entrypoint started
     // (docker/user-env.sh); only the container's configuration can remove them.
@@ -1438,7 +1436,7 @@ const replaceKey = () => {
   }
   KEY = key;
   KEY_SOURCE = "volume";
-  failures.clear();
+  keyGuesses.clearFailures();
   recordEvent("key.replaced", "Setup key replaced");
   return { http: 200, body: { ok: true, key, source: KEY_SOURCE } };
 };
@@ -2582,8 +2580,10 @@ const SAFE_METHODS = new Set(["GET", "HEAD"]);
  * session only counts for a state change when the browser says the request
  * came from this origin, because its cookie is not SameSite=Strict.
  */
-const viewerOf = async (req) => {
-  if (keyMatches(cookieFrom(req)) || keyMatches(req.headers["x-t3-setup-key"])) return { via: "key" };
+const viewerOf = async (req, ip) => {
+  for (const candidate of [cookieFrom(req), req.headers["x-t3-setup-key"]]) {
+    if (candidate !== undefined && await keyGuesses.check(ip, candidate)) return { via: "key" };
+  }
   if (!ACCEPT_T3_SESSIONS) return null;
   if (!SAFE_METHODS.has(req.method) && fetchSite(req) !== "same-origin") return null;
   return (await t3Sessions.verify(req.headers.cookie)) ? { via: "t3" } : null;
@@ -2644,11 +2644,12 @@ const server = createServer(async (req, res) => {
   // same comparison - so `t3-expose` and the page are the same client as far
   // as this server is concerned, and neither can act on state the other cannot.
   // A browser signed in to T3 Code may come in on that session instead.
-  const viewer = await viewerOf(req).catch(() => null);
+  let viewer = null;
+  try { viewer = await viewerOf(req, ip); }
+  catch (error) {
+    if (error.code === "login-limit") return sendJson(res, 429, { ok: false, error: error.message }, { "retry-after": "3" });
+  }
   const authed = Boolean(viewer);
-  // A right key resets the guessing delay, however it arrived: the page sends
-  // a cookie, the in-container CLIs a header, and only /login cleared it.
-  if (viewer?.via === "key") failures.delete(ip);
   // Opened inside T3 Code's settings rather than on its own.
   const embed = raw.searchParams.get("embed") === "t3";
   const host = embed && raw.searchParams.get("host") === "tab" ? "tab" : undefined;
@@ -2691,13 +2692,18 @@ const server = createServer(async (req, res) => {
           params.set("layout", body.get("layout") === "wide" ? "wide" : "compact");
         }
       }
-      if (!keyMatches(body.get("key"))) {
-        await throttle(ip);
+      let accepted;
+      try { accepted = await keyGuesses.check(ip, body.get("key")); }
+      catch (error) {
+        if (error.code !== "login-limit") throw error;
+        if (wantsJson(req)) return sendJson(res, 429, { ok: false, error: error.message }, { "retry-after": "3" });
+        return send(res, 429, error.message, { "retry-after": "3" });
+      }
+      if (!accepted) {
         if (wantsJson(req)) return sendJson(res, 401, { ok: false, error: "That key was not accepted." });
         params.set("error", "1");
         return send(res, 303, "", { location: `${mount}/?${params}` });
       }
-      failures.delete(ip);
       const setCookie = cookie(req, mount, encodeURIComponent(KEY), 86400);
       if (wantsJson(req)) return sendJson(res, 200, { ok: true }, { "set-cookie": setCookie });
       return send(res, 303, "", { location: `${mount}/${params.size ? '?' + params : ''}`, "set-cookie": setCookie });
@@ -2720,7 +2726,6 @@ const server = createServer(async (req, res) => {
     }
 
     if (!authed) {
-      await throttle(ip);
       return sendJson(res, 401, { error: "unauthorized" });
     }
     // Any signed-in request means someone (or their open console) is active.

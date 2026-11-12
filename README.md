@@ -44,7 +44,7 @@ docker run -d --name t3code --restart unless-stopped \
   dizys/t3code-docker
 ```
 
-1. **Get the setup key:** `docker logs t3code 2>&1 | grep -A1 T3_SETUP_KEY`
+1. **Get the setup key:** `docker exec t3code cat /home/t3/.t3/setup-key`
 2. **Open <http://localhost:3774>** and enter it. **Overview** walks you through
    the rest: set a public URL, pair a device with a QR code, and sign agents in
    or [connect an AI gateway](#using-an-ai-gateway).
@@ -92,7 +92,8 @@ volumes:
   t3-services:
 ```
 
-The setup key is in `docker compose logs t3code | grep -A1 T3_SETUP_KEY`.
+Read the setup key with `docker compose exec t3code cat /home/t3/.t3/setup-key`.
+If you set `T3CODE_HOME`, read `setup-key` there instead.
 Upgrade the image with `docker compose pull && docker compose up -d`.
 
 Keep both named volumes when recreating the container. To change its timezone,

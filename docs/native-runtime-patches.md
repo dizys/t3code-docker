@@ -36,6 +36,12 @@ provider to be present in the compiled client. Retained clients from older
 patched runtimes keep their legacy bridge results until a new patched runtime
 is selected; this does not change their native version or preferences on its own.
 
+The gateway context patch accepts the reviewed Stable and Nightly Claude
+settings initializers. It applies gateway model limits before upstream merges
+model-alias and tool-search overrides, preserving their precedence and settings
+file paths. Unknown, duplicate or ambiguous initializers fail the build and
+require source review.
+
 The OpenCode workspace patch waits for the native skill and command config
 plugins to become active before caching discovery results. Built-in commands can
 arrive before local skills, so their presence does not establish readiness. The

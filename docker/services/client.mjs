@@ -15,7 +15,7 @@ export function serviceRequest(domain, action, input = {}, { env = process.env, 
     req.end(data);
   });
 }
-export const SERVICE_ROUTES = ["/services", "/services/plan", "/services/apply", "/services/operation", "/services/logs", "/services/events", "/services/inventory", "/services/authentication"];
+export const SERVICE_ROUTES = ["/services", "/services/plan", "/services/apply", "/services/operation", "/services/logs", "/services/events", "/services/inventory", "/services/authentication", "/services/requirements"];
 export function createServicesAPI({ request = serviceRequest } = {}) {
   const snapshot = async () => {
     const domains = await Promise.all(["user", "system"].map(async domain => {

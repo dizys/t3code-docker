@@ -22,7 +22,10 @@ sessions are never copied into it.
    Once both are in, the page tests them from inside this container, because that's
    where agents reach it from. A test sends empty requests, so it can't use tokens.
    CLIProxyAPI says what it is, so choosing **Other** still finds its Limits option.
-3. Under **Use in**, each agent shows how many models it would get. Clear any you
+3. If Setup asks, confirm that you trust the displayed host with your credentials.
+   Loopback, local service names and metadata addresses need this confirmation.
+   Changing the address clears it.
+4. Under **Use in**, each agent shows how many models it would get. Clear any you
    don't want, then choose **Add to … agents**.
 
 The new row follows each agent as it starts. Then pick the new entry in the model
@@ -43,6 +46,12 @@ itself, not your machine.
 `--add-host host.docker.internal:host-gateway`, and on 1Panel or similar, add the
 same `extra_hosts` entry to your service. A gateway on the Docker host also has to
 listen on `0.0.0.0`, not only on `127.0.0.1`.
+
+Gateway tests resolve the address once and use those checked addresses for every
+request. A DNS failure stops the test. HTTPS still checks the original hostname
+and certificate, and tests never follow redirects, so a redirect cannot forward
+your API or management key elsewhere. A landing-page redirect is harmless when
+the API paths work. Ordinary LAN and Tailscale addresses remain supported.
 
 ## Which agents
 

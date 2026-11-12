@@ -59,18 +59,30 @@ export function launcherPathFor(dir, id) {
 /** A word for sh, whatever it holds. */
 const quote = (word) => `'${String(word).replaceAll("'", "'\\''")}'`;
 
+// The supervisor's IPC pipe belongs to T3. Reusing its descriptor in a Node
+// agent can attach to an unrelated pipe and abort inside libuv before startup.
+const isolateIpc = "unset NODE_CHANNEL_FD NODE_CHANNEL_SERIALIZATION_MODE";
+
 /**
  * The launcher for one agent: run `executable`, except T3's update call,
  * which goes to `harnessCli update <id>`.
  */
-export function launcherScript({ id, name, executable, harnessCli }) {
+export function launcherScript({ id, name, executable, harnessCli, nodeRuntimeDir = id === 'pi' ? '/usr/local/lib/t3-node-runtime' : null }) {
   const launcher = LAUNCHERS[id];
   if (!launcher) throw new Error(`no launcher for ${id}`);
+  // A login shell can move unselected Mise shims ahead of the image's Node
+  // dispatcher. Pi's npm executable may itself be a shell shim, so keep its
+  // normal execution and restore the dispatcher first. It honors declared
+  // project/global Node selections and falls back only when none is selected.
+  const nodeRuntime = nodeRuntimeDir ? [`PATH=${quote(nodeRuntimeDir)}:"\${PATH:-/usr/local/bin:/usr/bin:/bin}"`, 'export PATH'] : [];
+  const execute = `exec ${quote(executable)} "$@"`;
   const update = launcher.update;
   if (!update) return [
     "#!/bin/sh",
     `# ${name} for T3 Code, written by the setup service. Update from Setup > Agents.`,
-    `exec ${quote(executable)} "$@"`,
+    isolateIpc,
+    ...nodeRuntime,
+    execute,
     "",
   ].join("\n");
   const isUpdate = [`[ "$#" -eq ${update.length} ]`, ...update.map((arg, index) => `[ "$${index + 1}" = ${quote(arg)} ]`)].join(" && ");
@@ -80,8 +92,10 @@ export function launcherScript({ id, name, executable, harnessCli }) {
     "# setup page installed. T3 Code's own Update runs this with",
     `# \`${update.join(" ")}\`, which updates it the setup page's way. Rewritten on every`,
     "# install and update; edits here do not last.",
+    isolateIpc,
+    ...nodeRuntime,
     `if ${isUpdate}; then exec ${quote(harnessCli)} update ${quote(id)}; fi`,
-    `exec ${quote(executable)} "$@"`,
+    execute,
     "",
   ].join("\n");
 }

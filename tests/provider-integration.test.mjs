@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -136,6 +136,7 @@ test("Pi installation configures its launcher, preserves disabled state and retr
   assert.equal(settings.providerInstances.pi.config.binaryPath, launcher("pi"));
   assert.equal(settings.providerInstances.pi.enabled, false);
   assert.match(fs.files.get(launcher("pi")), /exec '\/mise\/pi\/1\.4\.0\/pi'/);
+  assert.match(fs.files.get(launcher("pi")), /PATH='\/usr\/local\/lib\/t3-node-runtime':/);
   runnable = false;
   await integration.sync();
   assert.equal(json(fs, SETTINGS).providers.pi.binaryPath, undefined);
@@ -583,6 +584,47 @@ test("launchers keep managed execution and route native T3 updates to the manage
   const odd = launcherScript({ id: "claude", name: "Claude Code", executable: "/odd dir/it's/claude", harnessCli: "/usr/local/bin/t3-harness" });
   assert.match(odd, /^exec '\/odd dir\/it'\\''s\/claude' "\$@"$/m);
   assert.throws(() => launcherScript({ id: "nope", name: "x", executable: "/x", harnessCli: "/y" }));
+});
+
+test("agent and updater processes cannot inherit the supervisor's Node IPC descriptor", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "provider-launcher-ipc-"));
+  try {
+    const target = path.join(dir, "target"), file = path.join(dir, "launcher");
+    // Inspect the environment in sh, before Node can consume its IPC variables.
+    // Then start real Node to catch the startup failure seen with Pi on ARM.
+    writeFileSync(target, `#!/bin/sh
+if [ "\${NODE_CHANNEL_FD+x}" = x ] || [ "\${NODE_CHANNEL_SERIALIZATION_MODE+x}" = x ]; then exit 41; fi
+exec '${process.execPath}' -e 'console.log(JSON.stringify({key:process.env.T3_GATEWAY_KEY,args:process.argv.slice(1)}))' -- "$@"
+`, { mode: 0o700 });
+    for (const [id, launcher] of Object.entries(LAUNCHERS)) {
+      writeFileSync(file, launcherScript({ id, name: id, executable: target, harnessCli: target }), { mode: 0o700 });
+      for (const args of [["--version"], ...(launcher.update ? [launcher.update] : [])]) {
+        const result = spawnSync(file, args, { encoding: "utf8", env: { ...process.env,
+          NODE_CHANNEL_FD: "3", NODE_CHANNEL_SERIALIZATION_MODE: "json", T3_GATEWAY_KEY: "fixture-key" } });
+        assert.ifError(result.error);
+        assert.equal(result.status, 0, `${id}: ${result.stderr}`);
+        assert.deepEqual(JSON.parse(result.stdout), { key: "fixture-key", args: args === launcher.update ? ["update", id] : args });
+      }
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Pi's npm shell shim reaches the image Node dispatcher before unselected Mise shims", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pi-launcher-node-"));
+  try {
+    const file = path.join(dir, "pi"), executable = path.join(dir, "npm-pi"), cli = path.join(dir, "pi-cli.js"), runtimeDir = path.join(dir, "runtime");
+    mkdirSync(runtimeDir);
+    writeFileSync(path.join(dir, "node"), '#!/bin/sh\necho "No version is set for shim: node" >&2\nexit 91\n', { mode: 0o700 });
+    writeFileSync(path.join(runtimeDir, "node"), `#!/bin/sh\nexec '${process.execPath}' "$@"\n`, { mode: 0o700 });
+    writeFileSync(cli, 'console.log(JSON.stringify({path:process.env.PATH,args:process.argv.slice(2)}));\n');
+    writeFileSync(executable, `#!/bin/sh\n# npm may install a shell shim, rather than a JS symlink.\nexec node '${cli}' "$@"\n`, { mode: 0o700 });
+    writeFileSync(file, launcherScript({ id: "pi", name: "Pi", executable, harnessCli: "/unused", nodeRuntimeDir: runtimeDir }), { mode: 0o700 });
+    const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, NODE_CHANNEL_FD: "3", NODE_CHANNEL_SERIALIZATION_MODE: "json" };
+    const result = spawnSync(file, ["--version"], { env, encoding: "utf8" });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { path: `${runtimeDir}:${env.PATH}`, args: ["--version"] });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("the CLI resolves, reports exit codes, and syncs through the real file IO", () => {

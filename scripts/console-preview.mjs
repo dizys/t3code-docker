@@ -16,7 +16,16 @@ const { createFilesFixtures } = require('./lib/files-fixtures.cjs');
 const { createCredentialsFixtures } = require('./lib/credentials-fixtures.cjs');
 const { createGatewaysFixtures } = require('./lib/gateways-fixtures.cjs');
 const credentials = createCredentialsFixtures();
-const gateways = createGatewaysFixtures();
+const gatewayScenario = process.env.T3_GATEWAY_SCENARIO || 'set-up';
+const gateways = createGatewaysFixtures({ scenario: gatewayScenario });
+const previewStatus = () => {
+  const status = statusFor('skills');
+  if (gatewayScenario === 'pi-error') for (const agent of status.harnesses) {
+    if (agent.id === 'pi') agent.installed = true;
+    if (agent.id === 'grok') agent.installed = false;
+  }
+  return status;
+};
 const files = createFilesFixtures();
 const mcp = createMcpFixtures();
 const api = createSkillsFixtures();
@@ -24,6 +33,11 @@ const storage = createStorageFixtures();
 const port = Number(process.argv[process.argv.indexOf('--port') + 1]) || 23785;
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  if (url.pathname === '/__console-screens-host') {
+    res.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' });
+    res.end('<!doctype html><style>html,body{margin:0;height:100%}iframe{display:block;border:0;width:100%;height:100%}</style><iframe src="/__setup/?embed=t3&host=tab&layout=wide&theme=dark#gateways"></iframe>');
+    return;
+  }
   if (url.pathname === '/.well-known/t3/environment') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ environmentId: 'fixture-preview', serverVersion: 'fixture', label: 'Fixture preview' })); return; }
   if (url.pathname === '/__setup/' || url.pathname === '/') {
     res.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store', 'content-security-policy': contentSecurityPolicy('fixture') });
@@ -36,7 +50,7 @@ const server = http.createServer(async (req, res) => {
   let input;
   try { input = url.pathname.endsWith('/files/upload/chunk')?Buffer.concat(chunks):chunks.length ? JSON.parse(Buffer.concat(chunks)) : {}; }
   catch { res.writeHead(400); res.end(); return; }
-  const result = await services.respond(req.method, url, input) || await credentials.respond(req.method, url, input) || await gateways.respond(req.method, url, input) || await files.respond(req.method, url, input) || await mcp.respond(req.method, url, input) || storage.respond(req.method, url, input) || api.respond(req.method, url, input) || (url.pathname.endsWith('/status') ? { body: { ...statusFor('skills'), credentials: credentials.status(), storage: storage.status(), context: { ...statusFor('skills').context, mcp: mcp.status() } } }
+  const result = await services.respond(req.method, url, input) || await credentials.respond(req.method, url, input) || await gateways.respond(req.method, url, input) || await files.respond(req.method, url, input) || await mcp.respond(req.method, url, input) || storage.respond(req.method, url, input) || api.respond(req.method, url, input) || (url.pathname.endsWith('/status') ? { body: { ...previewStatus(), credentials: credentials.status(), storage: storage.status(), context: { ...statusFor('skills').context, mcp: mcp.status() } } }
     : url.pathname.endsWith('/ports') ? { body: portsFor('ready') }
       : url.pathname.endsWith('/providers') ? { body: fixture(url.searchParams.get('agent') === 'pi' ? 'pi-providers.json' : 'providers.json') }
         : { status: 404, body: { ok: false, error: 'This is a read-only fixture preview. No live API is connected.' } });

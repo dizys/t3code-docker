@@ -3703,11 +3703,11 @@ body[data-console-route="files"]:has(.tc-layer) .tc-toaster { visibility: hidden
 
 /* Gateways ------------------------------------------------------------------ */
 /* The page is MCP's library and the sheet is MCP's editor. These are the parts they don't have. */
-.tc-gw-mx { --mx-name-width: 17rem; --mx-status-width: 10.75rem; --mx-actions-width: 5.75rem;
+.tc-gw-mx { --mx-name-width: 17rem; --mx-status-width: 10.75rem; --mx-actions-width: 9.25rem;
   --mx-cols: minmax(var(--mx-name-width), 1fr) var(--mx-status-width) repeat(var(--mx-agent-count, 3), var(--mx-agent-width)) var(--mx-actions-width);
   min-width: calc(var(--mx-name-width) + var(--mx-status-width) + var(--mx-agent-count, 3) * var(--mx-agent-width) + var(--mx-actions-width) + 1.5rem); }
 @container (max-width: 74rem) {
-  .tc-gw-mx { --mx-name-width: 14rem; --mx-status-width: 8rem; --mx-agent-width: 6.25rem; }
+  .tc-gw-mx { --mx-name-width: 12.5rem; --mx-status-width: 7.5rem; --mx-agent-width: 6rem; }
   .tc-gw-mx .tc-mx-agent-kind { overflow: hidden; text-overflow: ellipsis; }
 }
 .tc-gw-status-head { padding-left: 0.75rem; font-size: 0.75rem; font-weight: 500; color: var(--fg-muted); }
@@ -3718,6 +3718,7 @@ body[data-console-route="files"]:has(.tc-layer) .tc-toaster { visibility: hidden
 .tc-gw-status { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; padding: 0 0.5rem 0 0.75rem; }
 .tc-gw-status small { overflow: hidden; color: var(--fg-muted); font-size: 0.75rem; line-height: 1.125rem; text-overflow: ellipsis; white-space: nowrap; }
 .tc-gw-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.25rem; min-width: 0; }
+.tc-gw-actions > .tc-btn { flex-shrink: 0; }
 .tc-gw-state { display: inline-flex; align-items: center; gap: 0.5rem; min-width: 0; color: var(--fg-muted); font-size: 0.8125rem; font-weight: 500; line-height: 1.125rem; white-space: nowrap; }
 .tc-gw-state > span:last-child { overflow: hidden; text-overflow: ellipsis; }
 .tc-gw-state .tc-spinner { flex: none; width: 0.625rem; height: 0.625rem; margin-left: -2px; border-width: 1.5px; }

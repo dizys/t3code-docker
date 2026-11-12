@@ -55,7 +55,7 @@ const memoryVault = () => {
 
 const redacted = instance => ({ ...instance, environment: instance.environment?.map(row => row.sensitive ? { ...row, value: '', valueRedacted: true } : row) });
 const memoryT3 = () => {
-  const state = { down: false, hubs: {}, reports: [], instances: {
+  const state = { down: false, hubs: {}, reports: [], providerOverrides: {}, instances: {
     claudeAgent: { driver: 'claudeAgent', config: { binaryPath: '/launchers/claude' } },
     codex: { driver: 'codex', config: { binaryPath: '/launchers/codex' } },
     opencode: { driver: 'opencode', config: { binaryPath: '/launchers/opencode' } },
@@ -66,7 +66,7 @@ const memoryT3 = () => {
       if (state.down) throw new Error('T3 Code is not answering');
       return { hubs: true, hubSources: Object.fromEntries(Object.entries(state.hubs).map(([id, source]) => [id, { ...source, managementKey: '__redacted__' }])),
         instances: Object.fromEntries(Object.entries(state.instances).map(([id, instance]) => [id, redacted(instance)])), preferences: state.preferences,
-        providers: Object.entries(state.instances).filter(([id]) => id.includes('_gw_') && state.instances[id].enabled !== false).map(([instanceId, instance]) => ({ instanceId, status: 'ready', installed: true, checkedAt: new Date().toISOString(), models: (BUILT_IN[instance.driver] ?? []).map(slug => ({ slug })) })) };
+        providers: Object.entries(state.instances).filter(([id]) => id.includes('_gw_') && state.instances[id].enabled !== false).map(([instanceId, instance]) => ({ instanceId, status: 'ready', installed: true, checkedAt: new Date().toISOString(), models: (BUILT_IN[instance.driver] ?? []).map(slug => ({ slug })), ...state.providerOverrides[instanceId] })) };
     },
     upsert: async (id, instance) => { state.instances[id] = instance; },
     // Like T3: null removes, a redacted key keeps the saved one, and a hub is read a moment later.
@@ -120,6 +120,10 @@ function createGatewaysFixtures({ scenario = 'set-up', installed = ['claude', 'c
     const service = createGatewayService({ baseDir: '/state', home: '/home/t3', env: {}, io, t3, vault, processes: { stop: async () => 0 }, fetchImpl: async (url, init) => { await new Promise(resolve => setTimeout(resolve, 120)); return respond(url, init); },
       now: () => Date.now() + tick, wait: ms => new Promise(resolve => setTimeout(resolve, Math.min(ms, 400))) });
     const set = { service, gatewayFailure, io, t3, vault, name };
+    if (name === 'pi-error') {
+      await service.create({ gateway: { name: 'CLIProxy', preset: 'cliproxyapi', url: 'http://host.docker.internal:8317', agents: ['claude', 'codex', 'opencode', 'pi'] }, key: 'sk-fixture' });
+      t3.state.providerOverrides.pi_gw_cliproxy = { status: 'error', message: 'Pi CLI is installed but failed to run.' };
+    }
     if (name === 'set-up' || name === 'attention') {
       await service.create({ gateway: { name: 'CLIProxy', preset: 'cliproxyapi', url: 'http://host.docker.internal:8317', agents: ['claude', 'codex'] }, key: 'sk-fixture', managementKey: 'fixture-management' });
       await service.create({ gateway: { name: 'Team LiteLLM', preset: 'litellm', url: 'https://llm.example.net', agents: ['opencode'] }, key: 'sk-fixture-team' });

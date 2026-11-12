@@ -538,20 +538,46 @@ start_preinstall() {
 
 start_preinstall
 
+# A fingerprint for the log: the first and last four characters, never the
+# key itself. A short key is not fingerprinted at all - even four characters
+# would give most of one away.
+setup_key_fingerprint() {
+  local key="$1"
+  if [ "${#key}" -gt 8 ]; then
+    printf '%s...%s (%s chars)' "${key:0:4}" "${key: -4}" "${#key}"
+  else
+    printf 'short key (%s chars, not shown)' "${#key}"
+  fi
+}
+
 # Say the setup key when it is new, and stay quiet otherwise. A generated key
-# is printed once so a hosting platform's log can serve it without a shell;
+# is announced once so a hosting platform's log can serve it without a shell;
 # a kept key is never printed again, and a configured one was already chosen
-# by its owner. Reads $T3_SETUP_KEY_SOURCE and $T3_SETUP_KEY.
+# by its owner. Only a fingerprint reaches the log - the full key lives in
+# the volume, in a paired browser, or behind T3_PRINT_SETUP_KEY=1.
+# Reads $T3_SETUP_KEY_SOURCE and $T3_SETUP_KEY.
 announce_setup_key() {
+  local fingerprint
+  fingerprint="$(setup_key_fingerprint "$T3_SETUP_KEY")"
   case "$T3_SETUP_KEY_SOURCE" in
     new)
-      log "T3_SETUP_KEY was not set; generated a setup key and kept it on the volume:"
-      log "    ${T3_SETUP_KEY}"
-      log "    It stays the same from now on. Set T3_SETUP_KEY to choose your own." ;;
+      if [ "${T3_PRINT_SETUP_KEY:-}" = "1" ]; then
+        log "T3_SETUP_KEY was not set; generated a setup key and kept it on the volume:"
+        log "    ${T3_SETUP_KEY}"
+        log "    It stays the same from now on. Set T3_SETUP_KEY to choose your own."
+      else
+        log "T3_SETUP_KEY was not set; generated a setup key and kept it on the volume (fingerprint: ${fingerprint})."
+        log "    Read it under Server → This console in a paired T3 Code browser, or read ${T3CODE_HOME}/setup-key. It stays the same from now on. Set T3_SETUP_KEY to choose your own."
+      fi ;;
     boot)
-      log "T3_SETUP_KEY was not set, and ${T3CODE_HOME} could not keep a key; generated one for this start:"
-      log "    ${T3_SETUP_KEY}"
-      log "    It changes on every start. Set T3_SETUP_KEY to keep one." ;;
+      if [ "${T3_PRINT_SETUP_KEY:-}" = "1" ]; then
+        log "T3_SETUP_KEY was not set, and ${T3CODE_HOME} could not keep a key; generated one for this start:"
+        log "    ${T3_SETUP_KEY}"
+        log "    It changes on every start. Set T3_SETUP_KEY to keep one."
+      else
+        log "T3_SETUP_KEY was not set, and ${T3CODE_HOME} could not keep a key; generated one for this start (fingerprint: ${fingerprint})."
+        log "    Show it under Server → This console in a paired T3 Code browser. It changes on every start. Set T3_SETUP_KEY to keep one."
+      fi ;;
     volume)
       log "using the setup key kept on the volume (show it under Server → This console in a paired T3 Code browser, or read ${T3CODE_HOME}/setup-key)" ;;
   esac
@@ -577,6 +603,11 @@ start_setup_service() {
   T3_SETUP_KEY_SOURCE="${resolved%% *}"
   T3_SETUP_KEY="${resolved#* }"
   announce_setup_key
+  # Short keys stay allowed: the operator chose it. But say so loudly: a
+  # short key is brute-forceable by anyone who can reach this port.
+  if [ "${#T3_SETUP_KEY}" -lt 16 ]; then
+    log "WARNING: the setup key is short (${#T3_SETUP_KEY} chars, under 16); it is brute-forceable if this port is reachable. Set a longer T3_SETUP_KEY."
+  fi
 
   (
     export T3_SETUP_KEY T3_SETUP_KEY_SOURCE

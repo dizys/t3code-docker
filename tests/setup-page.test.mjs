@@ -107,6 +107,17 @@ test("the unlock page posts the key to the mount, and shows a wrong key in place
   assert.match(fresh, /id="key-error" role="alert" hidden>/);
 });
 
+test("a short setup key warns on the unlock page, and only there", () => {
+  const warned = markup(renderUnlock({ assets, nonce: "n", mount: "", host: "", publicUrl: "", error: false, shortKey: true }));
+  assert.match(warned, /brute-forceable/);
+  for (const page of [
+    markup(renderUnlock({ assets, nonce: "n", mount: "", host: "", publicUrl: "", error: false })),
+    markup(renderUnlock({ assets, nonce: "n", mount: "", host: "", publicUrl: "", error: false, shortKey: false })),
+  ]) {
+    assert.doesNotMatch(page, /brute-forceable/);
+  }
+});
+
 test("anything a request controls is escaped", () => {
   const page = renderUnlock({ assets, nonce: "n", mount: "", host: '"><script>alert(1)</script>', publicUrl: "", error: false });
   assert.ok(!page.includes("<script>alert(1)</script>"));

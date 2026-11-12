@@ -250,7 +250,7 @@ ${scripts(assets.console, nonce)}
  * without JavaScript; unlock.js only keeps the user on the page to show a wrong
  * key in place, and reveals the key on request.
  */
-export function renderUnlock({ assets, nonce, mount, host, hostname, layout, publicUrl, error, embed = false }) {
+export function renderUnlock({ assets, nonce, mount, host, hostname, layout, publicUrl, error, shortKey = false, embed = false }) {
   const tab = embed && host === 'tab';
   hostname ??= tab ? '' : host;
   // Inside T3 Code there is no T3 Code to open: the dialog closes instead.
@@ -265,7 +265,8 @@ ${tab ? tabHeaders(true) + '\n' : ''}<main class="tc-standalone">
     <div class="tc-standalone-body">
       ${hostname ? `<span class="tc-eyebrow">${escapeHtml(hostname)}</span>` : ""}
       <h1 class="tc-standalone-title">Unlock the console</h1>
-      <p class="tc-standalone-desc">Pair devices, sign agents in and publish ports on this server. Enter the setup key: the one you set as <code>T3_SETUP_KEY</code>, or the one this server generated on its first start.</p>
+      <p class="tc-standalone-desc">Pair devices, sign agents in and publish ports on this server. Enter the setup key: the one you set as <code>T3_SETUP_KEY</code>, or the one this server generated on its first start.</p>${shortKey ? `
+      <p class="tc-note" role="note"><strong>Warning:</strong> this console uses a short setup key, which is brute-forceable if this port is reachable. Set a longer <code>T3_SETUP_KEY</code> and recreate the container with the same volume.</p>` : ""}
       <form class="tc-unlock-form" method="POST" action="${escapeHtml(mount)}/login" id="loginform" novalidate>${embed ? `
         <input type="hidden" name="embed" value="t3">${tab ? `\n        <input type="hidden" name="host" value="tab"><input type="hidden" name="layout" value="${layout === 'wide' ? 'wide' : 'compact'}">` : ''}` : ""}
         <div class="tc-field">

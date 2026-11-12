@@ -128,6 +128,15 @@ if (!KEY) {
   process.exit(1);
 }
 
+// Short keys stay allowed: the operator chose it. But say so loudly, here
+// and on the unlock page: a short key is brute-forceable by anyone who can
+// reach this port.
+const SHORT_KEY_CHARS = 16;
+const shortKey = KEY.length < SHORT_KEY_CHARS;
+if (shortKey) {
+  console.warn(`[setup] WARNING: the setup key is short (${KEY.length} chars, under ${SHORT_KEY_CHARS}); it is brute-forceable if this port is reachable. Set a longer T3_SETUP_KEY.`);
+}
+
 /** Constant-time compare that tolerates length differences. */
 const keyMatches = (candidate) => {
   const a = Buffer.from(String(candidate ?? ""));
@@ -152,6 +161,24 @@ const throttle = (ip) => {
   failures.set(ip, n + 1);
   if (failures.size > FAILURES_KEPT) failures.delete(failures.keys().next().value);
   return new Promise((r) => setTimeout(r, Math.min(n * 250, 3000)));
+};
+
+// Login guesses queue per IP, so concurrent attempts wait behind each other
+// and their delays add up: before, N parallel guesses shared one delay
+// window and were all answered together. Tails never reject, so the queue
+// cannot stall; a drained IP is forgotten. Past the in-flight cap the guess
+// is refused outright, so a flood cannot pile up timers without bound.
+const LOGIN_IN_FLIGHT_CAP = 4;
+const loginTails = new Map();
+const loginInflight = new Map();
+const loginWaiting = (ip) => loginInflight.get(ip) ?? 0;
+const throttleQueued = (ip) => {
+  const prev = loginTails.get(ip) ?? Promise.resolve();
+  const run = prev.then(() => throttle(ip));
+  const tail = run.then(() => undefined, () => undefined);
+  loginTails.set(ip, tail);
+  tail.then(() => { if (loginTails.get(ip) === tail) loginTails.delete(ip); });
+  return run;
 };
 
 // Bounded like the agent probes are. Without a timeout a single stuck
@@ -2692,7 +2719,19 @@ const server = createServer(async (req, res) => {
         }
       }
       if (!keyMatches(body.get("key"))) {
-        await throttle(ip);
+        if (loginWaiting(ip) >= LOGIN_IN_FLIGHT_CAP) {
+          if (wantsJson(req)) return sendJson(res, 429, { ok: false, error: "Too many login attempts. Wait a moment and try again." });
+          params.set("error", "1");
+          return send(res, 429, "Too many login attempts. Wait a moment and try again.");
+        }
+        loginInflight.set(ip, loginWaiting(ip) + 1);
+        try {
+          await throttleQueued(ip);
+        } finally {
+          const left = loginWaiting(ip) - 1;
+          if (left <= 0) loginInflight.delete(ip);
+          else loginInflight.set(ip, left);
+        }
         if (wantsJson(req)) return sendJson(res, 401, { ok: false, error: "That key was not accepted." });
         params.set("error", "1");
         return send(res, 303, "", { location: `${mount}/?${params}` });
@@ -2715,7 +2754,7 @@ const server = createServer(async (req, res) => {
       // The host the browser asked for, for the card's eyebrow; escaped by the template.
       const hostname = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "").split(",")[0].trim().slice(0, 200);
       return sendPage(req, res, (nonce) => renderUnlock({
-        assets: ASSETS, nonce, mount, host, hostname, layout, publicUrl: publicUrl().url, error: raw.searchParams.get("error") === "1", embed,
+        assets: ASSETS, nonce, mount, host, hostname, layout, publicUrl: publicUrl().url, error: raw.searchParams.get("error") === "1", shortKey, embed,
       }));
     }
 

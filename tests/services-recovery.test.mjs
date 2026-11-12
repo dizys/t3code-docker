@@ -270,9 +270,9 @@ test('unavailable observations back off instead of hammering the supervisor', as
   const { store } = await fixture(t);
   const config = customDefinition({ name: 'Flaky', mode: 'executable', executable: '/bin/true', cwd: '/tmp', enabled: true });
   store.put({ id: 'flaky', kind: 'service', revision: 1, enabled: true, config, receipt: {} });
-  let mode = 'unavailable', starts = 0;
+  let mode = 'unavailable', starts = 0, observations = 0;
   const supervisor = {
-    observe: async () => mode === 'unavailable' ? { up: false, unavailable: true } : { up: false },
+    observe: async () => { observations++; return mode === 'unavailable' ? { up: false, unavailable: true } : { up: false }; },
     start: async () => { starts++; },
     stop: async () => {},
   };
@@ -286,6 +286,7 @@ test('unavailable observations back off instead of hammering the supervisor', as
   assert.equal(store.meta('observation:flaky').state, 'unavailable');
   await controller.reconcile(); await controller.reconcile();
   assert.equal(starts, 0, 'consecutive unavailable observations back off');
+  assert.equal(observations, 1, 'backoff skips the actual supervisor query');
   assert.equal(store.get('flaky').restart.unavailable, 1, 'backoff does not escalate while waiting');
   store.put({ ...store.get('flaky'), restart: { ...store.get('flaky').restart, nextAt: 0 } });
   await controller.reconcile();
@@ -309,4 +310,28 @@ test('a missing scan directory reads as down, not unavailable', async t => {
   const prepared = await supervision.observe('ghost');
   assert.equal(prepared.up, false);
   assert.equal(prepared.unavailable, true);
+});
+
+test('supervisor permission errors remain unavailable and cannot acknowledge a stop', async () => {
+  const { createSupervision } = await import('../docker/services/supervision.mjs');
+  for (const code of ['EACCES', 'EIO', 'ENOTDIR']) {
+    const supervision = createSupervision({ scan: '/fixture', domain: 'user', run: async () => { throw new Error('s6 not available'); }, io: { access: async () => { throw Object.assign(new Error(code), { code }); } } });
+    assert.equal((await supervision.observe('preview')).unavailable, true, code);
+    await assert.rejects(supervision.stop('preview'), { code: 'controller-unavailable' });
+  }
+});
+
+test('stopped Tailscale intent retries cleanup after a failed stop acknowledgement', async t => {
+  const { store } = await fixture(t, { domain: 'system' });
+  store.put({ id: 'tailscale', kind: 'service', revision: 1, enabled: false, config: { enabled: false, shutdownMs: 100, endpoints: [] }, restart: { stopPending: true } });
+  let cleanups = 0, fail = true;
+  const controller = createController({ store, supervisor: { observe: async () => ({ up: false }), stop: async () => {} }, networking: {
+    orphaned: async () => {}, stopped: async () => { cleanups++; if (fail) throw new Error('cleanup busy'); },
+    observe: async () => ({ mode: 'kernel', state: 'inactive' }),
+  } });
+  t.after(() => controller.close());
+  await controller.reconcile(); assert.equal(cleanups, 1); assert.equal(store.get('tailscale').restart.stopPending, true);
+  await controller.reconcile(); assert.equal(cleanups, 1, 'cleanup attempts back off');
+  fail = false; store.put({ ...store.get('tailscale'), restart: { ...store.get('tailscale').restart, nextAt: 0 } });
+  await controller.reconcile(); assert.equal(cleanups, 2); assert.deepEqual(store.get('tailscale').restart, {});
 });

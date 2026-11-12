@@ -568,7 +568,11 @@ export function createHarnessManager(options = {}) {
         }
       }
       for (const version of versions) {
-        await mise.uninstall(ctx, harnessInstallationForVersion(entry, version).miseTool, version);
+        const tool = harnessInstallationForVersion(entry, version).miseTool;
+        const fresh = await mise.listTools(ctx), target = fresh.tools?.[tool]?.find(item => item.version === version)?.install_path;
+        assertToolUnreferenced(ctx, tool, version, target);
+        await assertLiveRemovable(ctx, entry.name, tool, version, target);
+        await mise.uninstall(ctx, tool, version);
       }
       return {
         version: undefined,
@@ -742,6 +746,9 @@ export function createHarnessManager(options = {}) {
       }
       await mise.unuse(ctx, entry.miseTool);
       for (const version of union(previous.managedVersions, selected)) {
+        const fresh = await mise.listTools(ctx), target = fresh.tools?.[entry.miseTool]?.find(item => item.version === version)?.install_path;
+        assertToolUnreferenced(ctx, entry.miseTool, version, target);
+        await assertLiveRemovable(ctx, entry.name, entry.miseTool, version, target);
         await mise.uninstall(ctx, entry.miseTool, version);
       }
       return { version: undefined, managedVersions: [] };
@@ -987,6 +994,9 @@ export function createHarnessManager(options = {}) {
         }
       }
       for (const version of union(previous.managedVersions, selected)) {
+        const fresh = await mise.listTools(ctx), target = fresh.tools?.[id]?.find(item => item.version === version)?.install_path;
+        assertToolUnreferenced(ctx, id, version, target);
+        await assertLiveRemovable(ctx, entry.name, id, version, target);
         await mise.uninstall(ctx, id, version);
       }
       return REMOVE_RECORD;

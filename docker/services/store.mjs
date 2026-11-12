@@ -43,11 +43,6 @@ export function openStore(root, { now = Date.now, domain = "user" } = {}) {
     return value;
   };
   const apply = ({ planId, expectedRevision, idempotencyKey, acknowledgeAccessImpact }) => transaction(() => {
-    // Idempotency window: (key, plan, revision) dedupes while the operation
-    // row exists. Finished rows are pruned below (newest ~200 kept,
-    // finishedAt older than 30d dropped), so reusing a key after its row
-    // was pruned starts a fresh operation instead of returning the old one.
-    // Callers must use a fresh key per review; keys are not secrets.
     if (typeof idempotencyKey !== "string" || !/^[A-Za-z0-9_-]{16,96}$/.test(idempotencyKey)) throw new ServiceError("invalid", "Use a stable operation key.");
     const signature = hash([planId, expectedRevision]);
     const existing = db.prepare("SELECT signature,value FROM operations WHERE key=?").get(idempotencyKey);
@@ -65,8 +60,6 @@ export function openStore(root, { now = Date.now, domain = "user" } = {}) {
     const op = { id: randomUUID(), domain, target: value.target, action: value.action, plan: value, state: "committed", phase: "committed", createdAt: now(), updatedAt: now(), events: [], accessImpactAcknowledged: acknowledgeAccessImpact === true };
     db.prepare("INSERT INTO operations VALUES (?,?,?,?,?)").run(op.id, idempotencyKey, signature, op.state, JSON.stringify(op));
     event(op.id, { phase: "committed" });
-    db.prepare(`DELETE FROM operations WHERE state IN ('succeeded','failed','rolled-back','cancelled')
-      AND (json_extract(value,'$.finishedAt') < ? OR id NOT IN (SELECT id FROM operations ORDER BY rowid DESC LIMIT 200))`).run(now() - 30 * 24 * 3600 * 1000);
     return op;
   });
   const pending = () => db.prepare("SELECT value FROM operations WHERE state IN ('committed','working','recovering') ORDER BY rowid").all().map(decode);

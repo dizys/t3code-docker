@@ -241,6 +241,10 @@ make it reachable. Declaring an endpoint alone never publishes it.
 | Sign out connector | Requests provider logout separately from stopping the daemon. Existing routes lose access until sign-in completes. |
 
 Stopped services offer **Start**, without redundant Restart or Stop actions.
+A failed stop keeps its stopped intent and retries with backoff, including
+Tailscale DNS and firewall cleanup. An unavailable supervisor stays unknown
+until it can be checked again; it is never treated as a confirmed stop.
+Operation history and idempotency receipts remain available across new applies.
 Uninstall is reported as complete only after file removal succeeds. Failed
 cleanup leaves a disabled registration and a retryable operation error. Older
 uninstall records may still have cached software: **Remove leftover software**

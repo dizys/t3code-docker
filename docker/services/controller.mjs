@@ -205,7 +205,12 @@ export function createController({ store, supervisor, tools, secrets = async () 
     // A payload that dies on bind fails the startup check without the errno;
     // its logs still name the conflict.
     let bound = false;
-    try { bound = /EADDRINUSE/.test(JSON.stringify(readLogs(store.root, resource.id))); } catch {}
+    try {
+      const exit = store.meta('exit:' + resource.id), run = store.meta('run:' + resource.id);
+      const current = value => value?.revision === resource.revision && value?.boot === boot && (value.endedAt ?? value.startedAt) >= (resource.activatedAt || 0);
+      const runId = current(exit) ? exit.runId : current(run) ? run.runId : null;
+      bound = Boolean(runId && readLogs(store.root, resource.id).entries.some(entry => entry.runId === runId && /\bEADDRINUSE\b/.test(entry.text)));
+    } catch {}
     if (bound) throw portConflict();
     throw new ServiceError("startup", "The service did not pass its startup check. Review its logs and configuration.");
     } catch (error) {
@@ -328,8 +333,8 @@ export function createController({ store, supervisor, tools, secrets = async () 
         // is stopped, and reconcile retries the stop with backoff.
         if (changed) {
           const current = store.get(id);
-          if (current && !["disable", "stop", "remove", "uninstall"].includes(action)) store.put({ ...current, restart: { exhausted: true, reason: message } });
-          await stopService(id).catch(() => {});
+          if (current) store.put({ ...current, restart: ["disable", "stop", "remove", "uninstall"].includes(action) ? { stopPending: true } : { exhausted: true, reason: message } });
+          if (!["disable", "stop", "remove", "uninstall"].includes(action)) await stopService(id).catch(() => {});
         }
         finish(op, "failed", { error: message, code: error.code || "operation" });
       }
@@ -343,40 +348,34 @@ export function createController({ store, supervisor, tools, secrets = async () 
       for (const operation of store.pending()) { if (closed) break; await execute(operation); }
       for (let resource of services()) {
         if (closed) break;
+        // An unavailable scan is unknown, so retry the observation only when
+        // its backoff expires. This includes stopped intent and avoids s6 work.
+        if (resource.restart?.unavailable && resource.restart.nextAt > now()) continue;
         const status = await observe(resource);
         if (!status.process.unavailable && resource.restart?.unavailable) {
           resource = { ...resource, restart: { ...resource.restart, unavailable: 0 } };
           store.put(resource);
         }
+        if (status.process.unavailable) {
+          const seen = resource.restart || {};
+          const consecutive = Math.min((seen.unavailable || 0) + 1, 6);
+          store.put({ ...resource, restart: { ...seen, unavailable: consecutive, nextAt: now() + Math.min(60000, 1000 * 2 ** consecutive) + Math.floor(Math.random() * 500) } });
+          continue;
+        }
         const stopIntent = !resource.enabled || resource.uninstalled || resource.stoppedBoot === boot;
-        if (stopIntent && status.process.up) {
-          // Desired intent is stopped but the process is up: the stop lost
-          // its acknowledgement, or a start landed after disable. Retry the
-          // stop with backoff; a stop never marks the service exhausted.
+        if (stopIntent && (status.process.up || resource.restart?.stopPending)) {
           const retry = resource.restart || {};
           if (retry.nextAt && retry.nextAt > now()) continue;
           try {
             await stopService(resource.id, resource.config.shutdownMs);
-            if (retry.nextAt || (retry.failures || []).length) store.put({ ...resource, restart: {} });
-          } catch (error) {
-            const failures = (retry.failures || []).filter(at => now() - at < 5 * 60_000);
-            failures.push(now());
-            resource = { ...resource, restart: { ...retry, failures, nextAt: now() + Math.min(60000, 1000 * 2 ** failures.length) + Math.floor(Math.random() * 500) } };
-            store.put(resource);
+            store.put({ ...resource, restart: {} });
+          } catch {
+            const attempts = Math.min((retry.stopAttempts || 0) + 1, 6);
+            store.put({ ...resource, restart: { ...retry, stopPending: true, stopAttempts: attempts, nextAt: now() + Math.min(60000, 1000 * 2 ** attempts) + Math.floor(Math.random() * 500) } });
           }
           continue;
         }
         if (stopIntent || status.process.up || resource.restart?.exhausted || status.networking?.fatal) continue;
-        if (status.process.unavailable) {
-          // The scan cannot report this service. Back consecutive
-          // observations off instead of hammering s6 every second.
-          const seen = resource.restart || {};
-          if (seen.nextAt && seen.nextAt > now()) continue;
-          const consecutive = (seen.unavailable || 0) + 1;
-          resource = { ...resource, restart: { ...seen, unavailable: consecutive, nextAt: now() + Math.min(60000, 1000 * 2 ** consecutive) + Math.floor(Math.random() * 500) } };
-          store.put(resource);
-          continue;
-        }
         const exit = status.exit, restart = resource.restart || {};
         if (exit?.boot === boot && exit.runId !== restart.exitRun) {
           if (resource.config.restart === "never" || resource.config.restart === "on-failure" && exit.exitCode === 0) continue;

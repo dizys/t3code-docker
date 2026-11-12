@@ -389,7 +389,7 @@ function managerFor(world, overrides = {}) {
     startTimeOf: overrides.startTimeOf ?? ((pid) => (pid === (overrides.pid ?? 4242) ? "100" : null)),
     lockStaleMs: overrides.lockStaleMs ?? 60_000,
     authCacheTtlMs: 1_000,
-    ...(overrides.retentionProcesses ? { retentionProcesses: overrides.retentionProcesses } : {}),
+    retentionProcesses: overrides.retentionProcesses ?? (async () => ({ complete: true, processes: [] })),
   });
 }
 
@@ -2534,4 +2534,22 @@ test("uninstall refuses a version a provider still selects", async () => {
   assert.equal((await manager.toolchains.resolve("go")).installed, true, "the install is kept");
   fs.seedFile(path.join(HOME, ".t3/userdata/settings.json"), JSON.stringify({}));
   assert.equal((await manager.toolchains.uninstall("go")).ok, true, "uninstall proceeds once the provider points elsewhere");
+});
+
+for (const phase of ['unuse', 'first-removal']) test(`explicit uninstall rechecks live use after ${phase}`, async () => {
+  const world = createWorld(new MemoryFs()); let inUse = false;
+  const originalRun = world.run;
+  world.run = async (argv, options) => {
+    const result = await originalRun(argv, options);
+    if (phase === 'unuse' && argv[3] === 'unuse' || phase === 'first-removal' && argv[3] === 'uninstall') inUse = true;
+    return result;
+  };
+  const target = path.join(DATA_DIR, 'installs/claude/2.1.273/bin/claude');
+  const manager = managerFor(world, { retentionProcesses: async () => ({ complete: true, processes: inUse ? [{ pid: 9999, executable: target, cwd: '/tmp', args: [target] }] : [] }) });
+  assert.equal((await manager.install('claude', { version: '2.1.270' })).ok, true);
+  assert.equal((await manager.update('claude', { version: '2.1.273' })).ok, true);
+  world.calls.length = 0;
+  const result = await manager.uninstall('claude');
+  assert.equal(result.ok, false); assert.equal(result.code, 'in-use');
+  assert.equal(world.calls.some(call => call.includes('uninstall claude@2.1.273')), false, 'the newly used version survives');
 });

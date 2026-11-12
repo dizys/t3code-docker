@@ -116,7 +116,7 @@ export async function planRetention(ctx, { saved, only, includePrevious = false 
 /** Whether one planned removal is still safe under the current references:
  * the version is still prunable at the same path, and that path is still an
  * ordinary install no provider selection or running process points at. */
-export async function stillRemovable(ctx, refs, item) {
+async function stillRemovable(ctx, refs, item) {
   const candidate = refs.prunable?.[item.tool]?.find((entry) => entry.version === item.version && entry.installed);
   const target = candidate?.install_path || null;
   if (!target || target !== item.path) return false;

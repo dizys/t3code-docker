@@ -272,32 +272,30 @@ test('a port claimed while staging fails the commit as port-conflict', async t =
   while (!controller.idle()) await new Promise(resolve => setTimeout(resolve, 5));
   assert.equal(controller.operation(op.id).code, 'port-conflict');
 });
-test('terminal operations prune newest-first and finished rows older than 30 days', async t => {
-  const f = await fixture(t), review = await f.add({ enabled: true }); await f.apply(review);
-  const resource = f.store.get(review.target);
-  await f.apply(await f.controller.plan({ action: 'stop', id: resource.id, expectedRevision: resource.revision }));
-  const count = () => f.store.db.prepare('SELECT count(*) AS n FROM operations').get().n;
-  const aged = f.store.operations().at(-1);
-  const agedValue = { ...f.store.operation(aged.id), finishedAt: Date.now() - 31 * 24 * 3600 * 1000 };
-  f.store.saveOperation({ ...agedValue, state: 'succeeded', finishedAt: agedValue.finishedAt });
-  // A pending operation is never pruned, however old the finished rows are.
-  const pendingPlan = await f.controller.plan({ action: 'disable', id: resource.id, expectedRevision: f.store.get(resource.id).revision });
+test('new applies retain historical operations and their original idempotency receipts', async t => {
+  const f = await fixture(t), review = await f.add(); await f.apply(review);
+  const original = f.store.operation(f.store.operations()[0].id);
+  const old = { ...original, finishedAt: Date.now() - 90 * 24 * 3600 * 1000 };
+  f.store.saveOperation(old);
   for (let i = 0; i < 205; i++) {
     const id = randomUUID();
     f.store.db.prepare('INSERT INTO operations VALUES (?,?,?,?,?)').run(id, randomUUID(), 'sig', 'succeeded', JSON.stringify({ id, state: 'succeeded', finishedAt: Date.now() - i * 1000 }));
   }
-  assert.ok(count() > 200);
-  // The next apply prunes: the aged row drops by age, the excess by count.
-  const pending = f.controller.apply({ planId: pendingPlan.id, expectedRevision: pendingPlan.expectedRevision, idempotencyKey: randomUUID() });
-  assert.ok(count() <= 200, `terminal history stays bounded, saw ${count()}`);
-  assert.equal(f.store.operation(aged.id), null, 'rows finished over 30 days ago are dropped');
-  assert.ok(f.store.operation(pending.id), 'pending operations are never pruned');
-  await f.controller.reconcile();
-  assert.equal(f.controller.operation(pending.id).state, 'succeeded');
-  assert.ok(f.store.operation(pending.id), 'finished operations within the window are retained');
-  // The idempotency window is the retained rows: a live key still dedupes.
-  const replay = await f.controller.plan({ action: 'enable', id: resource.id, expectedRevision: f.store.get(resource.id).revision });
-  const replayArgs = { planId: replay.id, expectedRevision: replay.expectedRevision, idempotencyKey: '0123456789abcdef' };
-  const first = f.controller.apply(replayArgs);
-  assert.equal(f.controller.apply(replayArgs).id, first.id);
+  const before = f.store.db.prepare('SELECT count(*) AS n FROM operations').get().n;
+  const resource = f.store.get(review.target);
+  await f.apply(await f.controller.plan({ action: 'disable', id: resource.id, expectedRevision: resource.revision }));
+  assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM operations').get().n, before + 1);
+  assert.deepEqual(f.store.operation(old.id), old);
+});
+
+test('a historical bind error cannot label a new unrelated startup failure', async t => {
+  const f = await fixture(t), review = await f.add({ enabled: true });
+  const writer = logWriter(f.root, review.target, 'old-run', 'stderr');
+  writer.write(Buffer.from('listen EADDRINUSE\n')); writer.end();
+  f.supervisor.start = async id => {
+    const resource = f.store.get(id);
+    f.store.setMeta('exit:' + id, { revision: resource.revision, boot: 'boot', runId: 'new-run', exitCode: 1, endedAt: Date.now() + 1 });
+  };
+  const op = await f.apply(review);
+  assert.equal(op.state, 'failed'); assert.equal(op.code, 'startup');
 });

@@ -59,7 +59,21 @@ const SECRET = 'sk-audit-secret-value', MANAGEMENT = 'management-audit-value';
         assert.deepEqual(over, { wide: false, clipped: 0 }, `${name}: nothing runs off the side`);
       };
       const postCalls = name => calls.filter(call => call.route === name).length;
-      const reload = async scenario => { fixture = createGatewaysFixtures({ scenario }); await target.evaluate(() => { location.hash = 'overview'; }); await target.locator('#page-overview:not([hidden])').waitFor(); await visit(target, page, 'gateways'); };
+      const reload = async (scenario, { refreshStatus = false } = {}) => {
+        fixture = createGatewaysFixtures({ scenario });
+        // Installation changes need a fresh status snapshot, not only a new
+        // gateway response. Refresh the document before checking those cells.
+        if (refreshStatus) {
+          await Promise.all([
+            target.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+            target.evaluate(() => location.reload()),
+          ]);
+          await unlock(target, key);
+        }
+        await target.evaluate(() => { location.hash = 'overview'; });
+        await target.locator('#page-overview:not([hidden])').waitFor();
+        await visit(target, page, 'gateways');
+      };
       const confirm = async answer => { await target.locator(`.tc-dialog [data-answer="${answer}"], [role="alertdialog"] [data-answer="${answer}"]`).first().click(); };
       const field = id => target.locator(`#gw-${id}`);
       const submit = () => target.locator('[data-key="gw-submit"]');
@@ -339,7 +353,7 @@ const SECRET = 'sk-audit-secret-value', MANAGEMENT = 'management-audit-value';
       // ---- whatever needs a person says so, with the one thing to do --------------
       step('whatever needs a person says so, with the one thing to do');
       installed = ['claude', 'codex', 'opencode', 'pi'];
-      await reload('pi-error');
+      await reload('pi-error', { refreshStatus: true });
       if (!phone) {
         const retry = target.locator('[data-key="gw-fix-cliproxy"]');
         await retry.waitFor();
@@ -356,7 +370,7 @@ const SECRET = 'sk-audit-secret-value', MANAGEMENT = 'management-audit-value';
         await noOverflow('pi-error'); await shot('pi-error');
       }
       installed = ['claude', 'codex', 'opencode', 'pi', 'grok'];
-      await reload('attention');
+      await reload('attention', { refreshStatus: true });
       if (!phone) {
         await target.getByText('settings file overrides gateways').waitFor();
         await target.waitForFunction(() => document.querySelectorAll('.tc-gw-row[data-tone="warn"]').length === 2);

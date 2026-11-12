@@ -1985,6 +1985,12 @@ ONE_KEY_FILE=/home/t3/.t3/setup-key
 ONE_KEY="$(docker exec "${NAME}-one" cat "$ONE_KEY_FILE" 2>/dev/null || true)"
 check "without T3_SETUP_KEY, the first start generates a setup key and keeps it" \
   "[ -n \"\$ONE_KEY\" ] && output_has 'docker logs ${NAME}-one' 'generated a setup key and kept it on the volume'"
+one_key_is_private() {
+  local logs
+  logs="$(docker logs "${NAME}-one" 2>&1)" || return 1
+  ! grep -qF -- "$ONE_KEY" <<<"$logs"
+}
+check "the generated setup key stays out of default logs" one_key_is_private
 check "and only the t3 user can read it" \
   "[ \"\$(docker exec ${NAME}-one stat -c '%a %U' $ONE_KEY_FILE)\" = '600 t3' ]"
 check "T3 Code does not inherit the generated setup key" "t3_has_no_setup_key ${NAME}-one"
@@ -2096,8 +2102,7 @@ check "and it survives a restart" one_url_survives_restart
 # file and the log say why.
 check "the setup key is the same after a restart" \
   "[ \"\$(docker exec ${NAME}-one cat $ONE_KEY_FILE)\" = \"\$ONE_KEY\" ] && output_has 'docker logs ${NAME}-one' 'using the setup key kept on the volume'"
-check "and a restart never prints it again" \
-  "[ \"\$(docker logs ${NAME}-one 2>&1 | grep -cF \"\$ONE_KEY\")\" = 1 ]"
+check "and a restart keeps it out of the logs" one_key_is_private
 check "nor inherits the kept setup key" "t3_has_no_setup_key ${NAME}-one"
 check "clearing it goes back to the platform's" \
   "one_set_url '{}' /clear >/dev/null && [ \"\$(one_public_url)\" = '${ONE_PLATFORM_URL} platform' ]"

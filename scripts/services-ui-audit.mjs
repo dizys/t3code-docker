@@ -194,6 +194,13 @@ try {
     await shot('tailscale-networking-review');
     await networkingReview.getByRole('button', { name: 'Save configuration', exact: true }).click();
     await tailnetEditor.waitFor({ state: 'detached' });
+    await tailnet.getByRole('button', { name: 'Tailscale', exact: true }).click();
+    const tailnetInspector = page.getByRole('dialog', { name: 'Tailscale', exact: true });
+    await tailnetInspector.getByRole('button', { name: 'Sign in…', exact: true }).waitFor();
+    assert.match(await tailnetInspector.innerText(), /Sign-in needed/);
+    assert.doesNotMatch(await tailnetInspector.innerText(), /MagicDNS verified/);
+    await shot('tailscale-networking-sign-in-needed');
+    await tailnetInspector.getByRole('button', { name: 'Close', exact: true }).click();
     const authMenu = async () => { await tailnet.getByRole('button', { name: 'Manage Tailscale', exact: true }).click(); return page.getByRole('menuitem').filter({ hasText: /sign.in|sign out|approval/i }); };
     const authLabels = async () => (await (await authMenu()).allTextContents()).map(label => label.trim());
     assert.deepEqual(await authLabels(), ['Sign in…']); await shot('tailscale-first-sign-in');

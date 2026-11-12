@@ -5,7 +5,7 @@ import { fail, inside } from './paths.mjs';
 import { kindOf } from './kinds.mjs';
 import { createMountService } from './mounts.mjs';
 const mounts = createMountService();
-import { mapLimit } from './io.mjs';
+import { mapLimit, opendirRaw } from './io.mjs';
 import { internalName, sameEntry } from './walk.mjs';
 
 const decode = new TextDecoder('utf-8', { fatal: true });
@@ -29,7 +29,7 @@ export async function directoryEntries(value, { limit = 20_000, onEntry } = {}) 
     const stat = await handle.stat();
     if (!sameEntry(before, stat)) fail('changed', 'This folder changed. Open it again.');
     const pinned = `/proc/self/fd/${handle.fd}`;
-    directory = await fs.opendir(pinned, { encoding: 'buffer', bufferSize: 64 });
+    directory = await opendirRaw(pinned);
     for await (const item of directory) {
       let name;
       try { name = decode.decode(item.name); } catch { invalidNames++; continue; }

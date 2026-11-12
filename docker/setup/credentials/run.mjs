@@ -175,12 +175,18 @@ export async function runWith(credentials, command, { stdout = process.stdout, s
         child.once('error', error => resolve({ error }));
         child.once('close', (code, signal) => resolve({ code, signal }));
       });
+      let outputFailed = false;
+      const drain = (stream, write) => pump(stream, write, masks).catch(() => {
+        outputFailed = true;
+        try {child.kill('SIGKILL');} catch { /* A failed spawn has no child. */ }
+      });
       const [, , result] = await Promise.all([
-        pump(child.stdout, value => stdout.write(value), masks),
-        pump(child.stderr, value => stderr.write(value), masks), closed,
+        drain(child.stdout, value => stdout.write(value)),
+        drain(child.stderr, value => stderr.write(value)), closed,
       ]);
       if (result.error?.code === 'ENOENT') throw new CredentialError(`Command not found: ${command[0]}`, 127, 'command-not-found');
       if (result.error) throw new CredentialError(`${command[0]} could not start.`, 126, 'command-failed');
+      if (outputFailed) throw new CredentialError('Command output was interrupted.', 502, 'command-failed');
       return result.signal ? 128 + (os.constants.signals[result.signal] || 0) : result.code ?? 1;
     } finally { for (const [name, handler] of handlers) signals.off(name, handler); }
   } finally { if (folder) await fs.rm(folder, { recursive: true, force: true }); }

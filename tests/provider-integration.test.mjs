@@ -563,11 +563,19 @@ test("launchers keep managed execution and route native T3 updates to the manage
       if (update) assert.deepEqual(invoke(update), { code: 29, target: "manager", args: ["update", provider.id] }, provider.id);
       if (provider.id === "muse") assert.deepEqual(invoke(["update"]), { code: 17, target: "agent", args: ["update"] });
       if (provider.id === "pi") {
-        for (const args of [["update"], ["update", "extension-package"], ["update", "--self", "--help"], ["--", "update", "--self"]]) {
+        for (const args of [["update"], ["update", "extension-package"], ["update", "--self", "--help"]]) {
           assert.deepEqual(invoke(args), { code: 17, target: "agent", args }, "Pi extension updates and other calls stay native");
         }
       }
     }
+    // A leading `--` is a plain agent call too, and must arrive untouched.
+    // Echo through sh so no JS runtime's own `--` handling is involved.
+    const echo = path.join(dir, "echo-args");
+    writeFileSync(echo, '#!/bin/sh\nprintf "%s\\n" "$@"\n', { mode: 0o700 });
+    writeFileSync(file, launcherScript({ id: "pi", name: "Pi", executable: echo, harnessCli }), { mode: 0o700 });
+    const echoed = spawnSync(file, ["--", "update", "--self"], { encoding: "utf8" });
+    assert.ifError(echoed.error);
+    assert.deepEqual(echoed.stdout.split("\n").slice(0, -1), ["--", "update", "--self"], "Pi keeps a leading `--` for the agent");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

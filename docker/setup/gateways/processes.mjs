@@ -40,7 +40,8 @@ export function createGatewayProcesses({ proc = '/proc', io = defaultFs, kill = 
         if (isAgent(split(await io.readFile(path.join(proc, entry, 'cmdline'), 'utf8')))) found.push(pid);
       } catch { /* gone, or not ours */ }
     }
-    return found;
+    // Directory order is filesystem order, so keep signalling deterministic.
+    return found.sort((a, b) => a - b);
   };
   const signal = (pid, name) => { try { kill(pid, name); return true; } catch { return false; } };
   /** End this instance's agent processes. Answers how many were asked to stop. */

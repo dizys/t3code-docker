@@ -1,5 +1,6 @@
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
+import { opendirRaw } from './io.mjs';
 
 const decoder = new TextDecoder('utf-8', { fatal: true });
 export const allocatedBytes = stat => Number.isSafeInteger(Number(stat.blocks) * 512) ? Number(stat.blocks) * 512 : Number(stat.size);
@@ -38,7 +39,7 @@ export async function walk(root, { timeoutMs = 20_000, maxEntries = 500_000, max
       const opened = await handle.stat();
       if (!sameEntry(stat, opened)) { result.partial = true; return { bytes: 0, complete: false }; }
       const pinned = `/proc/self/fd/${handle.fd}`;
-      directory = await fs.opendir(pinned, { encoding: 'buffer', bufferSize: 64 });
+      directory = await opendirRaw(pinned);
       await visit({ path: absolute, stat, bytes: null, depth });
       for await (const entry of directory) {
         if (expired()) { result.partial = true; complete = false; break; }

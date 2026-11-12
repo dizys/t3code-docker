@@ -1,5 +1,22 @@
 import { FilesError } from './paths.mjs';
 import { execFile } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+
+/** Normalize Node Dirents and Bun name buffers without loading the whole
+ * directory or decoding filenames before the caller's fatal UTF-8 check. */
+export async function opendirRaw(pinned, io = fs) {
+  const directory = await io.opendir(pinned, { encoding: 'buffer', bufferSize: 64 });
+  return {
+    close: () => directory.close(),
+    [Symbol.asyncIterator]: async function* () {
+      for await (const entry of directory) {
+        const name = Buffer.isBuffer(entry) ? entry : entry?.name;
+        if (!Buffer.isBuffer(name)) throw new FilesError('invalid', 'This runtime did not return raw filename bytes.');
+        yield {name};
+      }
+    },
+  };
+}
 
 // No shell, ever. Both the process deadline and captured output are bounded.
 // CLIs that consume paths must put -- before them at their call site.

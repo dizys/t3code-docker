@@ -4,9 +4,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { accessSync, constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+// The loader patches Node's module system, so the child must be Node.
+// `process.execPath` is Bun under `bun test`, which hangs on this script.
+const nodeBinary = () => {
+  if (path.basename(process.execPath) !== 'bun') return process.execPath;
+  const infra = '/usr/local/lib/t3-node-runtime/node';
+  try { accessSync(infra, constants.X_OK); return infra; } catch { return 'node'; }
+};
 
 const both = variants => ['light', 'dark'].flatMap(theme => variants.map(variant => [theme, ...variant]));
 const skills = [[1440,900],[1024,900],[390,844],[360,640],[1198,878,true]];
@@ -37,15 +45,17 @@ process.argv = ['node', entry, 'http://fixture.invalid/', 'fixture'];
 require(entry);
 `;
 
-test('all ten audit entrypoints retain every original theme, viewport and embed scenario', async t => {
+// Fourteen sequential browser-stub spawns: seconds under Node, longer under
+// Bun's slower startup, and over Bun's five-second default test timeout.
+test('all ten audit entrypoints retain every original theme, viewport and embed scenario', { timeout: 120_000 }, async t => {
   const output = await fs.mkdtemp(path.join(os.tmpdir(), 't3-audit-coverage-'));
   t.after(() => fs.rm(output, { recursive: true, force: true }));
   const capture = (entry, extra = {}) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^T3_.*UI/.test(key)));
     for (const prefix of ['FILES','EDITOR','SKILLS','HOOKS','SKILL_UPDATE','AUTO_UPDATE','GATEWAYS','MCP']) env[`T3_${prefix}_UI_OUTPUT`] = output;
-    const result = spawnSync(process.execPath, ['-e', loader], {
+    const result = spawnSync(nodeBinary(), ['-e', loader], {
       env: { ...env, ...extra, AUDIT_ENTRY: new URL('../scripts/' + entry, import.meta.url).pathname },
-      encoding: 'utf8', timeout: 5000,
+      encoding: 'utf8', timeout: 30000,
     });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);

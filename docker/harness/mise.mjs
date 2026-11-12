@@ -5,6 +5,7 @@
 // never change what the manager reads or writes. Reads force
 // `MISE_AUTO_INSTALL=false` and disable the system fallback: a status call must
 // never install anything and must never resolve a tool it did not install.
+import { accessSync, constants } from "node:fs";
 import path from "node:path";
 import { assertToolUnreferenced } from "./service-references.mjs";
 
@@ -22,6 +23,19 @@ export function writeEnv(env) {
   return { ...env, MISE_AUTO_INSTALL: "false" };
 }
 
+/** A directory holding a `node` binary: the running one when it is Node,
+ * else the infrastructure runtime the image ships. `process.execPath` is the
+ * test runner under `bun test`, whose directory holds no Node. */
+export function nodeDir() {
+  if (!process.versions.bun) return path.dirname(process.execPath);
+  const candidates = [
+    process.env.T3_INFRA_NODE ? path.dirname(process.env.T3_INFRA_NODE) : null,
+    path.dirname(process.execPath),
+    "/usr/local/lib/t3-node-runtime",
+  ].filter(Boolean);
+  return candidates.find(dir => { try { accessSync(path.join(dir, "node"), constants.X_OK); return true; } catch { return false; } }) ?? path.dirname(process.execPath);
+}
+
 /** npm lifecycle scripts need a runtime even when mise's Node is unselected. */
 export function installEnv(ctx, tool) {
   const env = writeEnv(ctx.env);
@@ -32,8 +46,8 @@ export function installEnv(ctx, tool) {
   // by mise, and read-only calls keep their no-fallback policy.
   const shims = path.resolve(ctx.home, ctx.dataDir, "shims");
   const dirs = String(env.PATH ?? "").split(path.delimiter).filter(dir => dir && path.resolve(ctx.home, dir) !== shims);
-  const nodeDir = path.dirname(process.execPath);
-  if (!dirs.some(dir => path.resolve(ctx.home, dir) === nodeDir)) dirs.push(nodeDir);
+  const dir = nodeDir();
+  if (!dirs.some(entry => path.resolve(ctx.home, entry) === dir)) dirs.push(dir);
   return { ...env, PATH: dirs.join(path.delimiter) };
 }
 

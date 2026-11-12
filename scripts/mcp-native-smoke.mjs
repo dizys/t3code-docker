@@ -39,7 +39,9 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
   fs.appendFileSync(process.argv[2], JSON.stringify({method:request.method,env:process.env.SETUP_FIXTURE_VALUE})+'\\n');
   if(request.id!==undefined) process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,result:answer(request)})+'\\n');
 });`);
-const nativeCommand = async (env, home, args) => (await promisify(execFile)(executable, args, { env, cwd: home, timeout: 20000, maxBuffer: 1024 * 1024 })).stdout;
+// Cursor's cold MCP startup hit the generic twenty-second deadline on hosted
+// ARM. Give it a bounded startup budget without weakening discovery checks.
+const nativeCommand = async (env, home, args) => (await promisify(execFile)(executable, args, { env, cwd: home, timeout: provider === "cursor" ? 60000 : 20000, maxBuffer: 1024 * 1024 })).stdout;
 
 async function inventory(env, home, major, waitForMcp) {
   if (provider === 'grok') return nativeCommand(env, home, ['mcp', 'doctor', '--json']);
@@ -130,7 +132,12 @@ try {
         await delay(25, undefined, { signal });
       }
     };
-    const result = await inventory(env, home, major, waitForMcp);
+    let result;
+    try { result = await inventory(env, home, major, waitForMcp); }
+    catch (error) {
+      console.error(`${provider} ${transport} MCP requests before failure:`, (await readTraffic()).map(row => row.method));
+      throw error;
+    }
     const traffic = await readTraffic();
     assert.ok(traffic.some(row => row.method === "initialize"), "native runtime did not initialize MCP");
     if (provider === "codex" || provider === "opencode" && major === 2 || provider === "cursor" || provider === 'muse') assert.ok(traffic.some(row => row.method === "tools/list"), "native runtime did not discover tools");

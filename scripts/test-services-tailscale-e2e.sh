@@ -7,10 +7,16 @@ NAME="t3-tail-e2e-$$"
 SCRATCH="$(mktemp -d)"
 CONTROL_IMAGE="headscale/headscale:0.29.7@sha256:11f81665e842809db9fe3006a38c56a66e968baa5abd4bac498e86445572b970"
 cleanup() {
+  local result=$?
+  if [ "$result" -ne 0 ]; then
+    printf '%s\n' 'Disposable client inbound filter at failure:' >&2
+    docker exec -u 0 "${NAME}-client" /usr/sbin/nft -j list table inet t3code_tailscale >&2 || true
+  fi
   docker rm -f "${NAME}-client" "${NAME}-peer" "${NAME}-control" >/dev/null 2>&1 || true
   docker volume rm "${NAME}-client-home" "${NAME}-client-system" "${NAME}-peer-home" "${NAME}-peer-system" "${NAME}-control" >/dev/null 2>&1 || true
   docker network rm "$NAME" >/dev/null 2>&1 || true
   rm -rf "$SCRATCH"
+  return "$result"
 }
 trap cleanup EXIT
 if [ ! -c /dev/net/tun ]; then sudo modprobe tun; fi

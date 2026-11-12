@@ -26,12 +26,30 @@ const expectedRules = [
 ];
 const normalize = value => {
   if (Array.isArray(value)) return value.map(normalize);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, key === 'op' && value.right?.set ? 'in' : key === 'set' && Array.isArray(value[key]) ? [...value[key]].sort() : normalize(value[key])]));
+  if (value && typeof value === 'object') {
+    // nftables emits unbraced state flags as a list, and braced states as a
+    // set. Only positive conntrack membership has these equivalent forms.
+    // In particular, never normalize a negated predicate into an allow rule.
+    if (value.left?.ct?.key === 'state') {
+      if (value.op === 'in' && Array.isArray(value.right)) value = { ...value, right: { set: [...value.right].sort() } };
+      else if (['==', 'in'].includes(value.op) && Array.isArray(value.right?.set)) value = { ...value, op: 'in', right: { ...value.right, set: [...value.right.set].sort() } };
+    }
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, normalize(value[key])]));
+  }
   return value;
 };
 export function ownedFirewall(value) {
-  const rows = value?.nftables || [], tables = rows.filter(item => item.table).map(item => item.table), chains = rows.filter(item => item.chain).map(item => item.chain), rules = rows.filter(item => item.rule).map(item => item.rule);
-  return tables.length === 1 && tables[0].family === 'inet' && tables[0].name === TABLE && tables[0].comment === OWNER && chains.length === 1 && chains[0].name === 'input' && chains[0].type === 'filter' && chains[0].hook === 'input' && chains[0].prio === -10 && chains[0].policy === 'accept' && rules.length === 2 && rules.every((rule, index) => rule.chain === 'input' && JSON.stringify(normalize(rule.expr)) === JSON.stringify(normalize(expectedRules[index]))) && rows.every(item => item.metainfo || item.table || item.chain || item.rule);
+  const rows = value?.nftables;
+  if (!Array.isArray(rows)) return false;
+  const tables = rows.filter(item => item.table).map(item => item.table);
+  const chains = rows.filter(item => item.chain).map(item => item.chain);
+  const rules = rows.filter(item => item.rule).map(item => item.rule);
+  const inTable = item => item.family === 'inet' && item.table === TABLE;
+  if (tables.length !== 1 || tables[0].family !== 'inet' || tables[0].name !== TABLE || tables[0].comment !== OWNER) return false;
+  if (tables[0].flags !== undefined && (!Array.isArray(tables[0].flags) || tables[0].flags.length !== 0)) return false;
+  if (chains.length !== 1 || !inTable(chains[0]) || chains[0].name !== 'input' || chains[0].type !== 'filter' || chains[0].hook !== 'input' || chains[0].prio !== -10 || chains[0].policy !== 'accept') return false;
+  return rules.length === 2 && rules.every((rule, index) => inTable(rule) && rule.chain === 'input' && JSON.stringify(normalize(rule.expr)) === JSON.stringify(normalize(expectedRules[index])))
+    && rows.every(item => item.metainfo || item.table || item.chain || item.rule);
 }
 const firewallScript = `add table inet ${TABLE} { comment "${OWNER}"; }
 add chain inet ${TABLE} input { type filter hook input priority -10; policy accept; }

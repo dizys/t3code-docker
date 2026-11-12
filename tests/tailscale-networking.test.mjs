@@ -15,6 +15,7 @@ import { createTailscaleNetworking, ownedFirewall } from '../docker/services/tai
 import { createController } from '../docker/services/controller.mjs';
 
 const original = '# Docker DNS\nnameserver 127.0.0.11\nsearch workspace.internal\noptions ndots:0 rotate\n';
+const nativeStateMatch = JSON.parse(await fs.readFile(new URL('./fixtures/nftables-ct-state.json', import.meta.url), 'utf8')).expression;
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 't3-tail-network-'));
   const store = openStore(root, { domain: 'system' }), file = path.join(root, 'resolv.conf');
@@ -163,10 +164,42 @@ function firewall() {
   return { nftables: [
     { table: { family: 'inet', name: 't3code_tailscale', comment: 't3code-services-tailscale-v1' } },
     { chain: { family: 'inet', table: 't3code_tailscale', name: 'input', type: 'filter', hook: 'input', prio: -10, policy: 'accept' } },
-    { rule: { chain: 'input', expr: [face, { match: { op: 'in', left: { ct: { key: 'state' } }, right: { set: ['related', 'established'] } } }, { accept: null }] } },
-    { rule: { chain: 'input', expr: [face, { drop: null }] } },
+    { rule: { family: 'inet', table: 't3code_tailscale', chain: 'input', expr: [face, structuredClone(nativeStateMatch), { accept: null }] } },
+    { rule: { family: 'inet', table: 't3code_tailscale', chain: 'input', expr: [face, { drop: null }] } },
   ] };
 }
+test('the owned filter accepts native nftables state flags and equivalent positive sets without mutation', () => {
+  const value = firewall(), before = structuredClone(value);
+  assert.equal(ownedFirewall(value), true); assert.deepEqual(value, before);
+  value.nftables[2].rule.expr[1].match.right.reverse(); assert.equal(ownedFirewall(value), true);
+  for (const op of ['==', 'in']) {
+    value.nftables[2].rule.expr[1].match = { op, left: { ct: { key: 'state' } }, right: { set: ['related', 'established'] } };
+    assert.equal(ownedFirewall(value), true);
+  }
+});
+test('the owned filter rejects negation, extra states, dormant tables and external rule changes', () => {
+  for (const change of [
+    value => { value.nftables[2].rule.expr[1].match.op = '!='; },
+    value => { value.nftables[2].rule.expr[1].match = { op: '!=', left: { ct: { key: 'state' } }, right: { set: ['established', 'related'] } }; },
+    value => { value.nftables[2].rule.expr[1].match.right.push('new'); },
+    value => { value.nftables[2].rule.expr[1].match.right.push('untracked'); },
+    value => { value.nftables[2].rule.expr[1].match.right.push('established'); },
+    value => { value.nftables[2].rule.expr[1].match.left.ct.key = 'status'; },
+    value => { value.nftables[2].rule.expr[0].match.right = 'eth0'; },
+    value => { value.nftables[2].rule.expr.shift(); },
+    value => { value.nftables[2].rule.expr.reverse(); },
+    value => { [value.nftables[2], value.nftables[3]] = [value.nftables[3], value.nftables[2]]; },
+    value => { value.nftables[3].rule.expr = [{ accept: null }]; },
+    value => { value.nftables.push(structuredClone(value.nftables[2])); },
+    value => { value.nftables[0].table.comment = 'another-owner'; },
+    value => { value.nftables[0].table.flags = ['dormant']; },
+    value => { value.nftables[1].chain.prio = 0; },
+    value => { value.nftables[1].chain.table = 'another-table'; },
+    value => { value.nftables[2].rule.family = 'ip'; },
+  ]) {
+    const value = firewall(); change(value); assert.equal(ownedFirewall(value), false, change.toString());
+  }
+});
 async function networkFixture(t, extra = {}) {
   const f = await fixture(t), calls = [], events = [];
   let table = null, failProbe = false;

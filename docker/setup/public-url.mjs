@@ -17,7 +17,7 @@
 //   node public-url.mjs --json       {"url", "source", "platform"}
 //   node public-url.mjs --describe   the address and where it came from
 import { randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, rmSync, openSync, closeSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -128,11 +128,14 @@ export function readSaved(stateDir) {
 export function writeSaved(stateDir, url) {
   const target = savedPath(stateDir);
   const temp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  let created = false;
   try {
-    writeFileSync(temp, `${url}\n`, { mode: 0o644, flag: "wx" });
+    const fd = openSync(temp, 'wx', 0o644);
+    created = true;
+    try { writeFileSync(fd, `${url}\n`); } finally { closeSync(fd); }
     renameSync(temp, target);
   } catch (error) {
-    rmSync(temp, { force: true });
+    if (created) { try { rmSync(temp, { force: true }); } catch {} }
     throw error;
   }
 }

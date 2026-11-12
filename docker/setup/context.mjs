@@ -109,12 +109,14 @@ async function readInstructionFile(fs, file) {
 async function writeFileAtomic(fs, file, text, mode = 0o600) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
+  let created = false;
   try {
-    await fs.writeFile(tmp, text, { encoding: "utf8", mode, flag: "wx" });
-    await fs.chmod(tmp, mode);
+    const handle = await fs.open(tmp, 'wx', mode);
+    created = true;
+    try { await handle.writeFile(text, 'utf8'); await handle.chmod(mode); } finally { await handle.close(); }
     await fs.rename(tmp, file);
   } finally {
-    await fs.rm(tmp, { force: true });
+    if (created) await fs.rm(tmp, { force: true });
   }
 }
 

@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { parse as parseToml } from '../docker/setup/vendor/toml-patch.mjs';
 import { desiredInstance, differences, fileText, filesFor, instanceIdFor, mergeInstance, modelsFor, modelsToHide } from '../docker/setup/gateways/adapters.mjs';
 import { GATEWAY_KEY_ENV, NO_KEY, agentOf } from '../docker/setup/gateways/catalog.mjs';
-import { cleanCapabilities, cleanModelIds, cleanModelLimits, harnessMajor, newestIn, parseModelCapabilities, parseModelList, validModelId } from '../docker/setup/gateways/models.mjs';
+import { cleanCapabilities, cleanModelIds, cleanModelLimits, harnessMajor, newestIn, parseModelCapabilities, parseModelList } from '../docker/setup/gateways/models.mjs';
 import { nativeModels } from './fixtures/codex-models.mjs';
 import { readCodexModels } from '../docker/setup/gateways/codex.mjs';
 
@@ -413,13 +413,24 @@ test('T3’s built-in models are hidden when the gateway doesn’t serve them', 
 });
 
 test('braces can never reach a model list', () => {
-  assert.deepEqual(cleanModelIds(['{file:/etc/passwd}', 'a{b', 'a}b', 'ok-model', 'org/model:free', 'a~b|c']), ['ok-model', 'org/model:free']);
+  assert.deepEqual(cleanModelIds(['{file:/etc/passwd}', 'a{b', 'a}b', 'ok-model', 'org/model:free', 'a~b|c']), ['a~b|c', 'ok-model', 'org/model:free']);
 });
 
-test('quotes, backticks, dollar signs, semicolons and whitespace never reach a model list', () => {
-  assert.deepEqual(cleanModelIds(['a"b', "a'b", 'a`b', 'a$b', 'a;b', 'a b', 'a\tb', 'ok-model', 'org/model:free', 'a-b_c.d:e/f']), ['a-b_c.d:e/f', 'ok-model', 'org/model:free']);
-  for (const id of ['a"b', "a'b", 'a`b', 'a$b', 'a;b', 'a b', '']) assert.equal(validModelId(id), false);
-  assert.equal(validModelId('org/model:free'), true);
+test('provider model identifiers remain literal data in generated JSON and Pi extensions', async t => {
+  const ids = ['@cf/meta/llama', 'model+vision', 'model"quoted', 'model`literal', 'model$literal', 'model;literal'];
+  assert.deepEqual(cleanModelIds(ids), [...ids].sort((a, b) => a.localeCompare(b, 'en', { numeric: true, sensitivity: 'base' })));
+  const capabilities = Object.fromEntries(ids.map(id => [id, { limits: { context: 128000 } }]));
+  const gw = gateway({ models: { ids, manual: [], capabilities }, agents: { codex: { on: true, scope: 'all' } } });
+  for (const major of [1, 2]) {
+    const config = JSON.parse(fileText(opencode, gw, '/d', { major }));
+    const models = (config.providers ?? config.provider)['t3gw-my-proxy'].models;
+    for (const id of ids) assert.ok(Object.hasOwn(models, id), id);
+  }
+  const extension = await importExtension(t, fileText(pi, gw, '/d'));
+  let models; extension.default({ registerProvider: (_id, config) => { models = config.models; } });
+  for (const id of ids) assert.ok(models.some(model => model.id === id), id);
+  const catalog = JSON.parse(fileText(codex, gw, '/d', { nativeModels }));
+  for (const id of ids) assert.ok(catalog.models.some(model => model.slug === id), id);
 });
 
 test('model lists are read from each shape gateways use, in one stable order', () => {

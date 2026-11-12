@@ -139,12 +139,13 @@ async function writePiAuth(io, file, value) {
     throw new Error('Pi’s auth.json is unsafe to replace. Repair it before saving here.');
   }
   const temporary = path.join(path.dirname(file), '.auth.json.' + randomBytes(8).toString('hex') + '.tmp');
+  let created = false;
   try {
-    await io.writeFile(temporary, JSON.stringify(value, null, 2) + '\n', {
-      mode: 0o600, flag: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-    });
+    const handle = await io.open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    created = true;
+    try { await handle.writeFile(JSON.stringify(value, null, 2) + '\n'); } finally { await handle.close(); }
     await io.rename(temporary, file);
-  } finally { await io.rm(temporary, { force: true }).catch(() => {}); }
+  } finally { if (created) await io.rm(temporary, { force: true }).catch(() => {}); }
 }
 
 /**

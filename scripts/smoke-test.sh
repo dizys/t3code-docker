@@ -854,7 +854,7 @@ context_editor_works() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0
   docker cp scripts/context-ui-audit.js "$NAME:/tmp/context-ui-audit.js" >/dev/null 2>&1 || return 1
   docker exec -e CHROME_PATH=/usr/bin/chromium \
-    -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    -e NODE_PATH=/opt/t3-mcp/node_modules \
     "$NAME" node /tmp/context-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
 }
 check "the Context editor retains drafts and handles loading and failed saves" context_editor_works
@@ -863,7 +863,7 @@ overlay_motion_works() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0
   docker cp scripts/layers-ui-audit.js "$NAME:/tmp/layers-ui-audit.js" >/dev/null 2>&1 || return 1
   docker exec -e CHROME_PATH=/usr/bin/chromium -e T3_SETUP_DIR=/opt/t3-setup \
-    -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    -e NODE_PATH=/opt/t3-mcp/node_modules \
     "$NAME" node /tmp/layers-ui-audit.js >>"$UI_AUDIT_LOG" 2>&1
 }
 check "dialogs close without flashing, releasing focus or undimming Settings early" overlay_motion_works
@@ -883,15 +883,15 @@ skills_editor_works() {
   docker cp scripts/lib/browser-audit-cases.cjs "$NAME:/tmp/lib/browser-audit-cases.cjs" >/dev/null 2>&1 || return 1
   docker cp scripts/fixtures/console "$NAME:/tmp/fixtures/" >/dev/null 2>&1 || return 1
   docker exec -e T3_UI_AUDIT_WORKERS=2 -e CHROME_PATH=/usr/bin/chromium \
-    -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    -e NODE_PATH=/opt/t3-mcp/node_modules \
     "$NAME" node /tmp/skills-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
   docker exec -e T3_UI_AUDIT_WORKERS=2 -e CHROME_PATH=/usr/bin/chromium \
-    -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    -e NODE_PATH=/opt/t3-mcp/node_modules \
     "$NAME" node /tmp/skills-hooks-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1 || return 1
   # The phone review's native keyboard-scroll check has failed with concurrent
   # scenarios on amd64. Retain its prior serial schedule and every assertion.
   docker exec -e T3_UI_AUDIT_WORKERS=1 -e CHROME_PATH=/usr/bin/chromium \
-    -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    -e NODE_PATH=/opt/t3-mcp/node_modules \
     "$NAME" node /tmp/skills-update-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
 }
 check "the Skills editor handles native policies, shared locations and file changes" skills_editor_works
@@ -902,7 +902,7 @@ auto_update_settings_work() {
   docker exec "$NAME" mkdir -p /tmp/lib || return 1
   docker cp scripts/lib/browser-audit-cases.cjs "$NAME:/tmp/lib/browser-audit-cases.cjs" >/dev/null 2>&1 || return 1
   docker exec -e T3_UI_AUDIT_WORKERS=2 -e CHROME_PATH=/usr/bin/chromium \
-    -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    -e NODE_PATH=/opt/t3-mcp/node_modules \
     "$NAME" node /tmp/auto-update-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
 }
 check "update checks show progress and failures; automatic settings keep categories independent" auto_update_settings_work
@@ -911,7 +911,7 @@ row_layouts_work() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0
   docker cp scripts/row-ui-audit.js "$NAME:/tmp/row-ui-audit.js" >/dev/null 2>&1 || return 1
   docker exec -e CHROME_PATH=/usr/bin/chromium \
-    -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    -e NODE_PATH=/opt/t3-mcp/node_modules \
     "$NAME" node /tmp/row-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
 }
 check "console rows align icons, text and wrapping actions on desktop and phone" row_layouts_work
@@ -920,7 +920,7 @@ console_drafts_survive_refresh() {
   [ "$HAS_BROWSER" -eq 1 ] || return 0
   docker cp scripts/form-drafts-ui-audit.js "$NAME:/tmp/form-drafts-ui-audit.js" >/dev/null 2>&1 || return 1
   docker exec -e CHROME_PATH=/usr/bin/chromium \
-    -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    -e NODE_PATH=/opt/t3-mcp/node_modules \
     "$NAME" node /tmp/form-drafts-ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" >>"$UI_AUDIT_LOG" 2>&1
 }
 check "console refreshes retain unsaved drafts, focus and selection" console_drafts_survive_refresh
@@ -988,13 +988,13 @@ credentials_browser_works() {
   for helper in credentials.mjs credential-keys.mjs; do
     docker cp "tests/fixtures/$helper" "$NAME:$audit/tests/fixtures/$helper" >/dev/null 2>&1 || return 1
   done
-  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules -e T3_CREDENTIALS_UI_WIDTHS=390,640,1280 \
+  docker exec -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/node_modules -e T3_CREDENTIALS_UI_WIDTHS=390,640,1280 \
     "$NAME" node "$audit/scripts/credentials-ui-audit.mjs" >>"$UI_AUDIT_LOG" 2>&1
 }
 check "Vault drafts, host trust, conflicts and recovery work on desktop, phone and Settings" credentials_browser_works
 
 files_audit() {
-  docker exec -e T3_UI_AUDIT_WORKERS=2 -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+  docker exec -e T3_UI_AUDIT_WORKERS=2 -e CHROME_PATH=/usr/bin/chromium -e NODE_PATH=/opt/t3-mcp/node_modules \
     "$NAME" node "/tmp/t3-files-audit/$1" "http://127.0.0.1:3774/" "$SETUP_KEY"
 }
 files_browser_works() {
@@ -1841,7 +1841,7 @@ console_layout_is_clean() {
   docker exec "$NAME" test -x /usr/bin/chromium 2>/dev/null || return 1
   docker cp scripts/ui-audit.js "$NAME:/tmp/ui-audit.js" >/dev/null 2>&1 || return 1
   docker exec \
-    -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+    -e NODE_PATH=/opt/t3-mcp/node_modules \
     -e CHROME_PATH=/usr/bin/chromium \
     -e T3_UI_AUDIT_DEVICE_ID="$T3_LABEL_DEVICE" \
     "$NAME" node /tmp/ui-audit.js "http://127.0.0.1:3774/" "$SETUP_KEY" \
@@ -1864,7 +1864,7 @@ setup_bridge_works() {
   docker cp scripts/appearance-ui-audit.js "$NAME:/tmp/appearance-ui-audit.js" >/dev/null 2>&1 || return 1
   { printf '\nsetup-bridge-audit:\n'
     docker exec \
-      -e NODE_PATH=/opt/t3-mcp/lib/node_modules/@playwright/mcp/node_modules \
+      -e NODE_PATH=/opt/t3-mcp/node_modules \
       -e CHROME_PATH=/usr/bin/chromium \
       -e T3_PAIR_CREDENTIAL="$credential" \
       -e T3_BRIDGE_REQUIRE_NATIVE_PALETTE=1 \

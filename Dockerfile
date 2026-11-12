@@ -394,6 +394,7 @@ RUN set -eux; \
     for bin in chrome-devtools chrome-devtools-mcp playwright-mcp; do ln -sfn "/opt/t3-mcp/node_modules/.bin/$bin" /usr/local/bin/"$bin"; done; \
     chown -R root:root /opt/t3-mcp; \
     chmod -R go-w /opt/t3-mcp; \
+    NODE_PATH=/opt/t3-mcp/node_modules node -e 'if (typeof require("playwright").chromium.launch !== "function") throw new Error("Browser audit API is unavailable");'; \
     playwright-mcp --help >/dev/null; \
     chrome-devtools-mcp --version
 # The setup console's Environment page reports these as built.

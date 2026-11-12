@@ -1561,13 +1561,17 @@ codex_device_not_localhost() {
 check "Codex signs in by device code, not a localhost callback" codex_device_not_localhost
 
 grok_device_code() {
-  local id
+  local id valid=0
   id="$(signin_id grok)"
   [ -n "$id" ] || return 1
   sleep 12
-  session_state "$id" | grep -q 'accounts.x.ai'
+  if session_state "$id" | grep -q 'accounts.x.ai'; then valid=1; fi
+  # The device flow stays alive until browser approval. Cancel our own flow
+  # even if URL capture failed, so the later uninstall is safe to proceed.
+  auth_post "{\"id\":\"$id\"}" /auth/cancel | jq -e '.ok == true' >/dev/null || return 1
+  [ "$valid" = 1 ]
 }
-check "Grok sign-in captures a device URL" grok_device_code
+check "Grok sign-in captures a device URL, then cancels" grok_device_code
 
 muse_device_code() {
   local id valid=0

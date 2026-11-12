@@ -102,6 +102,8 @@ export function createHarnessManager(options = {}) {
   ctx.statePath = state.statePath(ctx.stateDir);
 
   const authCache = new Map();
+  const authPending = new Map();
+  const authPaused = new Set();
 
   /** Read the shared snapshot once: mise, our state, and any live lock. */
   async function snapshot() {
@@ -265,9 +267,19 @@ export function createHarnessManager(options = {}) {
     const key = `${executable}:${version ?? ""}:${stamp}`;
     const cached = authCache.get(entry.id);
     if (cached && cached.key === key && ctx.now() - cached.at < ttl) return cached.value;
-    const value = await detect();
-    authCache.set(entry.id, { at: ctx.now(), key, value });
-    return value;
+    if (authPaused.has(entry.id)) return null;
+    const pending = authPending.get(entry.id) ?? new Set();
+    authPending.set(entry.id, pending);
+    const probe = Promise.resolve().then(detect);
+    pending.add(probe);
+    try {
+      const value = await probe;
+      authCache.set(entry.id, { at: ctx.now(), key, value });
+      return value;
+    } finally {
+      pending.delete(probe);
+      if (!pending.size) authPending.delete(entry.id);
+    }
   }
 
   /** Exact-version selection from mise's install: the concrete executable. */
@@ -317,6 +329,11 @@ export function createHarnessManager(options = {}) {
           `${held.holder?.id ? ` ${held.holder.id}` : ""})`;
       return { ok: false, code: held.error ? "lock-error" : "busy", error: detail, ...(await after()) };
     }
+    // Our own bounded status probes must finish before changing an agent's
+    // files. Hold new probes until the lock is released, including reads
+    // whose snapshot predates this lock. User processes still veto removal.
+    const pauseAuth = section === "harnesses";
+    if (pauseAuth) authPaused.add(id);
 
     // What an operation's steps report through: the phase it has reached, and
     // whether someone has cancelled it (checked between steps; a running
@@ -339,6 +356,7 @@ export function createHarnessManager(options = {}) {
     let outcome;
     try {
       try { onStarted?.(); } catch { /* a listener cannot fail the operation */ }
+      if (pauseAuth) await Promise.allSettled([...(authPending.get(id) ?? [])]);
       const before = await state.readState(ctx);
       const previous = before[section][id] ?? {};
       await state.updateEntry(ctx, section, id, {
@@ -377,7 +395,8 @@ export function createHarnessManager(options = {}) {
       });
       outcome = { ok: false, code: cancelled ? "cancelled" : error?.code ?? "failed", error: message };
     } finally {
-      await held.release();
+      try { await held.release(); }
+      finally { if (pauseAuth) authPaused.delete(id); }
     }
     // Resolve after releasing the lock: the operation has finished, so the
     // returned facts must not read as "still in progress".

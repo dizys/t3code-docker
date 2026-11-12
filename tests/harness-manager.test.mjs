@@ -2499,6 +2499,53 @@ test("source control provider lookup scans tools once per snapshot, not once per
   assert.deepEqual(glab.providedBy, { tool: "ripgrep", version: "1.0.0" });
 });
 
+for (const probeFails of [false, true]) test(`uninstall drains its own auth probes and pauses new ones (${probeFails ? "rejected" : "successful"} probe)`, { timeout: 5000 }, async (t) => {
+  const world = createWorld(new MemoryFs());
+  await managerFor(world).install("grok");
+  world.calls.length = 0;
+  const executable = world.execPath("grok", "1.0.34");
+  const releases = [], run = world.run;
+  let probes = 0, active = 0, bothStarted, locked;
+  const started = new Promise(resolve => { bothStarted = resolve; });
+  const holding = new Promise(resolve => { locked = resolve; });
+  t.after(() => { for (const release of releases) release(); });
+  world.run = async (argv, options) => {
+    if (argv[0] === executable && argv[1] === "models") {
+      const count = ++probes;
+      if (count <= 2) {
+        active++;
+        try {
+          await new Promise(resolve => { releases.push(resolve); if (releases.length === 2) bothStarted(); });
+          if (probeFails && count === 1) throw new Error("Auth fixture failed");
+        } finally { active--; }
+      }
+    }
+    return run(argv, options);
+  };
+  const manager = managerFor(world, { retentionProcesses: async () => ({
+    complete: true, processes: active ? [{ args: [executable, "models"] }] : [],
+  }) });
+  const reads = Promise.allSettled([manager.resolve("grok"), manager.resolve("grok")]);
+  await started;
+  const removing = manager.uninstall("grok", { onStarted: () => locked() });
+  await holding;
+  assert.equal((await manager.resolve("grok")).inProgress, true);
+  assert.equal(probes, 2, "status cannot start another probe while the lock is held");
+  assert.equal(world.calls.some(call => call.includes(" unuse ")), false);
+  releases[0]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(world.calls.some(call => call.includes(" unuse ")), false, "every existing probe must finish");
+  releases[1]();
+  const outcomes = await reads;
+  assert.equal(outcomes.filter(outcome => outcome.status === "rejected").length, probeFails ? 1 : 0);
+  const result = await removing;
+  assert.equal(result.ok, true, result.error);
+  const installed = await manager.install("grok");
+  assert.equal(installed.ok, true, installed.error);
+  assert.equal(installed.harness.authenticated, true, "probes resume after the mutation releases its lock");
+  assert.equal(probes, 3);
+});
+
 test("uninstall refuses a version a running process still uses", async () => {
   const fs = new MemoryFs();
   const world = createWorld(fs);

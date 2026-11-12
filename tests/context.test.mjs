@@ -38,6 +38,18 @@ test("validation rejects blank and oversized UTF-8 content", () => {
   assert.equal(validateAgentsMd("é".repeat(32768)).bytes, 65536);
 });
 
+test('an instruction temporary-name collision preserves the original and the other writer', async t => {
+  const f = await fixture(t), first = await writeAgentsMd(fs, f.baseDir, '# Original');
+  let collision;
+  const guarded = { ...fs, open: async (file, ...args) => {
+    if (String(file).includes('.tmp.')) { collision = file; await fs.writeFile(file, 'another writer'); }
+    return fs.open(file, ...args);
+  } };
+  await assert.rejects(writeAgentsMd(guarded, f.baseDir, '# Replacement', first.revision), { code: 'EEXIST' });
+  assert.equal((await readAgentsMd(fs, f.baseDir)).content, '# Original');
+  assert.equal(await fs.readFile(collision, 'utf8'), 'another writer');
+});
+
 test("oversized shared files and provider symlink targets are never opened, including on repeated polls", async (t) => {
   const f = await fixture(t);
   const shared = agentsMdPathFor(f.baseDir);

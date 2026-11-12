@@ -88,7 +88,7 @@ test('an unreadable auth.json is reported and never overwritten', async (t) => {
   assert.deepEqual(await readPiAuth({ home, env: {} }), {}, 'Pi creates the file empty');
 });
 
-test('a linked auth.json is written through its link; a dangling link is refused', async (t) => {
+test('a linked auth.json is refused, never written through its link', async (t) => {
   const home = await tempHome(t);
   const real = path.join(home, 'state/pi-auth.json');
   await fs.mkdir(path.dirname(real), { recursive: true });
@@ -96,12 +96,36 @@ test('a linked auth.json is written through its link; a dangling link is refused
   await fs.mkdir(path.dirname(authPath(home)), { recursive: true });
   await fs.symlink(real, authPath(home));
   const auth = createPiAuth({ home, env: {} });
-  await auth.saveKey('groq', 'gsk-new');
-  assert.ok((await fs.lstat(authPath(home))).isSymbolicLink(), 'the link stays a link');
-  assert.deepEqual(Object.keys(JSON.parse(await fs.readFile(real, 'utf8'))).sort(), ['groq', 'openai']);
+  await assert.rejects(auth.saveKey('groq', 'gsk-new'), /symlink/);
+  assert.deepEqual(JSON.parse(await fs.readFile(real, 'utf8')), { openai: { type: 'api_key', key: 'sk-old' } }, 'the link target is untouched');
+  assert.ok((await fs.lstat(authPath(home))).isSymbolicLink(), 'the link itself is left alone');
   await fs.rm(real);
-  await assert.rejects(auth.saveKey('groq', 'gsk-other'), /links to a missing file/);
+  await assert.rejects(auth.saveKey('groq', 'gsk-other'), /symlink/);
   await assert.rejects(fs.access(real), 'nothing is created at the link target');
+});
+
+test('hard-linked and foreign-owned Pi auth files are preserved', async t => {
+  const home = await tempHome(t), original = { anthropic: SUBSCRIPTION };
+  await seed(home, original);
+  const linked = path.join(home, 'auth-copy'); await fs.link(authPath(home), linked);
+  await assert.rejects(createPiAuth({ home, env: {} }).saveKey('openai', 'fixture-key'), /unsafe to replace/);
+  assert.deepEqual(await readAuth(home), original); assert.deepEqual(JSON.parse(await fs.readFile(linked, 'utf8')), original);
+  await fs.unlink(linked);
+  const io = { ...fs, lstat: async file => { const stat = await fs.lstat(file); if (file === authPath(home)) stat.uid++; return stat; } };
+  await assert.rejects(createPiAuth({ home, env: {}, io }).saveKey('openai', 'fixture-key'), /unsafe to replace/);
+  assert.deepEqual(await readAuth(home), original);
+});
+
+test('a Pi auth temporary-name collision preserves both existing files and releases the lock', async t => {
+  const home = await tempHome(t), original = { anthropic: SUBSCRIPTION }; await seed(home, original);
+  let collision;
+  const io = { ...fs, open: async (file, ...args) => {
+    if (path.basename(file).startsWith('.auth.json.')) { collision = file; await fs.writeFile(file, 'another writer'); }
+    return fs.open(file, ...args);
+  } };
+  await assert.rejects(createPiAuth({ home, env: {}, io }).saveKey('openai', 'fixture-key'), { code: 'EEXIST' });
+  assert.deepEqual(await readAuth(home), original); assert.equal(await fs.readFile(collision, 'utf8'), 'another writer');
+  await assert.rejects(fs.access(authPath(home) + '.lock'), { code: 'ENOENT' });
 });
 
 test('Setup waits for Pi’s lock, gives up on a busy one, and clears an abandoned one', async (t) => {

@@ -17,7 +17,7 @@ let stopping = false;
 const launch = (file, args, env) => spawn(file, args, { env, stdio: "inherit" });
 if (root && uid > 0) {
   await fs.mkdir("/run/t3code-services", { recursive: true, mode: 0o755 });
-  domains.push(launch("/usr/local/bin/node", [IMAGE_ROOT + "/bootstrap.mjs", "system"], { ...clean, HOME: userEnv.HOME, T3CODE_HOME: userEnv.T3CODE_HOME, T3_RUN_DIR: userEnv.T3_RUN_DIR, T3_SERVICES_GID: String(gid) }));
+  domains.push(launch("/usr/local/bin/node", [IMAGE_ROOT + "/bootstrap.mjs", "system"], { ...clean, HOME: userEnv.HOME, T3CODE_HOME: userEnv.T3CODE_HOME, T3_RUN_DIR: userEnv.T3_RUN_DIR, T3_SERVICES_GID: String(gid), T3_TAILSCALE_NETWORKING: inherited.T3_TAILSCALE_NETWORKING === '1' ? '1' : '0' }));
 }
 if (uid > 0) {
   const drop = root ? [`--reuid=${uid}`, `--regid=${gid}`, "--clear-groups", "--bounding-set=-all"] : [];

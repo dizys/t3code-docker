@@ -79,7 +79,7 @@ const T3GatewayEditor = (() => {
         const previous = S.presetOf(view.preset), next = S.presetOf(id);
         view.preset = id; view.presetTouched = true;
         // Only replace an address that came from the last preset.
-        if (!view.urlTouched || view.url === (previous?.url ?? '')) { view.url = next.url; view.urlTouched = false; }
+        if (!view.urlTouched || view.url === (previous?.url ?? '')) { view.url = next.url; view.urlTouched = false; view.allowPrivate = false; }
         view.result = null; view.tested = ''; view.errors = {}; view.error = null; paint();
         view.layer.panel.querySelector('#gw-url')?.focus({ preventScroll: true });
       };
@@ -101,7 +101,7 @@ const T3GatewayEditor = (() => {
           const result = response.data.result;
           view.result = result;
           if (result.url) view.url = result.url;
-          view.tested = result.url ? JSON.stringify([result.url, JSON.parse(asked)[1]]) : asked;
+          view.tested = signature();
           // A gateway that says what it is beats the card someone left selected.
           if (result.product && S.presetOf(result.product) && result.product !== view.preset && (view.preset === 'custom' || !view.presetTouched)) view.preset = result.product;
           if (!editing && result.ok && !view.agentsTouched) view.agents = new Set(S.agents().filter(agent => ctx.installed(agent.id) && S.availability(agent, result).usable).map(agent => agent.id));
@@ -148,6 +148,11 @@ const T3GatewayEditor = (() => {
       };
       const handleFailure = async response => {
         if (response.data?.field === 'managementKey') return refuseLimits(response);
+        if (response.data?.code === 'private-host') {
+          view.errors.url = response.error;
+          view.result = { ok: false, code: 'private-host', confirmHost: response.data.confirmHost, message: response.error };
+          view.tested = '';
+        }
         view.error = response.error;
         if (response.data?.code === 'conflict') { view.stale = editing; await ctx.reload(); if (!editing) view.revision = ctx.revision(); }
         paint();
@@ -176,7 +181,7 @@ const T3GatewayEditor = (() => {
         Kit.toast(editing ? 'Saved ' + name : 'Added ' + name, editing ? {} : { detail: first ? 'Choose ' + first + ' in T3 Code’s model picker.' : undefined });
         if (response.data.limitsStopped) Kit.toast('Limits stopped for ' + name, { detail: 'Its management key was checked at the old address. Set it up again to bring them back.' });
       };
-      const useSuggestion = url => { view.url = url; view.urlTouched = true; view.result = null; paint(); void runTest(); };
+      const useSuggestion = url => { view.url = url; view.urlTouched = true; view.allowPrivate = false; view.result = null; paint(); void runTest(); };
       const pickSavedKey = button => Kit.menu(button, { label: 'Saved keys', head: 'Saved in the Vault', items: ctx.keys().map(entry => ({ label: entry.id, icon: 'key-round', run: () => { view.keySource = 'vault'; view.credentialId = entry.id; view.key = ''; view.result = null; paint(); testWhenReady(); } })) });
 
       // ---- the form --------------------------------------------------------------
@@ -204,7 +209,7 @@ const T3GatewayEditor = (() => {
           if (held?.ok) return html`<div class="tc-gw-check" data-tone="ok" data-key="gw-check">${icon('circle-check')}<span class="tc-gw-check-text"><strong>Connected</strong><span>${[held.listed ? S.models(held.count) : '', 'tested ' + T3Model.relTime(held.at, Date.now())].filter(Boolean).join(' · ')}</span></span><button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-key="gw-test" data-gw-editor="test">Test again</button></div>`;
           return html`<div class="tc-gw-check" data-key="gw-check">${icon('circle-dashed')}<span class="tc-gw-check-text"><strong>Not tested yet</strong><span>From this container, and it can’t spend tokens.</span></span><button class="tc-btn tc-btn--xs" type="button" data-key="gw-test" data-gw-editor="test"${disabled(!view.url.trim())}>Test</button></div>`;
         }
-        if (result.code === 'private-host') return html`<div class="tc-gw-check" data-tone="danger" data-key="gw-check" role="alert">${icon('circle-alert')}<span class="tc-gw-check-text"><strong>Confirm “${result.confirmHost || result.host || view.url.trim()}” before any key is sent</strong>${result.hint ? html`<span>${result.hint}</span>` : ''}<label class="tc-gw-private"><input class="tc-checkbox" type="checkbox" data-gw-private${view.allowPrivate ? raw(' checked') : ''}>Private host — I confirm this address is mine</label></span><button class="tc-btn tc-btn--xs" type="button" data-key="gw-test" data-gw-editor="test">Test again</button></div>`;
+        if (result.code === 'private-host') return html`<div class="tc-gw-check" data-tone="danger" data-key="gw-check" role="alert">${icon('circle-alert')}<span class="tc-gw-check-text"><strong>Confirm “${result.confirmHost || result.host || view.url.trim()}” before any key is sent</strong>${result.hint ? html`<span>${result.hint}</span>` : ''}</span><button class="tc-btn tc-btn--xs" type="button" data-key="gw-test" data-gw-editor="test">Test again</button></div>`;
         if (!result.ok) return html`<div class="tc-gw-check" data-tone="danger" data-key="gw-check" role="alert">${icon('circle-alert')}<span class="tc-gw-check-text"><strong>${result.message}</strong>${result.hint ? html`<span>${result.hint}</span>` : ''}</span>${result.fix?.url ? html`<button class="tc-btn tc-btn--xs" type="button" data-key="gw-fix" data-gw-editor="fix" data-url="${result.fix.url}">${result.fix.label}</button>` : html`<button class="tc-btn tc-btn--xs" type="button" data-key="gw-test" data-gw-editor="test">Test again</button>`}</div>`;
         const product = result.product && S.presetOf(result.product) ? S.presetOf(result.product).name : null;
         const facts = [result.ms + ' ms', result.models.listed ? S.models(result.models.ids.length) : 'No model list', product].filter(Boolean);
@@ -229,7 +234,9 @@ const T3GatewayEditor = (() => {
       const privateField = () => {
         const needs = view.result?.code === 'private-host' || /Private host/.test(view.errors.url || '');
         if (!needs && !view.allowPrivate) return '';
-        return html`<div class="tc-form-field" data-key="gw-field-private"><label class="tc-gw-private"><input class="tc-checkbox" type="checkbox" data-gw-private${view.allowPrivate ? raw(' checked') : ''}>Private host — I confirm this address is mine</label><p class="tc-hint">Local names, loopback and 169.254.x.x never get your key until you tick this.</p></div>`;
+        let host = view.result?.confirmHost;
+        if (!host) { try { host = new URL(/^[a-z]+:\/\//i.test(view.url) ? view.url : 'http://' + view.url).host; } catch { host = view.url; } }
+        return html`<div class="tc-form-field" data-key="gw-field-private"><label class="tc-gw-private"><input class="tc-checkbox" type="checkbox" data-gw-private${view.allowPrivate ? raw(' checked') : ''}${disabled(view.busy === 'save')}>I trust ${host} with these credentials</label><p class="tc-hint">Local names, loopback and metadata addresses need confirmation before a key is sent.</p></div>`;
       };
       const main = () => html`${view.error ? html`<div class="tc-notice tc-notice--danger" role="alert">${icon('circle-alert')}<div class="tc-notice-body"><strong class="tc-notice-title">That didn’t finish</strong><span class="tc-notice-desc">${view.error}</span></div>${view.stale ? html`<button class="tc-btn tc-btn--sm" type="button" data-key="gw-reopen" data-gw-editor="reopen">Reopen</button>` : ''}</div>` : ''}${conflictBlock()}<div class="tc-form">${editing ? '' : presetPicker()}${addressField()}${privateField()}${keyField()}${check()}${nameField()}${limitsField()}</div>`;
 
@@ -278,7 +285,7 @@ const T3GatewayEditor = (() => {
         const name = event.target.dataset.gwField;
         if (!name) return;
         view[name] = event.target.value;
-        if (name === 'url') view.urlTouched = true;
+        if (name === 'url') { view.urlTouched = true; view.allowPrivate = false; }
         if (name === 'name') view.nameTouched = true;
         if (name === 'managementKey') { delete view.errors.managementKey; delete view.errors.managementHint; }
         if ((name === 'url' || name === 'key') && view.result && untested()) { view.result = null; view.errors = {}; view.error = null; }

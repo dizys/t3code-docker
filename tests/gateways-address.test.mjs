@@ -88,7 +88,7 @@ test('loopback, metadata and single-label names need a private-host confirm', ()
     const rejected = parseAddress(input);
     assert.equal(rejected.ok, false, input);
     assert.equal(rejected.code, 'private-host', input);
-    assert.match(rejected.error, /Private host/, input);
+    assert.match(rejected.error, /Confirm that you trust/, input);
     const allowed = parseAddress(input, { allowPrivateHost: true });
     assert.equal(allowed.ok, true, input);
   }

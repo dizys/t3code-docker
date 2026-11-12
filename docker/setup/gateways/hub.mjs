@@ -5,14 +5,9 @@
 // for 30 minutes after five failures, counting a request with no key as one. So
 // nothing here runs unless someone gave a key and asked, each check is one request,
 // and T3 is only ever handed a key that has passed: it polls with whatever it holds.
-import { lookup as dnsLookup } from 'node:dns/promises';
-import { isBlockedIp, parseAddress } from './address.mjs';
+import { parseAddress } from './address.mjs';
 import { readJson, discard } from './probe.mjs';
-
-const defaultLookup = async hostname => {
-  try { return (await dnsLookup(hostname)).address ?? null; }
-  catch { return null; }
-};
+import { gatewayFetch, lookupGateway } from './transport.mjs';
 
 const TIMEOUT_MS = 8000;
 
@@ -56,22 +51,22 @@ const refusal = text => {
  * A private host needs `{ allowPrivateHost: true }` before any request goes out.
  * DNS is pinned once, and redirects are reported, never followed.
  */
-export async function probeHub({ url, key, fetchImpl = globalThis.fetch, timeoutMs = TIMEOUT_MS, signal, allowPrivateHost = false, lookup = defaultLookup } = {}) {
+export async function probeHub({ url, key, fetchImpl = globalThis.fetch, timeoutMs = TIMEOUT_MS, signal, allowPrivateHost = false, lookup = lookupGateway } = {}) {
   const parsed = parseAddress(url, { allowPrivateHost });
-  if (!parsed.ok && parsed.code === 'private-host') return { ...failure('private-host', parsed.error, 'Tick “Private host” to confirm this address is yours, then try again.'), confirmHost: parsed.hostname };
+  if (!parsed.ok && parsed.code === 'private-host') return { ...failure('private-host', parsed.error, 'Confirm that you trust this address with your credentials, then try again.'), confirmHost: parsed.hostname };
   if (!parsed.ok) return REFUSED.unreachable();
-  const host = parsed.hostname;
-  const pinned = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(':') ? host : await lookup(host).catch(() => null);
-  if (pinned && isBlockedIp(pinned) && !allowPrivateHost) return { ...failure('private-host', `“${host}” looks like a private host${pinned ? ` (${pinned})` : ''}.`, 'Tick “Private host” to confirm this address is yours, then try again.'), confirmHost: host };
+  let fetchPinned;
+  try { fetchPinned = await gatewayFetch(parsed, { allowPrivateHost, lookup, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs), fetchImpl }); }
+  catch (error) { return error.code === 'private-host' ? { ...failure('private-host', `“${parsed.hostname}” resolves to a private host.`, 'Confirm this host before sending a key.'), confirmHost: parsed.hostname } : REFUSED.unreachable(); }
   // Keyless first: a host that can't be reached never sees the management key.
   try {
-    const probe = await fetchImpl(`${parsed.url}/`, { redirect: 'manual', headers: { accept: 'application/json', 'user-agent': 't3code-docker-setup' },
+    const probe = await fetchPinned(`${parsed.url}/`, { redirect: 'manual', headers: { accept: 'application/json', 'user-agent': 't3code-docker-setup' },
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
     await discard(probe);
   } catch { return REFUSED.unreachable(); }
   let response;
   try {
-    response = await fetchImpl(`${url}/v0/management/auth-files`, { redirect: 'manual', headers: { accept: 'application/json', 'user-agent': 't3code-docker-setup', authorization: `Bearer ${key}` },
+    response = await fetchPinned(`${parsed.url}/v0/management/auth-files`, { redirect: 'manual', headers: { accept: 'application/json', 'user-agent': 't3code-docker-setup', authorization: `Bearer ${key}` },
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
   } catch { return REFUSED.unreachable(); }
   if (response.status === 401) { await discard(response); return REFUSED.rejected(); }

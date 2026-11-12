@@ -3,6 +3,8 @@
 // Codex and OpenCode want a base ending in /v1), so the stored address never
 // ends in a version or an endpoint. Pure, so the sentences here are testable.
 
+import { isIP } from 'node:net';
+
 const MAX_URL = 2048;
 const SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 // What people paste from a gateway's own docs. Removing it is always right:
@@ -14,6 +16,7 @@ const BARE_ENDPOINT = /\/(?:chat\/completions|messages|responses)$/i;
 const MANAGEMENT = /\/(?:v\d+\/management(?:\/.*)?|management\.html)$/i;
 
 const stripBrackets = host => host.replace(/^\[|\]$/g, '');
+const ipv6 = host => isIP(host) === 6 ? new URL(`http://[${host}]/`).hostname.slice(1, -1) : null;
 
 export function isLoopback(hostname) {
   const host = stripBrackets(String(hostname ?? '').toLowerCase());
@@ -24,7 +27,7 @@ export function isLoopback(hostname) {
 export function isMetadata(hostname) {
   const host = stripBrackets(String(hostname ?? '').toLowerCase());
   const m = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host);
-  return Boolean(m) && Number(m[1]) === 169 && Number(m[2]) === 254;
+  return Boolean(m) && Number(m[1]) === 169 && Number(m[2]) === 254 || ipv6(host) === 'fd00:ec2::254';
 }
 
 /** A Compose service name or LAN host: no dot, no colon, just letters, digits and dashes. */
@@ -37,13 +40,13 @@ export function isSingleLabel(hostname) {
 export function needsPrivateConfirm(hostname) {
   const host = stripBrackets(String(hostname ?? '').toLowerCase());
   if (!host) return false;
-  return isLoopback(host) || isMetadata(host) || isSingleLabel(host);
+  return isLoopback(host) || isMetadata(host) || isSingleLabel(host) || isBlockedIp(host);
 }
 
 /** A DNS answer that must never receive a key without a confirm, even for a public name. */
 export function isBlockedIp(ip) {
   const v = stripBrackets(String(ip ?? '').toLowerCase());
-  const m = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(v);
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(v);
   if (m) {
     const a = Number(m[1]), b = Number(m[2]);
     if (a === 127) return true;
@@ -51,13 +54,19 @@ export function isBlockedIp(ip) {
     if (a === 169 && b === 254) return true;
     return false;
   }
-  return v === '::1' || v === '::' || v === '::ffff:127.0.0.1' || v === '::ffff:0.0.0.0';
+  const canonical = ipv6(v);
+  const mapped = /^::ffff:([a-f0-9]+):([a-f0-9]+)$/.exec(canonical ?? '');
+  if (mapped) {
+    const high = parseInt(mapped[1], 16), low = parseInt(mapped[2], 16);
+    return isBlockedIp([high >> 8, high & 255, low >> 8, low & 255].join('.'));
+  }
+  return canonical === '::1' || canonical === '::' || /^fe[89ab][0-9a-f]:/.test(canonical ?? '') || canonical === 'fd00:ec2::254';
 }
 
 /** Addresses that stay on a machine or a private network, where plain http is ordinary. */
 export function isPrivate(hostname) {
   const host = stripBrackets(String(hostname ?? '').toLowerCase());
-  if (isLoopback(host)) return true;
+  if (isLoopback(host) || isBlockedIp(host)) return true;
   // A single label is a Compose service name or a LAN host.
   if (/^[a-z0-9-]+$/.test(host) || /\.(?:local|internal|lan|home|test|ts\.net)$/.test(host)) return true;
   const ipv4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host);
@@ -81,7 +90,7 @@ const assumedScheme = text => {
  * `{ allowPrivateHost: true }`, the tick of an explicit "Private host" confirm.
  */
 export function parseAddress(input, options = {}) {
-  const { allowPrivateHost = false } = options ?? {};
+  const allowPrivateHost = options?.allowPrivateHost === true;
   const text = String(input ?? '').trim();
   if (!text) return { ok: false, error: 'Enter your gateway’s address.' };
   if (text.length > MAX_URL || /[\s\0]/.test(text)) return { ok: false, error: 'Enter a single address, without spaces.' };
@@ -101,7 +110,7 @@ export function parseAddress(input, options = {}) {
   const hostname = stripBrackets(parsed.hostname);
   if (!allowPrivateHost && needsPrivateConfirm(hostname)) {
     return { ok: false, code: 'private-host', hostname, host: parsed.host,
-      error: `“${hostname}” looks like a private host. Tick “Private host” to confirm this address is yours.` };
+      error: `“${hostname}” looks like a private host. Confirm that you trust this address with your credentials.` };
   }
   // Codex's launch arguments are single-quoted, and URLs leave an apostrophe as it is.
   const url = parsed.origin + pathname.replaceAll("'", '%27');

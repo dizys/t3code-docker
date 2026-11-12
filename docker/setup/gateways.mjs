@@ -71,7 +71,10 @@ const cleanManagementKey = value => {
   if (!key || key.length > 4096 || /[^\x21-\x7e]/.test(key)) throw new GatewayError('A management key is one line of plain characters, without spaces.', 400, 'invalid', { field: 'managementKey' });
   return key;
 };
-const allowPrivate = input => Boolean(input?.allowPrivateHost ?? input?.gateway?.allowPrivateHost);
+const allowPrivate = input => (input?.allowPrivateHost ?? input?.gateway?.allowPrivateHost) === true;
+const requireHostConsent = result => {
+  if (result?.code === 'private-host') throw new GatewayError(result.message, 409, 'private-host', { field: 'url', confirmHost: result.confirmHost, hint: result.hint });
+};
 const cleanAddress = (value, allowPrivateHost = false) => {
   const parsed = parseAddress(value, { allowPrivateHost });
   if (!parsed.ok) throw new GatewayError(parsed.error, 400, parsed.code ?? 'invalid', { field: 'url', ...(parsed.code === 'private-host' ? { confirmHost: parsed.hostname, host: parsed.host } : {}) });
@@ -103,7 +106,7 @@ const observed = (gateway, probe) => {
   return { check: checkOf(probe), latest: ids, latestCapabilities: knows ? capabilities : appliedCapabilities };
 };
 
-export function createGatewayService({ baseDir, home, env = process.env, io, t3, vault, processes, fetchImpl = globalThis.fetch, now = Date.now, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), onEvent = () => {}, getHarness, nativeCodexModels = readCodexModels } = {}) {
+export function createGatewayService({ baseDir, home, env = process.env, io, t3, vault, processes, fetchImpl = globalThis.fetch, lookup, now = Date.now, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), onEvent = () => {}, getHarness, nativeCodexModels = readCodexModels } = {}) {
   const store = createGatewayStore({ io, baseDir }), filesDir = gatewayFilesDir(baseDir);
   const probes = new Map();       // digest of address and key -> { at, probe }, so Connect reuses the test just shown
   const settling = new Map();     // gateway id -> { started, again }, while its instances start
@@ -114,14 +117,14 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
 
   const fingerprint = (url, key, allowPrivateHost = false) => createHash('sha256').update(`${url}\0${key}\0${allowPrivateHost ? 'private' : ''}`).digest('hex');
   const remember = (url, key, probe, allowPrivateHost = false) => { probes.set(fingerprint(url, key, allowPrivateHost), { at: now(), probe }); for (const [id, entry] of probes) if (now() - entry.at > PROBE_REUSE_MS) probes.delete(id); return probe; };
-  const probe = async (url, key, allowPrivateHost = false) => remember(url, key, await probeGateway({ url, key, fetchImpl, now, allowPrivateHost }), allowPrivateHost);
+  const probe = async (url, key, allowPrivateHost = false) => remember(url, key, await probeGateway({ url, key, fetchImpl, now, allowPrivateHost, lookup }), allowPrivateHost);
   const recentProbe = (url, key, allowPrivateHost = false) => { const entry = probes.get(fingerprint(url, key, allowPrivateHost)); return entry && now() - entry.at <= PROBE_REUSE_MS && entry.probe.ok ? entry.probe : null; };
   // Only a pass is remembered, so a key shown as good isn't spent on a second request.
   const hubChecks = new Map();
   const checkHub = async (url, key, { reuse = false, allowPrivateHost = false } = {}) => {
     const id = fingerprint(`hub\0${url}`, key, allowPrivateHost), held = hubChecks.get(id);
     if (reuse && held && now() - held.at <= PROBE_REUSE_MS) return held.result;
-    const result = await probeHub({ url, key, fetchImpl, allowPrivateHost });
+    const result = await probeHub({ url, key, fetchImpl, allowPrivateHost, lookup });
     if (result.ok) hubChecks.set(id, { at: now(), result }); else hubChecks.delete(id);
     return result;
   };
@@ -337,6 +340,7 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     // Someone's own hub stays theirs. Checked first, so it doesn't cost an attempt.
     if (!gateway?.limits && hubAt(url, state.hubSources)) throw new GatewayError('T3 Code already has a hub at this address.', 409, 'limits-exists', { field: 'managementKey', hint: 'Its key is changed in T3 Code’s settings.' });
     const result = await checkHub(url, key, { reuse: true, allowPrivateHost });
+    requireHostConsent(result);
     if (!result.ok) throw new GatewayError(result.message, 409, 'limits', { field: 'managementKey', hint: result.hint, limits: result });
     return result;
   };
@@ -478,8 +482,8 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
       await store.update(undefined, rows => rows.map(entry => entry.id === gateway.id && entry.url === gateway.url && entry.credentialId === gateway.credentialId ? { ...entry, ...observed(entry, result) } : entry));
       return { ok: true, result: { ...result, offers: offersOf(result) } };
     }
-    const privateHost = allowPrivate(input);
     const gateway = typeof input.id === 'string' ? gateways.find(entry => entry.id === input.id) : undefined;
+    const privateHost = allowPrivate(input) || Boolean(gateway && input.url === gateway.url);
     let parsed;
     try { parsed = cleanAddress(input.url, privateHost); }
     catch (error) {
@@ -509,6 +513,7 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     const key = await resolveKey({ key: typed, credentialId: input.credentialId ?? undefined }), managementKey = cleanManagementKey(input.managementKey);
     if (managementKey) await verifyHub(url, managementKey, state, undefined, privateHost);
     const result = recentProbe(url, key, privateHost) ?? await probe(url, key, privateHost);
+    requireHostConsent(result);
     const taken = new Set([...gateways.map(entry => entry.id), ...RESERVED_IDS]), base = slug(name);
     let id = base;
     for (let index = 2; taken.has(id); index++) id = `${base.slice(0, 28).replace(/-+$/, '')}-${index}`;
@@ -528,19 +533,21 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
   const save = input => serial(async () => {
     if (!object(input?.gateway) || typeof input.id !== 'string') throw new GatewayError('Enter gateway details.');
     const state = await requireT3(), { gateways } = await current(input.revision), previous = find(gateways, input.id);
-    const privateHost = allowPrivate(input) || input.gateway.url === undefined;
+    const privateHost = allowPrivate(input) || input.gateway.url === undefined || input.gateway.url === previous.url;
     const { url } = cleanAddress(input.gateway.url ?? previous.url, privateHost), name = cleanName(input.gateway.name ?? previous.name), typed = cleanKey(input.key);
     const manual = input.gateway.manual === undefined ? previous.models?.manual ?? [] : cleanManual(input.gateway.manual), managementKey = cleanManagementKey(input.managementKey);
     if (managementKey) await verifyHub(url, managementKey, state, previous, privateHost || url === previous.url);
     let credentialId = input.credentialId === undefined ? previous.credentialId : input.credentialId, key;
+    if (typed) key = typed;
+    else if (credentialId !== previous.credentialId) key = await resolveKey({ credentialId: credentialId ?? null });
+    const moved = url !== previous.url || key !== undefined;
+    const known = key ?? (moved ? await keyFor({ credentialId }) : '');
+    const result = moved ? recentProbe(url, known, privateHost) ?? await probe(url, known, privateHost) : null;
+    requireHostConsent(result);
     if (typed) {
       const held = credentialId && (await vault.list()).some(entry => entry.id === credentialId);
       credentialId = (held ? await vault.replace(credentialId, typed) : await vault.create({ id: await vault.available(`${previous.id}-gateway`), name, url, key: typed })).id;
-      key = typed;
-    } else if (credentialId !== previous.credentialId) key = await resolveKey({ credentialId: credentialId ?? null });
-    const moved = url !== previous.url || key !== undefined;
-    const known = key ?? (moved ? await keyFor({ credentialId }) : '');
-    const result = moved ? recentProbe(url, known, true) ?? await probe(url, known, true) : null;
+    }
     const next = { ...previous, name, url, credentialId, preset: presetOf(input.gateway.preset)?.id ?? previous.preset, ...(result ? observed(previous, result) : {}),
       models: { ...previous.models, manual, ...(result?.ok && result.models.listed ? { ids: cleanModelIds(result.models.ids), at: now(), capabilities: cleanCapabilities(result.models.ids, result.models.capabilities) } : {}) } };
     if (result?.ok) { next.latest = null; next.latestCapabilities = null; }

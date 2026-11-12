@@ -145,7 +145,7 @@ test('a refused connection on loopback suggests the Docker host', async () => {
 
 test('each way of failing to connect has its own sentence', async () => {
   const failing = cause => async () => { throw Object.assign(new TypeError('fetch failed'), { cause }); };
-  const probe = (url, cause) => probeGateway({ allowPrivateHost: true, url, fetchImpl: failing(cause)  });
+  const probe = (url, cause) => probeGateway({ allowPrivateHost: true, url, lookup: async () => '1.1.1.1', fetchImpl: failing(cause) });
   const dockerHost = await probe('http://host.docker.internal:8317', { code: 'ENOTFOUND' });
   assert.equal(dockerHost.code, 'dns');
   assert.match(dockerHost.hint, /extra_hosts/);

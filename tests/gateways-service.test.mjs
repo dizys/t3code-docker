@@ -88,7 +88,7 @@ async function harness(t, options = {}) {
   const home = path.join(root, 'home'), t3 = fakeT3(options), vault = fakeVault();
   await fs.mkdir(path.join(home, '.claude'), { recursive: true });
   const stopped = [], processes = { stop: async (agent, instanceId) => { stopped.push(instanceId); return 1; } };
-  const service = createGatewayService({ baseDir: path.join(root, 'state'), home, env: {}, io: options.io ?? fs, t3, vault, processes, nativeCodexModels: options.nativeCodexModels ?? (async () => nativeModels), wait: options.wait ?? (() => Promise.resolve()), ...(options.now ? { now: options.now } : {}), ...(options.getHarness ? { getHarness: options.getHarness } : {}) });
+  const service = createGatewayService({ baseDir: path.join(root, 'state'), home, env: {}, io: options.io ?? fs, t3, vault, processes, lookup: options.lookup, nativeCodexModels: options.nativeCodexModels ?? (async () => nativeModels), wait: options.wait ?? (() => Promise.resolve()), ...(options.now ? { now: options.now } : {}), ...(options.getHarness ? { getHarness: options.getHarness } : {}) });
   return { service, t3, vault, home, root, stopped, processes, gateway: await gatewayServer(t, options.gatewayModels) };
 }
 const add = (h, agents = ['claude', 'codex', 'opencode'], over = {}) => h.service.create({ allowPrivateHost: true, gateway: { name: 'My Proxy', preset: 'cliproxyapi', url: h.gateway.url, agents, ...over }, key: 'sk-one' });
@@ -101,6 +101,30 @@ const settled = async h => {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 };
+
+test('a refused DNS-private create never saves credentials, starts agents or spends a management key', async t => {
+  const h = await harness(t, { lookup: async () => '127.0.0.1' });
+  const url = `http://new-gateway.invalid:${new URL(h.gateway.url).port}`;
+  for (const managementKey of [undefined, 'fixture-management']) {
+    await assert.rejects(h.service.create({ gateway: { name: 'Unconfirmed', url, agents: ['codex'] }, key: 'fixture-key', managementKey }), { code: 'private-host' });
+  }
+  assert.equal(h.vault.rows.size, 0); assert.deepEqual(h.t3.writes, []); assert.deepEqual(h.t3.hubWrites, []);
+  assert.deepEqual(h.gateway.state.keys, []);
+});
+
+test('moving to an unconfirmed DNS-private host preserves the original Vault revision and agent settings', async t => {
+  const h = await harness(t, { lookup: async () => '127.0.0.1' }), { id } = await add(h);
+  await settled(h);
+  const beforeVault = [...h.vault.rows], beforeT3 = structuredClone(h.t3.state), writes = h.t3.writes.length, attempts = h.gateway.state.keys.length;
+  const { revision } = await h.service.status(), url = `http://new-gateway.invalid:${new URL(h.gateway.url).port}`;
+  await assert.rejects(h.service.save({ id, revision, gateway: { url }, key: 'replacement-fixture-key' }), { code: 'private-host' });
+  assert.deepEqual([...h.vault.rows], beforeVault); assert.deepEqual(h.t3.state, beforeT3);
+  assert.equal(h.t3.writes.length, writes); assert.equal(h.gateway.state.keys.length, attempts);
+  const saved = (await h.service.status()).gateways.find(row => row.id === id); assert.equal(saved.url, h.gateway.url);
+  const result = await h.service.save({ id, revision, gateway: { url }, key: 'replacement-fixture-key', allowPrivateHost: true });
+  assert.equal(result.ok, true);
+  assert.ok(h.gateway.state.keys.includes('Bearer replacement-fixture-key'));
+});
 
 test('adding a gateway creates one instance per agent and leaves default instances alone', async t => {
   const h = await harness(t), before = structuredClone(h.t3.state.instances);
@@ -836,7 +860,7 @@ test('a test needs a private-host confirm before any key goes out', async t => {
   const before = h.gateway.state.keys.length;
   const denied = await h.service.test({ url: h.gateway.url, key: 'sk-try' });
   assert.equal(denied.result.code, 'private-host');
-  assert.match(denied.result.message, /Private host/);
+  assert.match(denied.result.message, /Confirm that you trust/);
   assert.equal(denied.result.confirmHost, '127.0.0.1');
   assert.equal(h.gateway.state.keys.length, before, 'Zero requests, keyed or not, without the confirm');
   const allowed = await h.service.test({ allowPrivateHost: true, url: h.gateway.url, key: 'sk-try' });

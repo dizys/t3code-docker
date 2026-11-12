@@ -8,6 +8,7 @@ import { openStore } from '../../docker/services/store.mjs';
 import { createController } from '../../docker/services/controller.mjs';
 import { createServicesAPI } from '../../docker/services/client.mjs';
 import { publicKeys } from '../../docker/services/system.mjs';
+import { TAILSCALE_COMPOSE } from '../../docker/services/tailscale-networking.mjs';
 export async function createServicesFixtures() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 't3-services-ui-'));
   const controllers = {}, stores = {}, running = new Map();
@@ -21,9 +22,14 @@ export async function createServicesFixtures() {
     };
     const catalogue = { services: Object.fromEntries(['openssh', 'tailscale', 'cloudflared'].map(id => [id, { id, name: id, version: 'fixture-version', payloads: (id === 'openssh' ? ['openssh-server', 'libwrap0', 'libwtmpdb0', 'libtalloc2'] : [id]).map(name => ({ bytes: 2048, name, sha256: 'fixture-digest', url: 'https://example.invalid/' + name })) }])) };
     controllers[domain] = createController({ store, supervisor, boot: 'fixture', reservedPorts: [3773, 3774],
+      networking: domain === 'system' ? {
+        requirements: async () => ({ ready: true, checks: ['Deployment opt-in', 'TUN device', 'NET_ADMIN capability', 'Writable deployment DNS', 'Kernel firewall'].map((label, id) => ({ id: String(id), label, ok: true })), compose: TAILSCALE_COMPOSE, message: 'This deployment supports full networking.' }),
+        validate: async () => {}, prepare: async () => {}, stopped: async () => {}, disconnected: async () => {}, orphaned: async () => {},
+        observe: async resource => resource.config.networkMode === 'kernel' ? { mode: 'kernel', state: tailnet.state === 'Running' ? 'ready' : 'needs-login', dns: tailnet.state === 'Running' ? 'ready' : 'deployment', message: tailnet.state === 'Running' ? 'All programs can reach tailnet peers. MagicDNS is verified.' : 'Sign in to connect this container to your tailnet.' } : { mode: 'userspace', state: 'userspace', dns: 'deployment', message: 'Published TCP routes only. Ordinary programs use deployment networking.' },
+      } : null,
       tools: { resolve: async config => ({ receipt: { executable: { path: config.executable, digest: 'fixture' }, installations: config.tools.map(item => ({ ...item, path: '/fixture/tools/' + item.tool })) } }) },
       artifacts: { catalogue, selection: id => ({ ...catalogue.services[id], manager: 'mise' }), install: async (id, selection) => ({ ...selection, manager: 'mise', path: '/fixture/mise/' + id, arch: 'arm64', components: selection.payloads.map(item => ({ ...item, version: 'fixture-version', manager: 'mise', path: '/fixture/mise/' + item.name })) }), remove: async () => ({ softwareRemoved: true, retainedPackages: [], settingsRetained: true, identitiesRetained: true }) },
-      system: { publicKeys, configureSystem: async () => ({ hostFingerprint: 'SHA256:fixture-public-fingerprint', keys: [] }), tailscaleStatus: async () => ({ ...tailnet }), controlTailscale: async (_resource, action) => { tailnet = { state: 'NeedsLogin', ips: [], authUrl: action === 'sign-in' ? 'https://login.tailscale.com/a/fixture-only' : null }; return { authGeneration: Date.now() }; }, paths: {} },
+      system: { publicKeys, configureSystem: async resource => resource.id === 'tailscale' ? { ...resource.details } : { hostFingerprint: 'SHA256:fixture-public-fingerprint', keys: [] }, tailscaleStatus: async () => ({ ...tailnet }), controlTailscale: async (_resource, action) => { tailnet = { state: 'NeedsLogin', ips: [], authUrl: action === 'sign-in' ? 'https://login.tailscale.com/a/fixture-only' : null }; return { authGeneration: Date.now() }; }, paths: {} },
       health: async () => ({ ok: true, at: Date.now(), message: 'Fixture endpoint answered.' }),
       systemSnapshot: domain === 'user' ? async () => controllers.system.snapshot() : undefined,
     });
@@ -35,6 +41,7 @@ export async function createServicesFixtures() {
     if (action === 'inventory') return { tools: [{ tool: 'python', version: '3.14.0', path: '/fixture/tools/python' }, { tool: 'node', version: '24.13.0', path: '/fixture/tools/node' }] };
     if (action === 'permissions') return { maintenance: false };
     if (action === 'authentication') return controller.authentication(input.id);
+    if (action === 'requirements') return controller.requirements();
     if (action === 'snapshot') return controller.snapshot();
     if (action === 'plan') return controller.plan(input);
     if (action === 'apply') return controller.apply(input);

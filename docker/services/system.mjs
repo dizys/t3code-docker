@@ -105,7 +105,7 @@ export async function systemCommand(resource, p) {
   const env = { ...systemEnv, LD_LIBRARY_PATH: locations.map(location => location + "/usr/lib/" + (process.arch === "arm64" ? "aarch64-linux-gnu" : "x86_64-linux-gnu")).join(':') };
   const instance = path.join(p.root, "instances", id);
   if (id === "openssh") return { executable: artifact.path + "/usr/sbin/sshd", argv: ["-D", "-e", "-f", instance + "/sshd_config"], env };
-  if (id === "tailscale") return { executable: artifact.path + "/tailscaled", argv: ["--tun=userspace-networking", "--state=" + instance + "/tailscaled.state", "--socket=/run/t3code-services/tailscale.sock", "--statedir=" + instance], env };
+  if (id === "tailscale") return { executable: artifact.path + "/tailscaled", argv: [config.networkMode === 'kernel' ? '--tun=tailscale0' : "--tun=userspace-networking", "--state=" + instance + "/tailscaled.state", "--socket=/run/t3code-services/tailscale.sock", "--statedir=" + instance], env: config.networkMode === 'kernel' ? { ...env, TS_DEBUG_FIREWALL_MODE: 'nftables' } : env };
   if (id === "cloudflared") {
     const token = await fs.readFile(instance + "/token", "utf8");
     return { executable: artifact.path + "/cloudflared", argv: ["tunnel", "--no-autoupdate", "run", "--token-file", instance + "/token"], env, masks: [token] };
@@ -116,7 +116,7 @@ export async function tailscaleStatus(resource) {
   try {
     const { stdout } = await command(resource.artifact.path + "/tailscale", ["--socket=/run/t3code-services/tailscale.sock", "status", "--json"]);
     const result = JSON.parse(stdout);
-    return { state: result.BackendState, ips: result.TailscaleIPs || [], dnsName: result.Self?.DNSName || null, authUrl: typeof result.AuthURL === "string" && /^https:\/\/(?:login\.tailscale\.com|controlplane\.tailscale\.com)\//.test(result.AuthURL) ? result.AuthURL : null };
+    return { state: result.BackendState, ips: result.TailscaleIPs || [], dnsName: result.Self?.DNSName || null, dnsSuffix: result.CurrentTailnet?.MagicDNSSuffix || null, magicDNSEnabled: result.CurrentTailnet?.MagicDNSEnabled === true, authUrl: typeof result.AuthURL === "string" && /^https:\/\/(?:login\.tailscale\.com|controlplane\.tailscale\.com)\//.test(result.AuthURL) ? result.AuthURL : null };
   } catch { return { state: "Unavailable", ips: [], dnsName: null, authUrl: null }; }
 }
 

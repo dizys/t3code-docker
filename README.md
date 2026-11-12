@@ -142,6 +142,8 @@ and to GHCR as `ghcr.io/dizys/t3code-docker`, each for `linux/amd64` and
 - **Optional services.** Install SSH, Tailscale or Cloudflare Tunnel, or run a
   custom command, from [Setup → Services](docs/services.md). Service packages
   are managed through Mise and visible in Toolchains.
+  Tailscale can optionally provide [full container networking](docs/services.md#full-container-networking-with-tailscale)
+  for SSH, HTTP and other TCP/UDP clients, with MagicDNS and a separate deployment override.
 - **A browser for the agents.** Headless Chromium with Playwright and Chrome
   DevTools MCP servers.
 - **Publish a dev server.** Any port gets a public `https://` URL and a QR

@@ -5,8 +5,24 @@ const T3ServiceModel = (() => {
     unhealthy: ['Unhealthy', 'warn'], failed: ['Failed', 'danger'], exited: ['Exited', 'muted'], stopped: ['Stopped for now', 'muted'], disabled: ['Disabled', 'muted'],
     'tool-unavailable': ['Tool unavailable', 'warn'], unavailable: ['Status unavailable', 'warn'], unknown: ['Not checked', 'muted'],
   };
-  const state = row => { const value = row?.observation?.state || 'unknown', pair = value === 'uninstalled' && !row.removal?.softwareRemoved ? ['Software cached', 'muted'] : STATES[value] || STATES.unknown; return { value, label: pair[0], tone: pair[1], busy: ['starting', 'restarting'].includes(value) }; };
-  const attention = row => ['unhealthy', 'failed', 'tool-unavailable', 'unavailable'].includes(state(row).value);
+  const state = row => {
+    const value = row?.observation?.state || 'unknown', network = row?.observation?.networking;
+    let pair = value === 'uninstalled' && !row.removal?.softwareRemoved ? ['Software cached', 'muted'] : STATES[value] || STATES.unknown;
+    if (!row?.observation?.lastKnown) {
+      if (['error', 'blocked'].includes(network?.state)) pair = ['Networking needs attention', 'warn'];
+      else if (row?.config?.networkMode === 'kernel' && ['running', 'ready'].includes(value)) pair = ({ ready: network?.dns === 'ready' ? ['Network ready', 'ok'] : ['Connected · IP access', 'info'], 'needs-login': ['Sign-in needed', 'warn'], 'needs-approval': ['Approval needed', 'warn'], connecting: ['Connecting', 'info'] })[network?.state] || ['Networking not checked', 'muted'];
+    }
+    return { value, label: pair[0], tone: pair[1], busy: ['starting', 'restarting'].includes(value) || network?.state === 'connecting' };
+  };
+  const attention = row => ['unhealthy', 'failed', 'tool-unavailable', 'unavailable'].includes(state(row).value) || ['error', 'blocked', 'needs-login', 'needs-approval'].includes(row?.observation?.networking?.state);
+  const networking = row => {
+    const observed = row.observation?.networking;
+    if (row.id !== 'tailscale' || row.domain !== 'system') return null;
+    if (row.observation?.lastKnown) return { label: 'Networking status unavailable', message: 'Refresh Services before relying on last-known networking state.' };
+    if ((row.config.networkMode || 'userspace') === 'userspace' && observed?.state !== 'error') return { label: 'Published routes only', message: observed?.message || 'Ordinary programs use deployment networking.' };
+    const labels = { ready: observed?.dns === 'ready' ? 'Full networking · MagicDNS verified' : 'Full networking · MagicDNS off', 'needs-login': 'Full networking · Sign-in needed', 'needs-approval': 'Full networking · Approval needed', connecting: 'Full networking · Connecting', inactive: 'Full networking · Stopped', blocked: 'Full networking · Deployment change needed', error: 'Networking needs attention' };
+    return { label: labels[observed?.state] || 'Full networking · Not checked', message: observed?.message || 'Networking readiness has not been checked yet.' };
+  };
   const command = row => !row.config.mode ? row.config.name || row.id : row.config.mode === 'script' ? row.config.shell + ' · shell script' : [row.config.executable, ...(row.config.argv || [])].map(value => /^[\w./:@+-]+$/.test(value) ? value : JSON.stringify(value)).join(' ');
   const matches = (row, query) => [row.config.name, row.id, command(row), ...(row.config.tools || []).map(item => item.tool + '@' + item.version)].join(' ').toLowerCase().includes(query.toLowerCase());
   const terminal = operation => ['succeeded', 'failed', 'rolled-back', 'cancelled'].includes(operation?.state);
@@ -35,5 +51,5 @@ const T3ServiceModel = (() => {
     if (connection?.state === 'NeedsMachineAuth') return ['check-approval', 'sign-out'];
     return ['Running', 'Stopped'].includes(connection?.state) ? ['sign-out'] : [];
   };
-  return { STATES, state, attention, matches, command, terminal, operationLabel, key, authenticationActions, lifecycleActions };
+  return { STATES, state, attention, networking, matches, command, terminal, operationLabel, key, authenticationActions, lifecycleActions };
 })();

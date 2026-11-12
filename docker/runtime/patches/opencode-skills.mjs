@@ -41,6 +41,37 @@ const shapes = [
                   Effect.orElseSucceed(() => true),
                 ),`,
   },
+  // Reviewed against v0.1.10-nightly.20261112.4606 (d8f3feff0c1749ca020941427b153005755baca6).
+  // Upstream adds a provider-catalog barrier for an already loading location.
+  // Native plugin readiness replaces that heuristic alongside the event wait.
+  {
+    directory: "directory",
+    comment: "/**\n * Reading a location the server has not loaded boots its scan, and only reads after the scan's\n * `command.updated` plus `skill.updated` are complete; `scanned` must listen before `read`. A\n * loaded location listing no commands is still scanning. A location another caller booted\n * moments earlier lists as loaded with only built-ins, so `settled` waits out its scan first.\n */\n",
+    loader: `  function* <E>(
+    read: Effect.Effect<OpenCode2Workspace, E>,
+    scanned: Effect.Effect<void>,
+    loaded: Effect.Effect<boolean>,
+    settled: Effect.Effect<void> = Effect.void,
+  ) {
+    const wasLoaded = yield* loaded;
+    yield* settled;
+    const first = yield* read;
+    if (wasLoaded && first.commands.length > 0) return first;
+    yield* scanned.pipe(Effect.timeoutOption("10 seconds"));
+    return yield* read;
+  },`,
+    argument: `            Deferred.await(scanned),
+            // Without events no scan can be awaited, so trust the first read as before.
+            stream._tag === "None"
+              ? Effect.succeed(true)
+              : client.debug.location.list().pipe(
+                  Effect.map((loaded) => loaded.some((entry) => entry.directory === directory)),
+                  Effect.timeout("2 seconds"),
+                  Effect.orElseSucceed(() => true),
+                ),
+            // OpenCode answers provider.list for a location only once its skill scan has ended.
+            client.provider.list({ location }).pipe(Effect.timeout("10 seconds"), Effect.ignore),`,
+  },
 ];
 
 function mismatch(file) {

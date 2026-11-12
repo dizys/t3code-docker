@@ -208,3 +208,130 @@ test('logs redact multiline and long-line boundaries and cursors retain equal-ti
     assert.equal(readLogs(root, 'preview', next.cursor).entries.length, 0);
   } finally { Date.now = originalNow; }
 });
+test('concurrent system installs serialize on one installer mutex', async t => {
+  const { store } = await fixture(t, { domain: 'system' });
+  const seed = id => store.put({ id, kind: 'service', revision: 1, enabled: true, stoppedBoot: 'fixture',
+    config: { name: id, enabled: true, shutdownMs: 100, endpoints: [] }, artifact: { path: '/fixture/old', version: '1.0.0' } });
+  seed('openssh'); seed('tailscale');
+  let active = 0, maxActive = 0, installs = 0;
+  const selection = id => ({ manager: 'mise', version: '2.0.0', digest: 'digest-' + id, payloads: [] });
+  const controller = createController({ store, boot: 'fixture',
+    supervisor: { stop: async () => {}, start: async () => {}, observe: async () => ({ up: false }) },
+    artifacts: { selection, install: async id => {
+      installs++; active++; maxActive = Math.max(maxActive, active);
+      await new Promise(resolve => setTimeout(resolve, 30));
+      active--;
+      return { ...selection(id), path: '/fixture/mise-' + id, components: [], recordPath: '/fixture/' + id, complete: true };
+    } },
+    system: { configureSystem: async () => ({}), paths: {} } });
+  t.after(() => controller.close());
+  const ops = [];
+  for (const id of ['openssh', 'tailscale']) {
+    const plan = await controller.plan({ action: 'update', id, expectedRevision: 1 });
+    ops.push(controller.apply({ planId: plan.id, expectedRevision: 1, idempotencyKey: randomUUID(), acknowledgeAccessImpact: true }));
+  }
+  await controller.reconcile();
+  for (let i = 0; i < 10 && store.pending().length; i++) {
+    await controller.reconcile();
+    while (!controller.idle()) await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal(store.pending().length, 0);
+  for (const op of ops) assert.equal(controller.operation(op.id).state, 'succeeded');
+  assert.equal(installs, 2);
+  assert.equal(maxActive, 1, 'prepare->mise->receipt never interleaves on the shared tree');
+  assert.equal(store.get('openssh').stoppedBoot, 'fixture');
+  assert.equal(store.get('tailscale').stoppedBoot, 'fixture');
+});
+test('a failed uninstall stays retryable and never exhausts', async t => {
+  const { store } = await fixture(t, { domain: 'system' });
+  const artifact = { path: '/fixture/installed', manager: 'mise', components: [] };
+  store.put({ ...service, id: 'openssh', artifact, config: { ...service.config, shutdownMs: 100, enabled: true } });
+  // Simulate a crash between the intent commit and the removal: the retry
+  // must not mark the stop path exhausted.
+  const controller = createController({ store, boot: 'fixture',
+    supervisor: { stop: async () => { throw new Error('s6 busy'); }, observe: async () => ({ up: true }) },
+    artifacts: { remove: async () => { throw new Error('unreachable'); } } });
+  t.after(() => controller.close());
+  const plan = await controller.plan({ action: 'uninstall', id: 'openssh', expectedRevision: 1 });
+  const committed = controller.apply({ planId: plan.id, expectedRevision: 1, idempotencyKey: randomUUID(), acknowledgeAccessImpact: true });
+  // Simulate a crash between the intent commit and the removal: the retry
+  // must not mark the stop path exhausted.
+  const saved = store.operation(committed.id), current = store.get('openssh');
+  store.transaction(() => {
+    store.put({ ...current, revision: current.revision + 1, enabled: false, restart: {}, config: { ...current.config, enabled: false }, lastOperationId: committed.id });
+    store.saveOperation({ ...saved, activated: true });
+  });
+  await controller.reconcile(); while (!controller.idle()) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(controller.operation(committed.id).state, 'failed');
+  assert.equal(store.get('openssh').restart?.exhausted, undefined);
+  assert.equal(store.get('openssh').enabled, false);
+});
+test('unavailable observations back off instead of hammering the supervisor', async t => {
+  const { store } = await fixture(t);
+  const config = customDefinition({ name: 'Flaky', mode: 'executable', executable: '/bin/true', cwd: '/tmp', enabled: true });
+  store.put({ id: 'flaky', kind: 'service', revision: 1, enabled: true, config, receipt: {} });
+  let mode = 'unavailable', starts = 0, observations = 0;
+  const supervisor = {
+    observe: async () => { observations++; return mode === 'unavailable' ? { up: false, unavailable: true } : { up: false }; },
+    start: async () => { starts++; },
+    stop: async () => {},
+  };
+  const controller = createController({ store, supervisor, tools: { resolve: async () => ({ receipt: {} }) } });
+  t.after(() => controller.close());
+  await controller.reconcile();
+  assert.equal(starts, 0);
+  assert.equal(store.get('flaky').restart.unavailable, 1);
+  const firstBackoff = store.get('flaky').restart.nextAt;
+  assert.ok(firstBackoff > Date.now());
+  assert.equal(store.meta('observation:flaky').state, 'unavailable');
+  await controller.reconcile(); await controller.reconcile();
+  assert.equal(starts, 0, 'consecutive unavailable observations back off');
+  assert.equal(observations, 1, 'backoff skips the actual supervisor query');
+  assert.equal(store.get('flaky').restart.unavailable, 1, 'backoff does not escalate while waiting');
+  store.put({ ...store.get('flaky'), restart: { ...store.get('flaky').restart, nextAt: 0 } });
+  await controller.reconcile();
+  assert.equal(store.get('flaky').restart.unavailable, 2);
+  assert.ok(store.get('flaky').restart.nextAt > firstBackoff, 'backoff escalates while the scan stays silent');
+  mode = 'down';
+  store.put({ ...store.get('flaky'), restart: { ...store.get('flaky').restart, nextAt: 0 } });
+  await controller.reconcile();
+  assert.equal(store.get('flaky').restart.unavailable, 0, 'the count resets once the scan reports again');
+});
+test('a missing scan directory reads as down, not unavailable', async t => {
+  const { createSupervision } = await import('../docker/services/supervision.mjs');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 't3-supervision-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const supervision = createSupervision({ scan: root, domain: 'user' });
+  const missing = await supervision.observe('ghost');
+  assert.equal(missing.up, false);
+  assert.equal(missing.unavailable, undefined);
+  await fs.mkdir(path.join(root, 'ghost'), { recursive: true });
+  await fs.writeFile(path.join(root, 'ghost', 'run'), '#!/bin/sh\nexec true\n');
+  const prepared = await supervision.observe('ghost');
+  assert.equal(prepared.up, false);
+  assert.equal(prepared.unavailable, true);
+});
+
+test('supervisor permission errors remain unavailable and cannot acknowledge a stop', async () => {
+  const { createSupervision } = await import('../docker/services/supervision.mjs');
+  for (const code of ['EACCES', 'EIO', 'ENOTDIR']) {
+    const supervision = createSupervision({ scan: '/fixture', domain: 'user', run: async () => { throw new Error('s6 not available'); }, io: { access: async () => { throw Object.assign(new Error(code), { code }); } } });
+    assert.equal((await supervision.observe('preview')).unavailable, true, code);
+    await assert.rejects(supervision.stop('preview'), { code: 'controller-unavailable' });
+  }
+});
+
+test('stopped Tailscale intent retries cleanup after a failed stop acknowledgement', async t => {
+  const { store } = await fixture(t, { domain: 'system' });
+  store.put({ id: 'tailscale', kind: 'service', revision: 1, enabled: false, config: { enabled: false, shutdownMs: 100, endpoints: [] }, restart: { stopPending: true } });
+  let cleanups = 0, fail = true;
+  const controller = createController({ store, supervisor: { observe: async () => ({ up: false }), stop: async () => {} }, networking: {
+    orphaned: async () => {}, stopped: async () => { cleanups++; if (fail) throw new Error('cleanup busy'); },
+    observe: async () => ({ mode: 'kernel', state: 'inactive' }),
+  } });
+  t.after(() => controller.close());
+  await controller.reconcile(); assert.equal(cleanups, 1); assert.equal(store.get('tailscale').restart.stopPending, true);
+  await controller.reconcile(); assert.equal(cleanups, 1, 'cleanup attempts back off');
+  fail = false; store.put({ ...store.get('tailscale'), restart: { ...store.get('tailscale').restart, nextAt: 0 } });
+  await controller.reconcile(); assert.equal(cleanups, 2); assert.deepEqual(store.get('tailscale').restart, {});
+});

@@ -28,7 +28,7 @@ function providerPaths(value, result = []) {
 
 /** Processes and provider selections change under cleanup (a tool starts, a
  * setup choice lands), so these are re-read before every deletion. */
-async function liveReferences(ctx) {
+export async function liveReferences(ctx) {
   const processes = await (ctx.retentionProcesses || processSnapshot)();
   if (!processes.complete) throw new Error("Running tools could not be checked. Older versions were kept.");
   const settings = path.join(ctx.env.T3CODE_HOME || path.join(ctx.home, ".t3"), "userdata/settings.json");

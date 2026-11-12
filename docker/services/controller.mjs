@@ -24,6 +24,12 @@ const publicOperation = value => {
 };
 export function createController({ store, supervisor, tools, secrets = async () => ({ receipts: [] }), artifacts, system = null, networking = null, systemSnapshot, systemRequest, networkReferences, peerPorts = async () => [], toolLock = async fn => fn(), boot = containerBoot(), health = checkHealth, now = Date.now, reservedPorts = [] }) {
   let working = false, closed = false, timer = null;
+  // One installer mutex covering prepare->mise->receipt: two system
+  // services must never interleave mise on their shared tree, and an
+  // install must never interleave a removal. Reconcile runs operations
+  // serially today; the mutex holds the invariant if that ever changes.
+  let installer = Promise.resolve();
+  const withInstaller = fn => { const next = installer.then(fn, fn); installer = next.catch(() => {}); return next; };
   const services = () => store.list().filter(item => item.kind === "service");
   const packageReferences = (id, operationId) => [...services().filter(item => item.id !== id).map(item => item.artifact), ...store.pending().filter(op => op.id !== operationId).flatMap(op => [op.plan.previous?.artifact, op.plan.candidate?.artifact])].filter(Boolean);
   const network = createNetwork({ store, systemSnapshot, systemRequest });
@@ -179,7 +185,9 @@ export function createController({ store, supervisor, tools, secrets = async () 
     store.setMeta("observation:" + resource.id, result);
     return result;
   };
+  const portConflict = () => new ServiceError("port-conflict", "Another process is already using this service's port. Choose another port or stop the process using it.", "port");
   const startAndCheck = async resource => {
+    try {
     const old = await supervisor.observe(resource.id);
     if (!old.up) { await prepareNetworking(resource); await supervisor.start(resource.id, resource.config.shutdownMs); }
     const deadline = now() + Math.max(4000, resource.config.health.graceMs + 2000);
@@ -194,7 +202,22 @@ export function createController({ store, supervisor, tools, secrets = async () 
       }
       await new Promise(resolve => setTimeout(resolve, 100));
     } while (now() < deadline);
+    // A payload that dies on bind fails the startup check without the errno;
+    // its logs still name the conflict.
+    let bound = false;
+    try {
+      const exit = store.meta('exit:' + resource.id), run = store.meta('run:' + resource.id);
+      const current = value => value?.revision === resource.revision && value?.boot === boot && (value.endedAt ?? value.startedAt) >= (resource.activatedAt || 0);
+      const runId = current(exit) ? exit.runId : current(run) ? run.runId : null;
+      bound = Boolean(runId && readLogs(store.root, resource.id).entries.some(entry => entry.runId === runId && /\bEADDRINUSE\b/.test(entry.text)));
+    } catch {}
+    if (bound) throw portConflict();
     throw new ServiceError("startup", "The service did not pass its startup check. Review its logs and configuration.");
+    } catch (error) {
+      if (closed || error?.code === "interrupted" || error?.code === "port-conflict") throw error;
+      if (error?.code === "EADDRINUSE" || /EADDRINUSE/.test(String(error?.message ?? ""))) throw portConflict();
+      throw error;
+    }
   };
   const restorePrevious = async op => {
     const original = op.plan.previous;
@@ -234,7 +257,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
           if (action === "remove") { store.remove(id); await fs.rm(path.join(store.root, "logs", id), { recursive: true, force: true }); }
           if (action === "uninstall") {
             phase(op, 'removing-software');
-            const removal = await artifacts.remove(id, { references: () => packageReferences(id, op.id) });
+            const removal = await withInstaller(() => artifacts.remove(id, { references: () => packageReferences(id, op.id) }));
             store.transaction(() => { store.put({ ...current, artifact: null, uninstalled: true, removal }); op.removal = removal; store.saveOperation(op); });
           }
           if (action !== "remove") await observe(store.get(id));
@@ -263,8 +286,12 @@ export function createController({ store, supervisor, tools, secrets = async () 
         } else {
           await checkBindings(id, candidate.config || original.config);
           if (id === 'tailscale') await networking?.validate(candidate.config || original.config);
-          if (candidate.artifact) { phase(op, "stage"); candidate = { ...candidate, artifact: await artifacts.install(id, candidate.artifact) }; }
+          if (candidate.artifact) { phase(op, "stage"); candidate = { ...candidate, artifact: await withInstaller(() => artifacts.install(id, candidate.artifact)) }; }
           await checkStart();
+          // Payloads stage slowly: recheck inside the activating commit so a
+          // port claimed meanwhile fails here as port-conflict, not as a
+          // late startup-check failure.
+          await checkBindings(id, candidate.config || original.config);
           resource = { ...original, ...candidate, id, kind: "service", uninstalled: false, removal: null, revision: (original?.revision ?? 0) + 1, enabled: ["enable", "restart"].includes(action) ? true : ['update', 'migrate', 'start'].includes(action) ? original?.enabled : candidate.config?.enabled ?? original?.enabled, stoppedBoot: ['update', 'migrate'].includes(action) ? original?.stoppedBoot : null, restart: {}, activatedAt: now(), lastOperationId: op.id };
           store.transaction(() => { store.put(resource); op.activated = true; store.saveOperation(op); });
         }
@@ -285,7 +312,12 @@ export function createController({ store, supervisor, tools, secrets = async () 
         const details = await system.configureSystem(resource, system.paths);
         resource = { ...resource, details }; store.put(resource);
       }
-      if (resource.enabled && resource.stoppedBoot !== boot) { phase(op, "activate"); await startAndCheck(resource); }
+      if (resource.enabled && resource.stoppedBoot !== boot) {
+        phase(op, "activate");
+        // A peer domain may have claimed a port after the commit above.
+        await checkBindings(resource.id, resource.config);
+        await startAndCheck(resource);
+      }
       else await observe(resource);
       finish(op, "succeeded");
     } catch (error) {
@@ -297,7 +329,13 @@ export function createController({ store, supervisor, tools, secrets = async () 
         try { await restorePrevious(op); }
         catch { if (!closed) finish(op, "failed", { error: message, recovery: "The previous configuration is retained, but recovery did not pass. Review logs before retrying." }); }
       } else {
-        if (changed) { const current = store.get(id); if (current) store.put({ ...current, restart: { exhausted: true, reason: message } }); await stopService(id).catch(() => {}); }
+        // Stop-path failures never mark a service exhausted: desired intent
+        // is stopped, and reconcile retries the stop with backoff.
+        if (changed) {
+          const current = store.get(id);
+          if (current) store.put({ ...current, restart: ["disable", "stop", "remove", "uninstall"].includes(action) ? { stopPending: true } : { exhausted: true, reason: message } });
+          if (!["disable", "stop", "remove", "uninstall"].includes(action)) await stopService(id).catch(() => {});
+        }
         finish(op, "failed", { error: message, code: error.code || "operation" });
       }
     }
@@ -310,8 +348,34 @@ export function createController({ store, supervisor, tools, secrets = async () 
       for (const operation of store.pending()) { if (closed) break; await execute(operation); }
       for (let resource of services()) {
         if (closed) break;
+        // An unavailable scan is unknown, so retry the observation only when
+        // its backoff expires. This includes stopped intent and avoids s6 work.
+        if (resource.restart?.unavailable && resource.restart.nextAt > now()) continue;
         const status = await observe(resource);
-        if (!resource.enabled || resource.uninstalled || resource.stoppedBoot === boot || status.process.up || resource.restart?.exhausted || status.networking?.fatal) continue;
+        if (!status.process.unavailable && resource.restart?.unavailable) {
+          resource = { ...resource, restart: { ...resource.restart, unavailable: 0 } };
+          store.put(resource);
+        }
+        if (status.process.unavailable) {
+          const seen = resource.restart || {};
+          const consecutive = Math.min((seen.unavailable || 0) + 1, 6);
+          store.put({ ...resource, restart: { ...seen, unavailable: consecutive, nextAt: now() + Math.min(60000, 1000 * 2 ** consecutive) + Math.floor(Math.random() * 500) } });
+          continue;
+        }
+        const stopIntent = !resource.enabled || resource.uninstalled || resource.stoppedBoot === boot;
+        if (stopIntent && (status.process.up || resource.restart?.stopPending)) {
+          const retry = resource.restart || {};
+          if (retry.nextAt && retry.nextAt > now()) continue;
+          try {
+            await stopService(resource.id, resource.config.shutdownMs);
+            store.put({ ...resource, restart: {} });
+          } catch {
+            const attempts = Math.min((retry.stopAttempts || 0) + 1, 6);
+            store.put({ ...resource, restart: { ...retry, stopPending: true, stopAttempts: attempts, nextAt: now() + Math.min(60000, 1000 * 2 ** attempts) + Math.floor(Math.random() * 500) } });
+          }
+          continue;
+        }
+        if (stopIntent || status.process.up || resource.restart?.exhausted || status.networking?.fatal) continue;
         const exit = status.exit, restart = resource.restart || {};
         if (exit?.boot === boot && exit.runId !== restart.exitRun) {
           if (resource.config.restart === "never" || resource.config.restart === "on-failure" && exit.exitCode === 0) continue;

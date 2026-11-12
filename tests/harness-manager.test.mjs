@@ -103,6 +103,10 @@ class MemoryFs {
     return this.links.get(linkPath);
   }
 
+  async realpath(target) {
+    return target;
+  }
+
   async link(from, to) {
     const entry = this.files.get(from);
     if (!entry) throw Object.assign(new Error(`ENOENT: ${from}`), { code: "ENOENT" });
@@ -385,6 +389,7 @@ function managerFor(world, overrides = {}) {
     startTimeOf: overrides.startTimeOf ?? ((pid) => (pid === (overrides.pid ?? 4242) ? "100" : null)),
     lockStaleMs: overrides.lockStaleMs ?? 60_000,
     authCacheTtlMs: 1_000,
+    retentionProcesses: overrides.retentionProcesses ?? (async () => ({ complete: true, processes: [] })),
   });
 }
 
@@ -2492,4 +2497,106 @@ test("source control provider lookup scans tools once per snapshot, not once per
   fs.seedFile(path.join(install, "bin", "glab"), "", 0o755);
   const glab = await manager.sourceControl.resolve("glab");
   assert.deepEqual(glab.providedBy, { tool: "ripgrep", version: "1.0.0" });
+});
+
+for (const probeFails of [false, true]) test(`uninstall drains its own auth probes and pauses new ones (${probeFails ? "rejected" : "successful"} probe)`, { timeout: 5000 }, async (t) => {
+  const world = createWorld(new MemoryFs());
+  await managerFor(world).install("grok");
+  world.calls.length = 0;
+  const executable = world.execPath("grok", "1.0.34");
+  const releases = [], run = world.run;
+  let probes = 0, active = 0, bothStarted, locked;
+  const started = new Promise(resolve => { bothStarted = resolve; });
+  const holding = new Promise(resolve => { locked = resolve; });
+  t.after(() => { for (const release of releases) release(); });
+  world.run = async (argv, options) => {
+    if (argv[0] === executable && argv[1] === "models") {
+      const count = ++probes;
+      if (count <= 2) {
+        active++;
+        try {
+          await new Promise(resolve => { releases.push(resolve); if (releases.length === 2) bothStarted(); });
+          if (probeFails && count === 1) throw new Error("Auth fixture failed");
+        } finally { active--; }
+      }
+    }
+    return run(argv, options);
+  };
+  const manager = managerFor(world, { retentionProcesses: async () => ({
+    complete: true, processes: active ? [{ args: [executable, "models"] }] : [],
+  }) });
+  const reads = Promise.allSettled([manager.resolve("grok"), manager.resolve("grok")]);
+  await started;
+  const removing = manager.uninstall("grok", { onStarted: () => locked() });
+  await holding;
+  assert.equal((await manager.resolve("grok")).inProgress, true);
+  assert.equal(probes, 2, "status cannot start another probe while the lock is held");
+  assert.equal(world.calls.some(call => call.includes(" unuse ")), false);
+  releases[0]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(world.calls.some(call => call.includes(" unuse ")), false, "every existing probe must finish");
+  releases[1]();
+  const outcomes = await reads;
+  assert.equal(outcomes.filter(outcome => outcome.status === "rejected").length, probeFails ? 1 : 0);
+  const result = await removing;
+  assert.equal(result.ok, true, result.error);
+  const installed = await manager.install("grok");
+  assert.equal(installed.ok, true, installed.error);
+  assert.equal(installed.harness.authenticated, true, "probes resume after the mutation releases its lock");
+  assert.equal(probes, 3);
+});
+
+test("uninstall refuses a version a running process still uses", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const target = path.join(DATA_DIR, "installs/go/1.27.1/bin/go");
+  const manager = managerFor(world, {
+    retentionProcesses: async () => ({
+      complete: true,
+      processes: [{ pid: 9999, args: [target], executable: target, cwd: "/tmp" }],
+    }),
+  });
+  assert.equal((await manager.toolchains.install("go")).ok, true);
+  const removed = await manager.toolchains.uninstall("go");
+  assert.equal(removed.ok, false);
+  assert.equal(removed.code, "in-use");
+  assert.match(removed.error, /running process/);
+  assert.equal((await manager.toolchains.resolve("go")).installed, true, "the install is kept");
+  assert.ok(!world.calls.some((call) => call.includes("uninstall go@")), "mise never uninstalled it");
+});
+
+test("uninstall refuses a version a provider still selects", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const target = path.join(DATA_DIR, "installs/go/1.27.1/bin/go");
+  fs.seedFile(path.join(HOME, ".t3/userdata/settings.json"), JSON.stringify({ agents: { codex: { binaryPath: target } } }));
+  const manager = managerFor(world, {
+    retentionProcesses: async () => ({ complete: true, processes: [] }),
+  });
+  assert.equal((await manager.toolchains.install("go")).ok, true);
+  const removed = await manager.toolchains.uninstall("go");
+  assert.equal(removed.ok, false);
+  assert.equal(removed.code, "in-use");
+  assert.match(removed.error, /provider/);
+  assert.equal((await manager.toolchains.resolve("go")).installed, true, "the install is kept");
+  fs.seedFile(path.join(HOME, ".t3/userdata/settings.json"), JSON.stringify({}));
+  assert.equal((await manager.toolchains.uninstall("go")).ok, true, "uninstall proceeds once the provider points elsewhere");
+});
+
+for (const phase of ['unuse', 'first-removal']) test(`explicit uninstall rechecks live use after ${phase}`, async () => {
+  const world = createWorld(new MemoryFs()); let inUse = false;
+  const originalRun = world.run;
+  world.run = async (argv, options) => {
+    const result = await originalRun(argv, options);
+    if (phase === 'unuse' && argv[3] === 'unuse' || phase === 'first-removal' && argv[3] === 'uninstall') inUse = true;
+    return result;
+  };
+  const target = path.join(DATA_DIR, 'installs/claude/2.1.273/bin/claude');
+  const manager = managerFor(world, { retentionProcesses: async () => ({ complete: true, processes: inUse ? [{ pid: 9999, executable: target, cwd: '/tmp', args: [target] }] : [] }) });
+  assert.equal((await manager.install('claude', { version: '2.1.270' })).ok, true);
+  assert.equal((await manager.update('claude', { version: '2.1.273' })).ok, true);
+  world.calls.length = 0;
+  const result = await manager.uninstall('claude');
+  assert.equal(result.ok, false); assert.equal(result.code, 'in-use');
+  assert.equal(world.calls.some(call => call.includes('uninstall claude@2.1.273')), false, 'the newly used version survives');
 });

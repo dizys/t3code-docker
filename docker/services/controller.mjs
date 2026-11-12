@@ -22,7 +22,7 @@ const publicOperation = value => {
   const { plan, ...result } = value;
   return { ...result, planId: plan.id, review: plan.review };
 };
-export function createController({ store, supervisor, tools, secrets = async () => ({ receipts: [] }), artifacts, system = null, systemSnapshot, systemRequest, networkReferences, peerPorts = async () => [], toolLock = async fn => fn(), boot = containerBoot(), health = checkHealth, now = Date.now, reservedPorts = [] }) {
+export function createController({ store, supervisor, tools, secrets = async () => ({ receipts: [] }), artifacts, system = null, networking = null, systemSnapshot, systemRequest, networkReferences, peerPorts = async () => [], toolLock = async fn => fn(), boot = containerBoot(), health = checkHealth, now = Date.now, reservedPorts = [] }) {
   let working = false, closed = false, timer = null;
   // One installer mutex covering prepare->mise->receipt: two system
   // services must never interleave mise on their shared tree, and an
@@ -34,6 +34,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
   const packageReferences = (id, operationId) => [...services().filter(item => item.id !== id).map(item => item.artifact), ...store.pending().filter(op => op.id !== operationId).flatMap(op => [op.plan.previous?.artifact, op.plan.candidate?.artifact])].filter(Boolean);
   const network = createNetwork({ store, systemSnapshot, systemRequest });
   const snapshot = async () => ({ schema: 1, domain: store.domain, observedAt: now(), services: services().map(resource => publicResource({ ...resource, observation: store.meta("observation:" + resource.id) || { state: "unknown", at: null } })),
+    ...(networking ? { requirements: { tailscale: await networking.requirements() } } : {}),
     ...await network.snapshot(),
     operations: store.operations().map(publicOperation), catalogue: store.domain === "system" ? Object.values(artifacts?.catalogue?.services || {}).map(({ id, name, version, payloads }) => ({ id, name, version, digest: artifacts.selection(id).digest, bytes: payloads.reduce((n, item) => n + item.bytes, 0) })) : [{ id: "http-preview", name: "Python preview", description: "Serve a selected folder using an installed Python version. Runs as your user; no automatic port publishing." }] });
   const localReferences = () => [...store.list().filter(item => item.kind === 'route'), ...store.pending().filter(op => op.plan.network && op.plan.candidate?.kind === 'route').map(op => ({ ...op.plan.candidate, pendingOperation: op.id }))].map(item => ({ id: item.id, name: item.name, service: item.service, serviceDomain: item.serviceDomain, endpoint: item.endpoint, connectionProvider: store.get(item.connection)?.provider, pendingOperation: item.pendingOperation }));
@@ -49,6 +50,10 @@ export function createController({ store, supervisor, tools, secrets = async () 
   };
   const validate = async (id, input) => {
     const config = store.domain === "user" ? customDefinition(input) : systemDefinition(id, input);
+    if (store.domain === 'system' && id === 'tailscale' && config.networkMode === 'kernel') {
+      if (!networking) throw new ServiceError('deployment-required', 'This controller does not support full networking. Update the container image first.', 'networkMode');
+      await networking.validate(config);
+    }
     await checkBindings(id, config);
     if (store.domain === "user") {
       const resolved = await tools.resolve(config), selectedSecrets = await secrets(config);
@@ -110,6 +115,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
       if (store.domain === "user" && action !== "update" && hash(candidate.receipt) !== hash(previous.receipt)) throw new ServiceError("tool-changed", "The selected tool or executable changed. Review its configuration before enabling it.", "executable");
     }
     const selected = candidate.config || previous?.config;
+    if (id === 'tailscale' && store.domain === 'system' && ['enable', 'start', 'restart', 'update', 'migrate'].includes(action)) await networking?.validate(selected);
     const effect = action === 'uninstall' ? 'Stops this service and removes its installed software, old cached versions and dependencies that no other service or pending operation needs. Existing connections may end.' : action === 'migrate' ? 'Installs the image-approved packages through Mise and switches this service to them. A running service restarts; a stopped or disabled service stays stopped. The previous installation is retained for recovery until uninstall.' : ["disable", "remove"].includes(action) ? "Stops this service. Existing connections may end." : action === "start" ? "Starts the stopped service with its pinned configuration. Startup remains enabled." : action === "stop" ? "Stops until the next container start. Startup remains enabled." : action === "edit" && hash(candidate.config) === hash(previous?.config) ? "No configuration change." : "May restart this service. Other services and T3 keep running.";
     return store.plan({ target: id, action, expectedRevision, previous, candidate, control, review: {
       name: selected?.name || id, action, domain: store.domain, effect: control ? action === 'sign-in' ? 'Starts or resumes tailnet sign-in. Device identity and provider policy stay with Tailscale.' : action === 'sign-out' ? 'Signs this connector out. Every route using it will lose access until sign-in is completed again.' : action === 'serve' ? `Forwards tailnet TCP port ${control.listenPort} to container loopback port ${control.targetPort}. Tailnet policy still applies.` : `Removes tailnet TCP forwarding on port ${control.listenPort}.` : effect,
@@ -121,7 +127,23 @@ export function createController({ store, supervisor, tools, secrets = async () 
       retains: store.domain === "user" ? "Installed tools, application data and Vault entries are retained. Configuration recovery cannot undo application data changes." : action === 'uninstall' ? 'Saved settings, SSH host keys and provider identities are kept for reinstall. Software still needed by another service is kept. User Mise tools are unchanged.' : "Host and provider identities and previous verified artifacts are retained.",
       packageManager: candidate.artifact?.manager || previous?.artifact?.manager || null,
       requiresFallback: store.domain === 'system' && Boolean(previous?.enabled) && ['edit', 'update', 'migrate', 'restart', 'disable', 'stop', 'remove', 'uninstall', 'sign-out', 'unserve'].includes(action),
-      routes: consumers.map(item => item.name || item.id), network: "Declaring a port does not publish it. Container port mappings and external network policy are managed separately." } });
+      routes: consumers.map(item => item.name || item.id), network: id === 'tailscale' && (selected?.networkMode === 'kernel' || previous?.config.networkMode === 'kernel') ? 'Full networking affects every program in this container. Services manages tailnet routes and split DNS, restores deployment DNS when disconnected, and blocks unsolicited inbound traffic to ordinary listeners. Incoming access uses explicit published routes and tailnet policy. Exit nodes and subnet routing are not enabled.' : "Declaring a port does not publish it. Container port mappings and external network policy are managed separately." } });
+  };
+  const stopService = async (id, grace) => {
+    await supervisor.stop(id, grace);
+    if (store.domain === 'system' && id === 'tailscale' && networking) {
+      const state = await supervisor.observe(id);
+      if (state.up || state.unavailable && networking.needsStopConfirmation?.()) throw new ServiceError('network-cleanup', 'Tailscale has not been confirmed stopped. The inbound filter and saved DNS recovery record were retained.');
+      await networking.stopped();
+    }
+  };
+  const prepareNetworking = async resource => {
+    if (resource.id !== 'tailscale' || !networking) return;
+    // Register an inert s6 entry before acquiring network ownership. If
+    // prerequisites fail, Stop/Disable can still confirm there is no payload
+    // and retry cleanup through the same supervisor.
+    if (resource.config.networkMode === 'kernel') await supervisor.prepare?.(resource.id, resource.config.shutdownMs);
+    await networking.prepare(resource);
   };
   const phase = (op, state, detail = {}) => {
     Object.assign(op, { state: "working", phase: state, updatedAt: now(), ...detail });
@@ -151,6 +173,15 @@ export function createController({ store, supervisor, tools, secrets = async () 
     if (store.domain === "system" && resource.id === "tailscale" && state.up) {
       result.connection = publicConnection(await system.tailscaleStatus(resource));
     }
+    if (store.domain === 'system' && resource.id === 'tailscale' && networking) {
+      try { result.networking = await networking.observe(resource, state, result.connection, run?.runId); }
+      catch (error) { try { await networking.disconnected?.(); } catch {} result.networking = { mode: resource.config.networkMode || 'userspace', state: 'error', message: error instanceof ServiceError ? error.message : 'Container networking needs attention. Check the deployment and retry.' }; }
+      if (result.networking.fatal) {
+        try { await supervisor.stop(resource.id, resource.config.shutdownMs); } catch { result.networking.message += ' Stopping the daemon could not be confirmed; check its supervisor.'; }
+        store.put({ ...resource, restart: { exhausted: true, reason: result.networking.message } });
+        result.state = 'failed'; result.reason = result.networking.message; result.process = await supervisor.observe(resource.id);
+      }
+    }
     store.setMeta("observation:" + resource.id, result);
     return result;
   };
@@ -158,14 +189,15 @@ export function createController({ store, supervisor, tools, secrets = async () 
   const startAndCheck = async resource => {
     try {
     const old = await supervisor.observe(resource.id);
-    if (!old.up) await supervisor.start(resource.id, resource.config.shutdownMs);
+    if (!old.up) { await prepareNetworking(resource); await supervisor.start(resource.id, resource.config.shutdownMs); }
     const deadline = now() + Math.max(4000, resource.config.health.graceMs + 2000);
     do {
       if (closed) throw new ServiceError("interrupted", "The controller is restarting; the operation will resume.");
       const status = await observe(resource);
-      if (["ready", "running"].includes(status.state) && now() - status.run.startedAt >= 300) return;
+      const networkReady = !status.networking || status.networking.mode !== 'kernel' || ['ready', 'needs-login', 'needs-approval'].includes(status.networking.state);
+      if (["ready", "running"].includes(status.state) && networkReady && !['error', 'blocked'].includes(status.networking?.state) && now() - status.run.startedAt >= 300) return;
       if (status.exit?.revision === resource.revision && status.exit?.boot === boot && status.exit?.endedAt > (resource.activatedAt || 0)) {
-        if (status.exit.exitCode === 0 && resource.config.health.kind === 'process' && resource.config.restart !== 'always') return;
+        if (resource.id !== 'tailscale' && status.exit.exitCode === 0 && resource.config.health.kind === 'process' && resource.config.restart !== 'always') return;
         break;
       }
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -184,7 +216,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
   };
   const restorePrevious = async op => {
     const original = op.plan.previous;
-    await supervisor.stop(op.target, original.config.shutdownMs);
+    await stopService(op.target, original.config.shutdownMs);
     let restored = store.get(op.target);
     if (!op.restored) {
       restored = { ...original, revision: (restored?.revision ?? original.revision) + 1, lastOperationId: op.id, restart: {} };
@@ -203,6 +235,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
         phase(op, 'network-control');
         const current = store.get(id);
         const details = await system.controlTailscale(current, action, op.plan.control);
+        if (action === 'sign-out') await networking?.disconnected?.();
         store.transaction(() => { store.put({ ...current, revision: current.revision + 1, details: { ...current.details, ...details }, lastOperationId: op.id }); const run = store.meta('run:' + id); if (run) store.setMeta('run:' + id, { ...run, revision: current.revision + 1 }); Object.assign(op, { state: 'succeeded', phase: 'succeeded', finishedAt: now(), updatedAt: now() }); store.saveOperation(op); store.event(op.id, { phase: 'succeeded' }); });
         return;
       }
@@ -215,7 +248,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
         if (current) {
           // Desired intent wins over every exit event or pending restart.
           if (!op.activated) { current = { ...current, revision: current.revision + 1, enabled: action === "stop" ? current.enabled : false, stoppedBoot: action === "stop" ? boot : null, restart: {}, config: { ...current.config, enabled: action === "stop" ? current.enabled : false }, lastOperationId: op.id }; store.transaction(() => { store.put(current); op.activated = true; store.saveOperation(op); }); }
-          await supervisor.stop(id, current.config.shutdownMs);
+          await stopService(id, current.config.shutdownMs);
           if (action === "remove") { store.remove(id); await fs.rm(path.join(store.root, "logs", id), { recursive: true, force: true }); }
           if (action === "uninstall") {
             phase(op, 'removing-software');
@@ -247,6 +280,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
           });
         } else {
           await checkBindings(id, candidate.config || original.config);
+          if (id === 'tailscale') await networking?.validate(candidate.config || original.config);
           if (candidate.artifact) { phase(op, "stage"); candidate = { ...candidate, artifact: await withInstaller(() => artifacts.install(id, candidate.artifact)) }; }
           await checkStart();
           // Payloads stage slowly: recheck inside the activating commit so a
@@ -268,7 +302,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
         await observe(resource); finish(op, "succeeded"); return;
       }
       phase(op, "configure");
-      if (action !== 'start') await supervisor.stop(id, resource.config.shutdownMs);
+      if (action !== 'start') await stopService(id, resource.config.shutdownMs);
       if (store.domain === "system") {
         const details = await system.configureSystem(resource, system.paths);
         resource = { ...resource, details }; store.put(resource);
@@ -295,7 +329,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
         if (changed) {
           const current = store.get(id);
           if (current && !["disable", "stop", "remove", "uninstall"].includes(action)) store.put({ ...current, restart: { exhausted: true, reason: message } });
-          await supervisor.stop(id).catch(() => {});
+          await stopService(id).catch(() => {});
         }
         finish(op, "failed", { error: message, code: error.code || "operation" });
       }
@@ -305,6 +339,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
     if (working || closed) return;
     working = true;
     try {
+      await networking?.orphaned();
       for (const operation of store.pending()) { if (closed) break; await execute(operation); }
       for (let resource of services()) {
         if (closed) break;
@@ -321,7 +356,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
           const retry = resource.restart || {};
           if (retry.nextAt && retry.nextAt > now()) continue;
           try {
-            await supervisor.stop(resource.id, resource.config.shutdownMs);
+            await stopService(resource.id, resource.config.shutdownMs);
             if (retry.nextAt || (retry.failures || []).length) store.put({ ...resource, restart: {} });
           } catch (error) {
             const failures = (retry.failures || []).filter(at => now() - at < 5 * 60_000);
@@ -331,7 +366,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
           }
           continue;
         }
-        if (stopIntent || status.process.up || resource.restart?.exhausted) continue;
+        if (stopIntent || status.process.up || resource.restart?.exhausted || status.networking?.fatal) continue;
         if (status.process.unavailable) {
           // The scan cannot report this service. Back consecutive
           // observations off instead of hammering s6 every second.
@@ -360,6 +395,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
             const credentials = await secrets(resource.config);
             if (hash(credentials.receipts) !== hash(resource.secretReceipts || [])) throw new ServiceError('credential-changed', 'A referenced Vault credential changed. Review this service before restarting.');
           } else await system.configureSystem(resource, system.paths);
+          await prepareNetworking(resource);
           await supervisor.start(resource.id, resource.config.shutdownMs);
           if (restart.nextAt) store.put({ ...resource, restart: { ...restart, nextAt: null } });
         } catch (error) {
@@ -371,6 +407,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
   };
   const apply = input => { object(input, ["planId", "expectedRevision", "idempotencyKey", 'acknowledgeAccessImpact']); const operation = store.apply(input); queueMicrotask(() => void reconcile()); return publicOperation(operation); };
   return { plan: async input => { const value = await plan(input); return { id: value.id, domain: value.domain, target: value.target, expectedRevision: value.expectedRevision, expiresAt: value.expiresAt, review: value.review }; }, apply, snapshot, reconcile,
+    requirements: async () => ({ tailscale: networking ? await networking.requirements({ fresh: true }) : null }),
     logs: (id, after) => { if (!validId(id) || !store.get(id)) throw new ServiceError("missing", "Choose a registered service."); return readLogs(store.root, id, after); },
     operation: id => { const op = store.operation(id); if (!op) throw new ServiceError("missing", "This operation is no longer available."); return publicOperation(op); },
     requiresMaintenance: input => {

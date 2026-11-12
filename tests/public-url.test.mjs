@@ -8,7 +8,7 @@
 // the hosting platform's. The reachability check runs against a fake fetch.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -99,6 +99,22 @@ test("a saved address survives as one line on the state volume, and clears", (t)
   clearSaved(dir);
   writeFileSync(savedPath(dir), "\n\n");
   assert.equal(readSaved(dir), null, "an empty file is no address");
+});
+
+test("a pre-placed link at the temporary name is never followed", (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), "t3-public-url-link-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const external = path.join(dir, "external");
+  writeFileSync(external, "kept\n");
+  // The temporary used to be fully predictable (`<target>.<pid>.tmp`); a link
+  // planted there would have received the write. It now carries random bytes
+  // and is created exclusively, so neither the old name nor a collision helps.
+  symlinkSync(external, `${savedPath(dir)}.${process.pid}.tmp`);
+  writeSaved(dir, "https://t3.example.com");
+  assert.equal(readFileSync(external, "utf8"), "kept\n", "the link target is untouched");
+  assert.equal(readSaved(dir), "https://t3.example.com");
+  rmSync(`${savedPath(dir)}.${process.pid}.tmp`, { force: true });
+  assert.deepEqual(readdirSync(dir).sort(), ["external", "public-url"], "no temporary file is left behind");
 });
 
 test("t3-pair and the entrypoint read the same answer from the command line", (t) => {

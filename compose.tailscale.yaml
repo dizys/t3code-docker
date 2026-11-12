@@ -1,0 +1,12 @@
+# Optional full-container Tailscale networking. This grants prerequisites only;
+# install, enable and sign in through Setup > Services > Tailscale.
+# docker compose -f compose.yaml -f compose.tailscale.yaml up -d
+# Use a private container network namespace. Host networking is unsupported.
+services:
+  t3code:
+    environment:
+      T3_TAILSCALE_NETWORKING: "1"
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun

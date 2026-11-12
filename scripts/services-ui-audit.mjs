@@ -55,14 +55,22 @@ try {
       if (dropSubmission) { dropSubmission = false; const response = await route.fetch(); assert.equal(response.ok(), true); await route.abort('failed'); }
       else await route.continue();
     });
-    let userUnavailable = false, tailnetOverride = null, authenticationOverride = null;
+    let userUnavailable = false, tailnetOverride = null, authenticationOverride = null, requirementsOverride = null;
+    await page.route('**/services/requirements', async route => {
+      if (requirementsOverride === 'unavailable') await route.fulfill({ status: 503, json: { ok: false, error: 'Fixture requirements disconnected' } });
+      else if (requirementsOverride) await route.fulfill({ json: { tailscale: requirementsOverride } });
+      else await route.continue();
+    });
     await page.route('**/__setup/services', async route => {
       const response = await route.fetch(), body = await response.json();
       if (userUnavailable) {
         body.domains = body.domains.map(domain => domain.domain === 'user' ? { ...domain, code: 'controller-unavailable', error: 'Fixture controller disconnected', services: [], operations: [], connections: [], routes: [] } : domain);
         body.services = body.services.filter(item => item.domain !== 'user'); body.operations = body.operations.filter(item => item.domain !== 'user'); body.connections = []; body.routes = [];
       }
-      if (tailnetOverride) for (const service of body.services) if (service.domain === 'system' && service.id === 'tailscale') service.observation.connection = { ...tailnetOverride };
+      if (tailnetOverride) for (const service of body.services) if (service.domain === 'system' && service.id === 'tailscale') {
+        service.observation.connection = { ...tailnetOverride };
+        if (service.config.networkMode === 'kernel') service.observation.networking = { mode: 'kernel', state: ({ Running: 'ready', NeedsLogin: 'needs-login', NeedsMachineAuth: 'needs-approval', Unavailable: 'error' })[tailnetOverride.state] || 'connecting', dns: tailnetOverride.state === 'Running' ? 'ready' : 'deployment', message: 'Disposable networking status fixture.' };
+      }
       await route.fulfill({ json: body });
     });
     await page.route('**/services/authentication', async route => {
@@ -157,7 +165,42 @@ try {
       await page.locator('.tc-card').filter({ has: page.getByRole('heading', { name: 'Tailscale', exact: true }) }).getByRole('button', { name: 'Configure…', exact: true }).click();
       await button('Review changes').click(); await button('Install and enable').click(); await tab('Configured').click();
     }
-    await tailnet.getByText('Running', { exact: true }).waitFor();
+    await tailnet.getByText(/^(Running|Network ready|Sign-in needed)$/).first().waitFor();
+    await tailnet.getByRole('button', { name: 'Manage Tailscale', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Edit configuration', exact: true }).click();
+    const tailnetEditor = page.getByRole('dialog', { name: 'Edit Tailscale', exact: true });
+    await tailnetEditor.getByLabel('Networking', { exact: true }).selectOption('kernel');
+    const networkSettings = 'services:\n  t3code:\n    environment:\n      T3_TAILSCALE_NETWORKING: "1"\n    cap_add:\n      - NET_ADMIN\n    devices:\n      - /dev/net/tun:/dev/net/tun\n';
+    requirementsOverride = { ready: false, message: 'Apply the optional override and recreate this container.', compose: networkSettings, checks: [{ id: 'tun', label: 'TUN device', ok: false }] };
+    await tailnetEditor.getByRole('button', { name: 'Check again', exact: true }).click();
+    await tailnetEditor.getByText('Deployment change needed', { exact: true }).waitFor();
+    assert.equal(await tailnetEditor.getByRole('button', { name: 'Review changes', exact: true }).isDisabled(), true);
+    await tailnetEditor.getByText('Deployment settings', { exact: true }).click();
+    assert.match(await tailnetEditor.innerText(), /NET_ADMIN/); assert.match(await tailnetEditor.innerText(), /\/dev\/net\/tun/);
+    await shot('tailscale-networking-requirements');
+    requirementsOverride = 'unavailable';
+    await tailnetEditor.getByRole('button', { name: 'Check again', exact: true }).click();
+    await tailnetEditor.getByText('Requirements unavailable', { exact: true }).waitFor();
+    assert.equal(await tailnetEditor.getByLabel('Networking', { exact: true }).inputValue(), 'kernel');
+    assert.equal(await tailnetEditor.getByRole('button', { name: 'Review changes', exact: true }).isDisabled(), true);
+    requirementsOverride = null;
+    await tailnetEditor.getByRole('button', { name: 'Check again', exact: true }).click();
+    await tailnetEditor.getByText('Deployment ready', { exact: true }).waitFor();
+    await shot('tailscale-networking-ready');
+    await tailnetEditor.getByRole('button', { name: 'Review changes', exact: true }).click();
+    const networkingReview = page.getByRole('dialog', { name: 'Review Tailscale', exact: true });
+    assert.match(await networkingReview.innerText(), /Full container networking/); assert.match(await networkingReview.innerText(), /every program/);
+    await networkingReview.getByRole('checkbox', { name: 'I have another way to reach Setup or this container.', exact: true }).check();
+    await shot('tailscale-networking-review');
+    await networkingReview.getByRole('button', { name: 'Save configuration', exact: true }).click();
+    await tailnetEditor.waitFor({ state: 'detached' });
+    await tailnet.getByRole('button', { name: 'Tailscale', exact: true }).click();
+    const tailnetInspector = page.getByRole('dialog', { name: 'Tailscale', exact: true });
+    await tailnetInspector.getByRole('button', { name: 'Sign in…', exact: true }).waitFor();
+    assert.match(await tailnetInspector.innerText(), /Sign-in needed/);
+    assert.doesNotMatch(await tailnetInspector.innerText(), /MagicDNS verified/);
+    await shot('tailscale-networking-sign-in-needed');
+    await tailnetInspector.getByRole('button', { name: 'Close', exact: true }).click();
     const authMenu = async () => { await tailnet.getByRole('button', { name: 'Manage Tailscale', exact: true }).click(); return page.getByRole('menuitem').filter({ hasText: /sign.in|sign out|approval/i }); };
     const authLabels = async () => (await (await authMenu()).allTextContents()).map(label => label.trim());
     assert.deepEqual(await authLabels(), ['Sign in…']); await shot('tailscale-first-sign-in');

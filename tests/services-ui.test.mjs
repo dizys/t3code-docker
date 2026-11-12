@@ -11,7 +11,7 @@ const fixture = (hash = '#services/new', ready = true, services = [], domains = 
   const location = { origin: 'https://fixture.test', hash };
   const context = vm.createContext({
     Kit: { html: (parts, ...values) => parts.reduce((text, part, i) => text + part + (Array.isArray(values[i]) ? values[i].join('') : values[i] ?? ''), ''), raw: value => value, icon: () => '', menu: (_button, options) => menus.push(options.items) }, BASE: '/__setup', location,
-    T3ServiceEditor: { create: () => ({ open: () => { opened++; } }) },
+    T3ServiceEditor: { create: () => ({ open: () => { opened++; }, hasDraft: () => false }) },
     document: { addEventListener: (name, listener) => { listeners[name] = listener; } },
     sessionStorage: { getItem: () => null },
     setTimeout: () => 1, clearTimeout() {},
@@ -108,4 +108,18 @@ test('a stopped SSH service offers Start without Restart or Stop and shows its c
   const labels = await f.menu(ssh); assert.ok(labels.includes('Start')); assert.ok(!labels.includes('Restart')); assert.ok(!labels.includes('Stop for now'));
   assert.ok(labels.includes('Move packages to Mise…'));
   assert.match(f.ui.sshContent(), /SSH username: <code>t3<\/code>/);
+});
+test('Tailscale reports network readiness independently of a running process and preserves authentication actions', async () => {
+  const tail = { domain: 'system', id: 'tailscale', enabled: true, artifact: { version: '1.0' }, config: { name: 'Tailscale', networkMode: 'kernel' }, observation: { state: 'running', connection: { state: 'NeedsLogin' }, networking: { mode: 'kernel', state: 'needs-login', dns: 'deployment' } } };
+  const f = fixture('#services', true, [tail]); f.ui.activate(true); await f.settle();
+  assert.match(f.ui.content(), /Sign-in needed/); assert.doesNotMatch(f.ui.content(), />Running</);
+  assert.ok((await f.menu(tail)).includes('Sign in…'));
+  tail.observation.connection.state = 'Running'; tail.observation.networking = { state: 'ready', dns: 'ready' };
+  assert.match(f.ui.content(), /Network ready/); assert.match(f.ui.content(), /MagicDNS verified/);
+  tail.observation.networking = { state: 'ready', dns: 'disabled' };
+  assert.match(f.ui.content(), /Connected · IP access/); assert.doesNotMatch(f.ui.content(), /MagicDNS verified/);
+  tail.observation.networking = { state: 'error', message: 'DNS restored' };
+  assert.match(f.ui.content(), /Networking needs attention/); assert.ok((await f.menu(tail)).includes('Sign out…'));
+  f.unavailable(); f.ui.activate(); await f.settle();
+  assert.match(f.ui.content(), /Networking status unavailable/); assert.doesNotMatch(f.ui.content(), /Network ready|MagicDNS verified/);
 });

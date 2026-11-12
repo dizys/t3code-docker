@@ -8,6 +8,7 @@
 import { PROTOCOLS } from './catalog.mjs';
 import { parseAddress, withHost } from './address.mjs';
 import { cleanModelLimits, cleanReasoning, parseModelCapabilities, parseModelList } from './models.mjs';
+import { gatewayFetch, lookupGateway } from './transport.mjs';
 
 const DOCKER_HOST = 'host.docker.internal';
 const MAX_LIST_BYTES = 8 * 1024 * 1024;
@@ -102,22 +103,44 @@ const routeState = status => {
  *
  *   { at, ok, code, message, hint, fix, ms, url, notes, insecure, product,
  *     models: { listed, ids, capabilities }, protocols: { messages, responses, chat } }
+ *
+ * A keyless check of `/` runs first, so an unreachable host never sees a key.
+ * A private host needs `{ allowPrivateHost: true }` before any request.
+ * Redirects are reported, never followed, so a key never leaves this host.
  */
-export async function probeGateway({ url: input, key = '', fetchImpl = globalThis.fetch, timeoutMs = 6000, now = Date.now, signal } = {}) {
-  const at = now(), address = parseAddress(input);
-  if (!address.ok) return { at, ok: false, code: 'invalid', message: address.error, models: { listed: false, ids: [], capabilities: {} }, protocols: {} };
-  const { url, notes, insecure } = address, headers = headersFor(key), limit = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+export async function probeGateway({ url: input, key = '', fetchImpl = globalThis.fetch, timeoutMs = 6000, now = Date.now, signal, allowPrivateHost = false, lookup = lookupGateway } = {}) {
+  const at = now(), address = parseAddress(input, { allowPrivateHost });
+  if (!address.ok) return { at, ok: false, code: address.code ?? 'invalid', message: address.error, ...(address.code === 'private-host' ? { confirmHost: address.hostname, host: address.host, hint: 'Tick “Private host” to confirm this address is yours, then test again.' } : {}), models: { listed: false, ids: [], capabilities: {} }, protocols: {} };
+  const { url, notes, insecure, hostname } = address, headers = headersFor(key), keyless = headersFor(), limit = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
   const finish = (result) => ({ at, url, notes, insecure, ms: Math.max(0, now() - at), models: { listed: false, ids: [], capabilities: {} }, protocols: {}, ...result });
-  const request = (path, init = {}) => fetchImpl(url + path, { redirect: 'manual', ...init, headers: { ...headers, ...init.headers }, signal: limit() });
+  const privateRefusal = pinned => finish({ ok: false, code: 'private-host', confirmHost: hostname, host: address.host, message: `“${hostname}” looks like a private host${pinned ? ` (${pinned})` : ''}.`, hint: 'Tick “Private host” to confirm this address is yours, then test again.' });
+  // DNS is pinned once, before any request: no re-resolve per redirect or per route.
+  let fetchPinned;
+  try { fetchPinned = await gatewayFetch(address, { allowPrivateHost, lookup, signal: limit(), fetchImpl }); }
+  catch (error) {
+    if (error.code === 'private-host') return privateRefusal(error.address);
+    const code = connectionCode(error); return finish({ ok: false, code, ...connectionProblem(code, address) });
+  }
+  const request = (path, init = {}) => fetchPinned(url + path, { redirect: 'manual', ...init, headers: { ...headers, ...init.headers }, signal: limit() });
+  const keylessRequest = (path, init = {}) => fetchPinned(url + path, { redirect: 'manual', ...init, headers: { ...keyless, ...init.headers }, signal: limit() });
+
+  // Keyless first: an unreachable host is reported before any key is sent.
+  let probe;
+  try { probe = await keylessRequest('/'); }
+  catch (error) { const code = connectionCode(error); return finish({ ok: false, code, ...connectionProblem(code, address) }); }
+  // A landing-page redirect says nothing about the API routes. Do not follow
+  // it, but still test the explicitly entered origin's model endpoint.
+  await discard(probe);
 
   let list;
   try { list = await request('/v1/models'); }
   catch (error) { const code = connectionCode(error); return finish({ ok: false, code, ...connectionProblem(code, address) }); }
 
   if (list.status >= 300 && list.status < 400) {
+    // The key went only to the address typed, never to where it points: redirects aren't followed.
     const location = list.headers?.get?.('location') ?? '';
     await discard(list);
-    const target = /^https?:\/\//i.test(location) ? parseAddress(location) : null;
+    const target = /^https?:\/\//i.test(location) ? parseAddress(location, { allowPrivateHost }) : null;
     return finish({ ok: false, code: 'redirect', message: `${address.host} redirects somewhere else.`,
       ...(target?.ok ? { hint: `It points to ${target.url}.`, fix: { url: target.url, label: 'Use that address' } } : { hint: 'Use the address it redirects to.' }) });
   }
@@ -133,7 +156,7 @@ export async function probeGateway({ url: input, key = '', fetchImpl = globalThi
   // Anthropic's own API refuses a list without its header.
   if (listed === null && list.status !== 401 && list.status !== 403) listed = await request('/v1/models', { headers: ANTHROPIC }).then(readModels, () => null);
   const models = { listed: listed !== null, ids: listed?.ids ?? [], capabilities: listed?.capabilities ?? {} };
-  const product = identify(address, limit, fetchImpl);
+  const product = identify(address, limit, fetchPinned);
   const routes = await Promise.all(Object.values(PROTOCOLS).map(async protocol => {
     try {
       const response = await request(protocol.path, { method: 'POST', headers: { 'content-type': 'application/json', ...(protocol.id === 'messages' ? ANTHROPIC : {}) }, body: '{}' });

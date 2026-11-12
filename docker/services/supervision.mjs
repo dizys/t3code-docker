@@ -20,6 +20,10 @@ export function createSupervision({ scan, domain, node = "/usr/local/bin/node", 
       await fs.writeFile(path.join(dir, name), text, { mode: name === "run" || name === "finish" ? 0o700 : 0o600 });
     }
     await control("s6-svscanctl", ["-a", scan]);
+    for (let i = 0; i < 100; i++) {
+      try { await control('s6-svstat', ['-o', 'up', dir]); return; }
+      catch (error) { if (i === 99) throw error; await new Promise(resolve => setTimeout(resolve, 20)); }
+    }
   };
   const observe = async id => {
     try {

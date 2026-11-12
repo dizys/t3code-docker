@@ -15,23 +15,38 @@ export function patchGatewayContext(source) {
   };
   change(files[0], 'import * as DocumentText from "../../provider/DocumentText.ts";',
     'import { applyClaudeGatewayContext, claudeGatewayContextKey } from "../../provider/GatewayModelContext.ts";\nimport * as DocumentText from "../../provider/DocumentText.ts";');
-  change(files[0], `  // A settings file path cannot take extra keys, so it goes through unchanged.
+  // Stable and current Nightly differ in how they merge model-alias flags.
+  // Match one complete reviewed initializer, retaining its flag precedence.
+  const settingsVariants = [`  // A settings file path cannot take extra keys, so it goes through unchanged.
   const effectiveQuerySettings =
     input.toolSearchOverride === undefined || typeof compactQuerySettings === "string"
       ? compactQuerySettings
       : ({
           ...compactQuerySettings,
-          env: { ...compactQuerySettings?.env, ENABLE_TOOL_SEARCH: input.toolSearchOverride },`,
-    `  const gatewayQuerySettings = applyClaudeGatewayContext(
+          env: { ...compactQuerySettings?.env, ENABLE_TOOL_SEARCH: input.toolSearchOverride },
+        } as ClaudeSdkSettings);`,
+  `  // A settings file path cannot take extra keys, so it goes through unchanged.
+  const effectiveQuerySettings =
+    (input.toolSearchOverride === undefined && aliasOverrideEnv === undefined) ||
+    typeof compactQuerySettings === "string"
+      ? compactQuerySettings
+      : ({
+          ...compactQuerySettings,
+          env: {
+            ...compactQuerySettings?.env,
+            ...aliasOverrideEnv,
+            ...(input.toolSearchOverride === undefined
+              ? {}
+              : { ENABLE_TOOL_SEARCH: input.toolSearchOverride }),
+          },
+        } as ClaudeSdkSettings);`];
+  const matching = settingsVariants.filter(before => next[files[0]].includes(before));
+  if (matching.length !== 1) throw new Error(`The gateway-context patch no longer matches ${files[0]}. Review the upstream source before publishing this runtime.`);
+  const before = matching[0];
+  change(files[0], before, `  const gatewayQuerySettings = applyClaudeGatewayContext(
     input.environment, compiledSelection.apiModelId, compactQuerySettings,
   ) as typeof compactQuerySettings;
-  // A settings file path cannot take extra keys, so it goes through unchanged.
-  const effectiveQuerySettings =
-    input.toolSearchOverride === undefined || typeof gatewayQuerySettings === "string"
-      ? gatewayQuerySettings
-      : ({
-          ...gatewayQuerySettings,
-          env: { ...gatewayQuerySettings?.env, ENABLE_TOOL_SEARCH: input.toolSearchOverride },`);
+` + before.replaceAll('compactQuerySettings', 'gatewayQuerySettings'));
   change(files[0], '            canApplyClaudeSelectionLive(existing.selection, compiledSelection) &&',
     `            canApplyClaudeSelectionLive(existing.selection, compiledSelection) &&
             claudeGatewayContextKey(adapterOptions.environment, existing.selection.apiModelId) ===

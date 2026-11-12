@@ -102,8 +102,9 @@ Connections identify who owns the network path. Host Tailscale, a Cloudflare
 sidecar and an existing VPN remain externally managed. Registering one does
 not adopt its process or change its configuration.
 
-The managed Tailscale connector uses userspace networking without `/dev/net/tun`
-or extra network capabilities. Install and enable it in Services, choose
+The managed Tailscale connector defaults to **Published routes only**, using
+userspace networking without `/dev/net/tun` or extra network capabilities.
+Existing installations keep this mode. Install and enable it in Services, choose
 **Start sign-in**, and authorize the device in Tailscale. Add a connection owned
 by **Tailscale managed in Services**, then add a **Tailnet TCP route** for a
 declared service endpoint. Applying that route explicitly configures TCP Serve
@@ -111,6 +112,70 @@ forwarding to container loopback. Tailnet policy still controls client access;
 the SSH server separately checks the client's public key. Sign out invalidates
 the route's previous client-test evidence. Route changes use durable operations
 and reuse the same operation when a response is lost.
+
+### Full container networking with Tailscale
+
+Choose **Full container networking** when ordinary programs inside the container
+need to reach tailnet machines. SSH from Vault, agent tools, HTTP/HTTPS clients
+and TCP/UDP applications use the same Tailscale interface. Applications do not
+need proxy settings. Tailnet access policy and the destination machine's
+listeners and firewall still determine which connections succeed.
+
+1. Apply the optional deployment override and recreate the container:
+
+   ```bash
+   docker compose -f compose.yaml -f compose.tailscale.yaml up -d
+   ```
+
+   For an existing deployment, merge the override's environment entry,
+   `/dev/net/tun` device and `NET_ADMIN` capability into its existing service.
+   Preserve its home and protected services volumes, workspace, ports and other
+   settings. The host must provide TUN and nftables support. Use a private
+   container network namespace; host networking is unsupported.
+
+2. Open **Setup → Services → Tailscale → Edit configuration** and select
+   **Full container networking**. The deployment checklist checks the opt-in,
+   TUN device, capability, writable DNS configuration and kernel firewall.
+   **Check again** refreshes these checks without installing or restarting.
+3. Review and apply the change. Existing device identity, sign-in and published
+   TCP routes are retained. New installations still need **Start sign-in**.
+4. Check networking status in the service inspector. Sign-in, device approval,
+   interface readiness and MagicDNS are reported separately. **MagicDNS
+   verified** means the container's resolver resolved its own tailnet name to
+   its assigned Tailscale address. Test the intended remote application too.
+
+Services forwards only the tailnet suffix and tailnet reverse-DNS zones to
+Tailscale. Public and Docker names continue to use the original DNS resolvers.
+Existing search domains keep priority, followed by the tailnet search suffix
+for short machine names. If MagicDNS is disabled in the tailnet, IP connectivity
+can be ready while the console explains how to enable device names.
+
+The root service manager owns the interface prerequisites, inbound filter and
+loopback DNS relay. Custom services retain their ordinary user privileges.
+Unsolicited inbound traffic through the kernel interface is blocked; replies
+to outgoing connections are allowed. Explicit Tailscale TCP Serve routes retain
+their existing forwarding behavior. Binding an application to `0.0.0.0` alone
+does not publish it to the tailnet. Full mode does not enable exit nodes, subnet
+route acceptance or IP forwarding.
+
+Stopping, disabling, signing out or losing the Tailscale connection restores
+deployment DNS. Stop/disable removes the owned inbound filter after the daemon
+is confirmed stopped. Controller restart reattaches to the existing desired
+run; container restart resumes enabled services. DNS changes are journaled
+before writing and verified afterward, including recovery from interrupted
+writes. Original DNS resolvers remain available as fallback while the relay
+is being recovered.
+
+Services preserves external DNS and firewall edits. Conflicting edits produce
+a retryable error instead of overwriting them or claiming cleanup succeeded.
+If a changed resolver still points at the managed listener, Services retains
+ordinary DNS forwarding while the edit needs review. Restore deployment DNS
+and retry the stop/disable operation. Removing the networking override on a
+later recreation leaves fresh deployment DNS intact and does not adopt the
+previous network namespace's firewall.
+
+Users who do not enable full networking keep the standard deployment. Opening
+Services does not install Tailscale, request privileges or change networking.
 
 A managed Cloudflare connector uses a named tunnel token held in protected
 system storage. Its hostname, `ssh://` origin and Access policy are configured
@@ -205,8 +270,8 @@ Vault values and managed connector tokens are redacted before lines are
 buffered or written. Arbitrary applications can print other sensitive data;
 review output before sharing it.
 
-The first implementation supports one managed instance per catalogue service.
-It does not expose arbitrary root formulas, kernel Tailscale mode, cgroup hard
+Services supports one managed instance per catalogue service.
+It does not expose arbitrary root formulas, cgroup hard
 limits, encrypted identity export, or provider-policy editing. Rootless
 containers can use custom services; system installs need the root entrypoint
 and protected volume. Existing T3 runtime versions and Stable/Nightly selections

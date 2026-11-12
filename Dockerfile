@@ -388,6 +388,7 @@ ENV T3CODE_SERVER_BROWSER_SANDBOX=0 \
 # installs exactly that tree (refresh it with scripts/bump-versions.sh).
 COPY docker/browser-mcp/package.json docker/browser-mcp/package-lock.json /opt/t3-mcp/
 RUN set -eux; \
+    node -e 'const p=require("/opt/t3-mcp/package.json"); for (const [name,value] of [["chrome-devtools-mcp",process.argv[1]],["@playwright/mcp",process.argv[2]]]) { if (p.dependencies[name] !== value) throw new Error("Browser MCP build arguments must match the checked-in manifest and lockfile: " + name); }' "$CHROME_DEVTOOLS_MCP_VERSION" "$PLAYWRIGHT_MCP_VERSION"; \
     npm ci --prefix /opt/t3-mcp --no-audit --no-fund; \
     npm cache clean --force; \
     for bin in chrome-devtools chrome-devtools-mcp playwright-mcp; do ln -sfn "/opt/t3-mcp/node_modules/.bin/$bin" /usr/local/bin/"$bin"; done; \

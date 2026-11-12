@@ -1,8 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 # Shared root step-down (PATH reset + gosu re-exec): docker/lib/step-down.sh.
+step_down_lib=/usr/local/lib/t3code/step-down.sh
+if [ "$EUID" -ne 0 ]; then step_down_lib="${T3_STEP_DOWN_LIB:-/usr/local/lib/t3code}/step-down.sh"; fi
 # shellcheck source=../lib/step-down.sh
-. "${T3_STEP_DOWN_LIB:-/usr/local/lib/t3code}/step-down.sh"
+. "$step_down_lib" || exit 1
+t3_reset_root_path
+t3_step_down "$0" "$@"
 # shellcheck source=/dev/null
 [ ! -r /etc/profile.d/t3-user-env.sh ] || . /etc/profile.d/t3-user-env.sh
 exec "${T3_INFRA_NODE:-/usr/local/bin/node}" "${T3_VAULT_CLI:-/opt/t3-setup/credentials/cli.mjs}" "$@"

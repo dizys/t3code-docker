@@ -293,6 +293,40 @@ check "T3 is not installed in the mutable npm prefix" \
 # on the next restart or `docker exec`.
 check "root's PATH holds no directory the t3 user can write" \
   "docker exec $NAME sh -c 'IFS=:; for d in \$PATH; do [ -d \"\$d\" ] || continue; gosu t3 test -w \"\$d\" && { echo \"\$d\"; exit 1; }; done; exit 0'"
+# Exercise real root helper calls in this disposable image. An override can
+# load checkout code after step-down, but must never run that code as root.
+if docker exec -i "$NAME" /bin/bash -s >/dev/null 2>&1 <<'STEP_DOWN'
+set -euo pipefail
+fixture="$(mktemp -d /tmp/t3-step-down.XXXXXX)"
+trap 'rm -rf "$fixture"' EXIT
+chmod 755 "$fixture"
+mkdir "$fixture/lib"
+printf '\n' > "$fixture/loaded"
+printf '\n' > "$fixture/executed"
+chown t3:t3 "$fixture/loaded" "$fixture/executed"
+cat > "$fixture/lib/step-down.sh" <<'LIB'
+printf '%s %s\n' "$EUID" "$0" >> "$T3_STEP_DOWN_AUDIT/loaded"
+. /usr/local/lib/t3code/step-down.sh
+LIB
+cat > "$fixture/node" <<'NODE'
+#!/bin/bash
+printf '%s\n' "$EUID" >> "$T3_STEP_DOWN_AUDIT/executed"
+NODE
+chmod 755 "$fixture/node"
+for helper in t3-vault t3-storage t3-harness t3-pair t3-expose t3-doctor t3-login t3-browser-mcp /usr/local/lib/t3-agents/claude; do
+  : > "$fixture/loaded"
+  env T3_STEP_DOWN_AUDIT="$fixture" T3_STEP_DOWN_LIB="$fixture/lib" T3_STEP_DOWN_DEFER=1 T3_INFRA_NODE="$fixture/node" "$helper" --help || true
+  grep -q "^$(id -u t3) " "$fixture/loaded"
+  ! grep -q '^0 ' "$fixture/loaded"
+done
+! grep -q '^0$' "$fixture/executed"
+: > "$fixture/loaded"
+if env T3_STEP_DOWN_AUDIT="$fixture" T3_STEP_DOWN_LIB="$fixture/lib" T3_STEP_DOWN_DEFER=1 PUID=-1 /usr/local/bin/entrypoint.sh true; then exit 1; fi
+[ ! -s "$fixture/loaded" ]
+STEP_DOWN
+then ok "root helpers ignore library/defer overrides until after privilege drop"
+else no "root helpers ignore library/defer overrides until after privilege drop"
+fi
 check "the t3 user still gets its own npm prefix" \
   "docker exec -u t3 $NAME bash -lc 'case :\$PATH: in *:/opt/npm-global/bin:*) true ;; *) false ;; esac'"
 

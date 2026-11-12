@@ -120,7 +120,8 @@ EOF
       mcp_arg="${entry%%:*}"; mcp_pkg="${entry#*:}"
       mcp_pinned="$(grep -m1 "^ARG ${mcp_arg}=" Dockerfile | cut -d= -f2)"
       mcp_locked="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("packages", {}).get("node_modules/" + sys.argv[2], {}).get("version", ""))' docker/browser-mcp/package-lock.json "$mcp_pkg" 2>/dev/null || true)"
-      if [ "$mcp_locked" != "$mcp_pinned" ]; then
+      mcp_root="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("packages", {}).get("", {}).get("dependencies", {}).get(sys.argv[2], ""))' docker/browser-mcp/package-lock.json "$mcp_pkg" 2>/dev/null || true)"
+      if [ "$mcp_locked" != "$mcp_pinned" ] || [ "$mcp_root" != "$mcp_pinned" ]; then
         drift=$((drift + 1))
         printf '%-28s %-12s %s%-12s%s %sbehind%s\n' \
           "browser-mcp lock ${mcp_pkg}" "${mcp_locked:-none}" "$BOLD" "$mcp_pinned" "$RESET" "$YELLOW" "$RESET"

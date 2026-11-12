@@ -14,8 +14,12 @@
 set -euo pipefail
 
 # Shared root step-down (PATH reset + gosu re-exec): docker/lib/step-down.sh.
+step_down_lib=/usr/local/lib/t3code/step-down.sh
+if [ "$EUID" -ne 0 ]; then step_down_lib="${T3_STEP_DOWN_LIB:-/usr/local/lib/t3code}/step-down.sh"; fi
 # shellcheck source=../lib/step-down.sh
-. "${T3_STEP_DOWN_LIB:-/usr/local/lib/t3code}/step-down.sh"
+. "$step_down_lib" || exit 1
+t3_reset_root_path
+t3_step_down "$0" "$@"
 
 # T3 runs through the immutable image infrastructure, never a PATH resolution.
 : "${T3_INFRA_LAUNCHER:=/usr/local/bin/t3-admin}"

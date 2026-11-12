@@ -82,3 +82,18 @@ test("a newer or invalid upstream version still blocks the pin check without edi
     assert.equal(await fs.readFile(path.join(f.root, "Dockerfile"), "utf8"), f.dockerfile);
   }
 });
+
+test("browser MCP checks include both resolved versions and lockfile root dependencies", async t => {
+  const f = await fixture(t), directory = path.join(f.root, 'docker/browser-mcp');
+  await fs.mkdir(directory, { recursive: true });
+  const dependencies = { 'chrome-devtools-mcp': '1.0.0', '@playwright/mcp': '1.0.0' };
+  await fs.writeFile(path.join(directory, 'package.json'), JSON.stringify({ dependencies }));
+  const lock = { packages: { '': { dependencies: { ...dependencies } }, 'node_modules/chrome-devtools-mcp': { version: '1.0.0' }, 'node_modules/@playwright/mcp': { version: '1.0.0' } } };
+  const write = () => fs.writeFile(path.join(directory, 'package-lock.json'), JSON.stringify(lock));
+  await write(); assert.match((await f.run()).stdout, /every pin is current/);
+  lock.packages[''].dependencies['@playwright/mcp'] = '0.9.0'; await write();
+  await assert.rejects(f.run(), error => error.code === 1 && /browser-mcp lock/.test(error.stdout));
+  lock.packages[''].dependencies['@playwright/mcp'] = '1.0.0';
+  lock.packages['node_modules/chrome-devtools-mcp'].version = '0.9.0'; await write();
+  await assert.rejects(f.run(), error => error.code === 1 && /browser-mcp lock/.test(error.stdout));
+});

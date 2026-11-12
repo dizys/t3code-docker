@@ -103,6 +103,10 @@ class MemoryFs {
     return this.links.get(linkPath);
   }
 
+  async realpath(target) {
+    return target;
+  }
+
   async link(from, to) {
     const entry = this.files.get(from);
     if (!entry) throw Object.assign(new Error(`ENOENT: ${from}`), { code: "ENOENT" });
@@ -385,6 +389,7 @@ function managerFor(world, overrides = {}) {
     startTimeOf: overrides.startTimeOf ?? ((pid) => (pid === (overrides.pid ?? 4242) ? "100" : null)),
     lockStaleMs: overrides.lockStaleMs ?? 60_000,
     authCacheTtlMs: 1_000,
+    retentionProcesses: overrides.retentionProcesses ?? (async () => ({ complete: true, processes: [] })),
   });
 }
 
@@ -2492,4 +2497,59 @@ test("source control provider lookup scans tools once per snapshot, not once per
   fs.seedFile(path.join(install, "bin", "glab"), "", 0o755);
   const glab = await manager.sourceControl.resolve("glab");
   assert.deepEqual(glab.providedBy, { tool: "ripgrep", version: "1.0.0" });
+});
+
+test("uninstall refuses a version a running process still uses", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const target = path.join(DATA_DIR, "installs/go/1.27.1/bin/go");
+  const manager = managerFor(world, {
+    retentionProcesses: async () => ({
+      complete: true,
+      processes: [{ pid: 9999, args: [target], executable: target, cwd: "/tmp" }],
+    }),
+  });
+  assert.equal((await manager.toolchains.install("go")).ok, true);
+  const removed = await manager.toolchains.uninstall("go");
+  assert.equal(removed.ok, false);
+  assert.equal(removed.code, "in-use");
+  assert.match(removed.error, /running process/);
+  assert.equal((await manager.toolchains.resolve("go")).installed, true, "the install is kept");
+  assert.ok(!world.calls.some((call) => call.includes("uninstall go@")), "mise never uninstalled it");
+});
+
+test("uninstall refuses a version a provider still selects", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const target = path.join(DATA_DIR, "installs/go/1.27.1/bin/go");
+  fs.seedFile(path.join(HOME, ".t3/userdata/settings.json"), JSON.stringify({ agents: { codex: { binaryPath: target } } }));
+  const manager = managerFor(world, {
+    retentionProcesses: async () => ({ complete: true, processes: [] }),
+  });
+  assert.equal((await manager.toolchains.install("go")).ok, true);
+  const removed = await manager.toolchains.uninstall("go");
+  assert.equal(removed.ok, false);
+  assert.equal(removed.code, "in-use");
+  assert.match(removed.error, /provider/);
+  assert.equal((await manager.toolchains.resolve("go")).installed, true, "the install is kept");
+  fs.seedFile(path.join(HOME, ".t3/userdata/settings.json"), JSON.stringify({}));
+  assert.equal((await manager.toolchains.uninstall("go")).ok, true, "uninstall proceeds once the provider points elsewhere");
+});
+
+for (const phase of ['unuse', 'first-removal']) test(`explicit uninstall rechecks live use after ${phase}`, async () => {
+  const world = createWorld(new MemoryFs()); let inUse = false;
+  const originalRun = world.run;
+  world.run = async (argv, options) => {
+    const result = await originalRun(argv, options);
+    if (phase === 'unuse' && argv[3] === 'unuse' || phase === 'first-removal' && argv[3] === 'uninstall') inUse = true;
+    return result;
+  };
+  const target = path.join(DATA_DIR, 'installs/claude/2.1.273/bin/claude');
+  const manager = managerFor(world, { retentionProcesses: async () => ({ complete: true, processes: inUse ? [{ pid: 9999, executable: target, cwd: '/tmp', args: [target] }] : [] }) });
+  assert.equal((await manager.install('claude', { version: '2.1.270' })).ok, true);
+  assert.equal((await manager.update('claude', { version: '2.1.273' })).ok, true);
+  world.calls.length = 0;
+  const result = await manager.uninstall('claude');
+  assert.equal(result.ok, false); assert.equal(result.code, 'in-use');
+  assert.equal(world.calls.some(call => call.includes('uninstall claude@2.1.273')), false, 'the newly used version survives');
 });

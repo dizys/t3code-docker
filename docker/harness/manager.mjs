@@ -27,7 +27,8 @@ import {
   parseDevicePrompt, parseHost, parseToken, signOutArgs, teaLoginFor, tokenSignIn,
 } from "./source-control.mjs";
 import * as state from "./state.mjs";
-import { applyRetention, planRetention } from "./retention.mjs";
+import { applyRetention, planRetention, liveReferences } from "./retention.mjs";
+import { inside } from "./storage/system.mjs";
 import { compareVersions, meetsMinimum } from "./version.mjs";
 import { assertToolUnreferenced } from "./service-references.mjs";
 
@@ -554,7 +555,9 @@ export function createHarnessManager(options = {}) {
       );
       for (const version of versions) {
         const tool = harnessInstallationForVersion(entry, version).miseTool;
-        assertToolUnreferenced(ctx, tool, version, before.tools?.[tool]?.find(item => item.version === version)?.install_path);
+        const target = before.tools?.[tool]?.find(item => item.version === version)?.install_path;
+        assertToolUnreferenced(ctx, tool, version, target);
+        await assertLiveRemovable(ctx, entry.name, tool, version, target);
       }
       for (const installation of installations) {
         try {
@@ -565,7 +568,11 @@ export function createHarnessManager(options = {}) {
         }
       }
       for (const version of versions) {
-        await mise.uninstall(ctx, harnessInstallationForVersion(entry, version).miseTool, version);
+        const tool = harnessInstallationForVersion(entry, version).miseTool;
+        const fresh = await mise.listTools(ctx), target = fresh.tools?.[tool]?.find(item => item.version === version)?.install_path;
+        assertToolUnreferenced(ctx, tool, version, target);
+        await assertLiveRemovable(ctx, entry.name, tool, version, target);
+        await mise.uninstall(ctx, tool, version);
       }
       return {
         version: undefined,
@@ -732,9 +739,16 @@ export function createHarnessManager(options = {}) {
       const selected = (listing.tools?.[entry.miseTool] ?? [])
         .filter((candidate) => candidate.installed && String(candidate.source?.path ?? "").startsWith(ctx.configDir))
         .map((candidate) => candidate.version);
-      for (const version of union(previous.managedVersions, selected)) assertToolUnreferenced(ctx, entry.miseTool, version, listing.tools?.[entry.miseTool]?.find(item => item.version === version)?.install_path);
+      for (const version of union(previous.managedVersions, selected)) {
+        const target = listing.tools?.[entry.miseTool]?.find(item => item.version === version)?.install_path;
+        assertToolUnreferenced(ctx, entry.miseTool, version, target);
+        await assertLiveRemovable(ctx, entry.name, entry.miseTool, version, target);
+      }
       await mise.unuse(ctx, entry.miseTool);
       for (const version of union(previous.managedVersions, selected)) {
+        const fresh = await mise.listTools(ctx), target = fresh.tools?.[entry.miseTool]?.find(item => item.version === version)?.install_path;
+        assertToolUnreferenced(ctx, entry.miseTool, version, target);
+        await assertLiveRemovable(ctx, entry.name, entry.miseTool, version, target);
         await mise.uninstall(ctx, entry.miseTool, version);
       }
       return { version: undefined, managedVersions: [] };
@@ -967,7 +981,11 @@ export function createHarnessManager(options = {}) {
         .filter((candidate) => candidate.installed && isGlobal(candidate))
         .map((candidate) => candidate.version);
       const configured = (listing.tools?.[id] ?? []).some(isGlobal);
-      for (const version of union(previous.managedVersions, selected)) assertToolUnreferenced(ctx, id, version, listing.tools?.[id]?.find(item => item.version === version)?.install_path);
+      for (const version of union(previous.managedVersions, selected)) {
+        const target = listing.tools?.[id]?.find(item => item.version === version)?.install_path;
+        assertToolUnreferenced(ctx, id, version, target);
+        await assertLiveRemovable(ctx, entry.name, id, version, target);
+      }
       if (configured) {
         try {
           await mise.unuse(ctx, id);
@@ -976,6 +994,9 @@ export function createHarnessManager(options = {}) {
         }
       }
       for (const version of union(previous.managedVersions, selected)) {
+        const fresh = await mise.listTools(ctx), target = fresh.tools?.[id]?.find(item => item.version === version)?.install_path;
+        assertToolUnreferenced(ctx, id, version, target);
+        await assertLiveRemovable(ctx, entry.name, id, version, target);
         await mise.uninstall(ctx, id, version);
       }
       return REMOVE_RECORD;
@@ -1610,4 +1631,25 @@ function operationError(code, message) {
   const error = new Error(message);
   error.code = code;
   return error;
+}
+
+/**
+ * An explicit uninstall still refuses a version the container is using
+ * right now: a provider selection or a running process pointing at it.
+ * Reads are taken here, before every deletion, so the decision never uses
+ * a stale snapshot. Project pins do not veto an explicit removal; that
+ * conservative check stays in retention's stillRemovable.
+ */
+async function assertLiveRemovable(ctx, label, tool, version, target) {
+  let refs;
+  try { refs = await liveReferences(ctx); }
+  catch (error) { throw operationError("version-check-failed", error.message); }
+  if (target && refs.providers.some((binary) => inside(target, binary))) {
+    throw operationError("in-use", `${label} ${version} is selected by a provider. Point the provider elsewhere before uninstalling.`);
+  }
+  const running = target && refs.processes.some((process_) => [process_.executable, process_.cwd, ...process_.args].filter(Boolean).some((arg) => {
+    const value = arg.startsWith("--") && arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : arg;
+    return path.isAbsolute(value) && inside(target, path.resolve(value));
+  }));
+  if (running) throw operationError("in-use", `${label} ${version} is used by a running process. Stop it before uninstalling.`);
 }

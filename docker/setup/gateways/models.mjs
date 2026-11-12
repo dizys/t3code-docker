@@ -2,8 +2,9 @@
 const MAX_MODELS = 2000;
 // A gateway chooses these, and it isn't trusted: OpenCode expands `{env:…}` and
 // `{file:…}` anywhere in its config, so a model called `{file:~/.ssh/id_rsa}` would
-// read that file and send it back as the model's name. No real id has braces.
-const MODEL_ID = /^[\x21-\x7a|~]{1,200}$/;
+// read that file and send it back as the model's name. Real ids are plain
+// provider paths: quotes, backticks, `$`, `;` and whitespace never belong.
+const MODEL_ID = /^[A-Za-z0-9._:\/-]{1,200}$/;
 
 const compare = (a, b) => a.localeCompare(b, 'en', { numeric: true, sensitivity: 'base' });
 

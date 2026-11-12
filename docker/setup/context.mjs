@@ -110,7 +110,7 @@ async function writeFileAtomic(fs, file, text, mode = 0o600) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
   try {
-    await fs.writeFile(tmp, text, { encoding: "utf8", mode });
+    await fs.writeFile(tmp, text, { encoding: "utf8", mode, flag: "wx" });
     await fs.chmod(tmp, mode);
     await fs.rename(tmp, file);
   } finally {

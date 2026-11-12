@@ -88,7 +88,7 @@ test('an unreadable auth.json is reported and never overwritten', async (t) => {
   assert.deepEqual(await readPiAuth({ home, env: {} }), {}, 'Pi creates the file empty');
 });
 
-test('a linked auth.json is written through its link; a dangling link is refused', async (t) => {
+test('a linked auth.json is refused, never written through its link', async (t) => {
   const home = await tempHome(t);
   const real = path.join(home, 'state/pi-auth.json');
   await fs.mkdir(path.dirname(real), { recursive: true });
@@ -96,11 +96,11 @@ test('a linked auth.json is written through its link; a dangling link is refused
   await fs.mkdir(path.dirname(authPath(home)), { recursive: true });
   await fs.symlink(real, authPath(home));
   const auth = createPiAuth({ home, env: {} });
-  await auth.saveKey('groq', 'gsk-new');
-  assert.ok((await fs.lstat(authPath(home))).isSymbolicLink(), 'the link stays a link');
-  assert.deepEqual(Object.keys(JSON.parse(await fs.readFile(real, 'utf8'))).sort(), ['groq', 'openai']);
+  await assert.rejects(auth.saveKey('groq', 'gsk-new'), /symlink/);
+  assert.deepEqual(JSON.parse(await fs.readFile(real, 'utf8')), { openai: { type: 'api_key', key: 'sk-old' } }, 'the link target is untouched');
+  assert.ok((await fs.lstat(authPath(home))).isSymbolicLink(), 'the link itself is left alone');
   await fs.rm(real);
-  await assert.rejects(auth.saveKey('groq', 'gsk-other'), /links to a missing file/);
+  await assert.rejects(auth.saveKey('groq', 'gsk-other'), /symlink/);
   await assert.rejects(fs.access(real), 'nothing is created at the link target');
 });
 

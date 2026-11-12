@@ -124,20 +124,26 @@ async function withPiLock(io, file, work, { now = Date.now, wait = (ms) => new P
   finally { await io.rm(lock, { recursive: true, force: true }).catch(() => {}); }
 }
 
-// Replace auth.json in one step, through a link to wherever it really lives.
+// Replace auth.json in one step, never through a link. A symlink at auth.json
+// could point anywhere its maker chose; following it would let a save replace
+// a file outside Pi's own directory. Like the credential store, refuse links
+// outright (O_NOFOLLOW), and only replace a lone file owned by this user;
+// the temporary is created beside it without following one either.
 async function writePiAuth(io, file, value) {
-  let target = file, entry = null;
+  let entry = null;
   try { entry = await io.lstat(file); } catch (error) {
     if (error.code !== 'ENOENT') throw new Error('Pi’s auth.json could not be checked before writing.');
   }
-  if (entry?.isSymbolicLink()) {
-    // A link to nothing has no file to replace; refuse rather than guess.
-    try { target = await io.realpath(file); } catch { throw new Error('Pi’s auth.json links to a missing file. Fix the link first.'); }
+  if (entry?.isSymbolicLink()) throw new Error('Pi’s auth.json is a symlink. Remove the link before saving here.');
+  if (entry && (!entry.isFile() || entry.nlink !== 1 || entry.uid !== process.getuid())) {
+    throw new Error('Pi’s auth.json is unsafe to replace. Repair it before saving here.');
   }
-  const temporary = path.join(path.dirname(target), '.auth.json.' + randomBytes(8).toString('hex') + '.tmp');
+  const temporary = path.join(path.dirname(file), '.auth.json.' + randomBytes(8).toString('hex') + '.tmp');
   try {
-    await io.writeFile(temporary, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
-    await io.rename(temporary, target);
+    await io.writeFile(temporary, JSON.stringify(value, null, 2) + '\n', {
+      mode: 0o600, flag: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    });
+    await io.rename(temporary, file);
   } finally { await io.rm(temporary, { force: true }).catch(() => {}); }
 }
 

@@ -17,6 +17,10 @@ scripts/generate-mise-idiomatic.sh --check
 docker compose config >/dev/null
 ```
 
+You can also run the source suite with `bun test tests/*.test.mjs`. Keep Node 24
+installed: the SQLite WAL fixtures and browser audit loader use real Node child
+processes. CI continues to run the suite with Node.
+
 Build an image and run the user-visible checks:
 
 ```bash

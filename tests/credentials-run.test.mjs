@@ -6,7 +6,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
-import { runWith, canTest } from '../docker/setup/credentials/run.mjs';
+import { Readable } from 'node:stream';
+import { runWith, canTest, apiRequest } from '../docker/setup/credentials/run.mjs';
 import { maskValues, outputFilter, byteFilter, redactText, REDACTED } from '../docker/setup/credentials/redact.mjs';
 import { normalize } from '../docker/setup/credentials/model.mjs';
 
@@ -133,6 +134,33 @@ test('a missing command is status 127, one that can\'t start is 126, and neither
   await assert.rejects(run([normalize({ id: 'cert', type: 'file', secrets: { content: 'fixture file text' } })], [missing], { spawnProcess: (command, args, options) => { file = options.env.CERT_FILE; return spawn(command, args, options); } }), { status: 127 });
   assert.equal(await fs.readFile(path.dirname(file) + '/credential', 'utf8').catch(error => error.code), 'ENOENT');
   await assert.rejects(fs.stat(path.dirname(path.dirname(file))), { code: 'ENOENT' });
+});
+
+test('premature command output failure cannot become a successful exit', async () => {
+  await assert.rejects(runWith([], ['fixture-command'], {
+    stdout: sink(), stderr: sink(), stdin: 'ignore', env: {},
+    spawnProcess: () => {
+      const child = new EventEmitter();
+      child.stdout = new Readable({read() {this.destroy(Object.assign(new Error('fixture-private-detail'), {code: 'ERR_STREAM_PREMATURE_CLOSE'}));}});
+      child.stderr = Readable.from([]); child.kill = () => true;
+      queueMicrotask(() => child.emit('close', 0, null));
+      return child;
+    },
+  }), error => error.status === 502 && error.code === 'command-failed' && !error.message.includes('fixture-private-detail'));
+});
+
+test('a truncated HTTP body stays a failure and never exposes credential values', async () => {
+  const stdout = sink(), stderr = sink();
+  const saved = credential('http', token, {fields: {baseUrl: 'https://fixture.invalid/'}});
+  await assert.rejects(apiRequest(saved, 'GET', 'data', {
+    stdout, stderr,
+    fetchRequest: async () => new Response(new ReadableStream({start(controller) {
+      controller.enqueue(Buffer.from('body ' + token));
+      setTimeout(() => controller.error(Object.assign(new Error('private ' + token), {code: 'ERR_STREAM_PREMATURE_CLOSE'})), 0);
+    }}), {status: 200}),
+  }), error => error.status === 502 && !error.message.includes(token));
+  assert.equal(stdout.text.includes(token), false);
+  assert.equal(stderr.text.includes(token), false);
 });
 
 test('temporary files exist only during the command, at mode 600 in a 700 folder', async () => {

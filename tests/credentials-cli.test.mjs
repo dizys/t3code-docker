@@ -459,7 +459,9 @@ test('a failed test says what went wrong and what to do', async t => {
   assert.equal(tested.code, 1); assert.match(tested.out, /demo-api failed: The service rejected the secret/); assert.match(tested.out, /t3-vault replace demo-api/); assert.match(tested.out, /HTTP 401/);
 });
 
-test('help, types and mistakes all point somewhere useful', async t => {
+// This exercises more than twenty real CLI processes, so allow for startup
+// overhead when the full suite runs under Bun's five-second default budget.
+test('help, types and mistakes all point somewhere useful', { timeout: 30_000 }, async t => {
   const s = await sandbox(t);
   for (const args of [[], ['--help'], ['-h'], ['help']]) assert.match(ok(await s.cli(args)).out, /t3-vault run NAME\.\.\. -- COMMAND/);
   const types = ok(await s.cli(['types'])).out;

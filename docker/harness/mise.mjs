@@ -5,7 +5,7 @@
 // never change what the manager reads or writes. Reads force
 // `MISE_AUTO_INSTALL=false` and disable the system fallback: a status call must
 // never install anything and must never resolve a tool it did not install.
-import { existsSync } from "node:fs";
+import { accessSync, constants } from "node:fs";
 import path from "node:path";
 import { assertToolUnreferenced } from "./service-references.mjs";
 
@@ -27,12 +27,13 @@ export function writeEnv(env) {
  * else the infrastructure runtime the image ships. `process.execPath` is the
  * test runner under `bun test`, whose directory holds no Node. */
 export function nodeDir() {
+  if (!process.versions.bun) return path.dirname(process.execPath);
   const candidates = [
     process.env.T3_INFRA_NODE ? path.dirname(process.env.T3_INFRA_NODE) : null,
     path.dirname(process.execPath),
     "/usr/local/lib/t3-node-runtime",
   ].filter(Boolean);
-  return candidates.find(dir => { try { return existsSync(path.join(dir, "node")); } catch { return false; } }) ?? path.dirname(process.execPath);
+  return candidates.find(dir => { try { accessSync(path.join(dir, "node"), constants.X_OK); return true; } catch { return false; } }) ?? path.dirname(process.execPath);
 }
 
 /** npm lifecycle scripts need a runtime even when mise's Node is unselected. */

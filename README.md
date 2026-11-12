@@ -29,7 +29,7 @@ connecting them to your own AI gateway and keeping everything up to date,
 all without a shell in the container.
 
 > [!NOTE]
-> T3 Code is alpha software and changes quickly, and so does this image.
+> T3 Code is beta software and changes quickly, and so does this image.
 
 ## Quick start
 

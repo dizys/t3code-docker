@@ -26,7 +26,14 @@ export function createSupervision({ scan, domain, node = "/usr/local/bin/node", 
       const { stdout } = await control("s6-svstat", ["-o", "up,pid,exitcode,signal", directory(id)]);
       const [up, pid, exitCode, signal] = stdout.trim().split(/\s+/);
       return { up: up === "true", pid: Number(pid) || null, exitCode: Number(exitCode), signal, observedAt: Date.now() };
-    } catch { return { up: false, unavailable: true, observedAt: Date.now() }; }
+    } catch {
+      // A scan directory that was never prepared (fresh boot, removed
+      // registration) is simply down. Only a prepared service the scan
+      // cannot report is unavailable.
+      try { await fs.access(path.join(directory(id), "run")); }
+      catch { return { up: false, observedAt: Date.now() }; }
+      return { up: false, unavailable: true, observedAt: Date.now() };
+    }
   };
   const start = async (id, grace) => {
     await prepare(id, grace);

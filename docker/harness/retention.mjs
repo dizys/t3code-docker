@@ -28,7 +28,7 @@ function providerPaths(value, result = []) {
 
 /** Processes and provider selections change under cleanup (a tool starts, a
  * setup choice lands), so these are re-read before every deletion. */
-async function liveReferences(ctx) {
+export async function liveReferences(ctx) {
   const processes = await (ctx.retentionProcesses || processSnapshot)();
   if (!processes.complete) throw new Error("Running tools could not be checked. Older versions were kept.");
   const settings = path.join(ctx.env.T3CODE_HOME || path.join(ctx.home, ".t3"), "userdata/settings.json");
@@ -116,7 +116,7 @@ export async function planRetention(ctx, { saved, only, includePrevious = false 
 /** Whether one planned removal is still safe under the current references:
  * the version is still prunable at the same path, and that path is still an
  * ordinary install no provider selection or running process points at. */
-async function stillRemovable(ctx, refs, item) {
+export async function stillRemovable(ctx, refs, item) {
   const candidate = refs.prunable?.[item.tool]?.find((entry) => entry.version === item.version && entry.installed);
   const target = candidate?.install_path || null;
   if (!target || target !== item.path) return false;

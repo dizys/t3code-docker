@@ -87,11 +87,17 @@ test('Start refuses disabled, unavailable or already running processes, includin
   const plan = await f.controller.plan({ action: 'start', id: resource.id, expectedRevision: resource.revision }), stopCount = f.stops.length, startCount = f.starts.length;
   f.running.set(resource.id, true);
   const operation = await f.apply(plan); assert.equal(operation.state, 'failed'); assert.equal(operation.code, 'conflict');
-  assert.equal(f.stops.length, stopCount); assert.equal(f.starts.length, startCount);
+  assert.equal(f.starts.length, startCount);
+  // Stopped intent with a live process converges back to stopped instead of
+  // skipping: the failed start changed nothing, reconcile stopped the stray.
+  assert.equal(f.stops.length, stopCount + 1); assert.equal(f.running.get(resource.id), false);
+  assert.equal(f.store.get(resource.id).stoppedBoot, 'boot');
   f.running.set(resource.id, false);
   const nextPlan = await f.controller.plan({ action: 'start', id: resource.id, expectedRevision: resource.revision });
+  const stopCountAfterRetry = f.stops.length;
   f.tools.resolve = async () => { f.running.set(resource.id, true); return { receipt: f.receipt }; };
-  assert.equal((await f.apply(nextPlan)).code, 'conflict'); assert.equal(f.stops.length, stopCount); assert.equal(f.starts.length, startCount);
+  assert.equal((await f.apply(nextPlan)).code, 'conflict'); assert.equal(f.starts.length, startCount);
+  assert.equal(f.stops.length, stopCountAfterRetry + 1); assert.equal(f.running.get(resource.id), false);
   f.supervisor.observe = async () => ({ unavailable: true });
   await assert.rejects(f.controller.plan({ action: 'start', id: resource.id, expectedRevision: resource.revision }), /unavailable/);
 });
@@ -187,4 +193,111 @@ test('pending changes retain both candidate and previous tool and Vault referenc
   const ctx = { home: root, env: { T3CODE_HOME: state } };
   for (const version of ['3.14.0', '3.15.0']) assert.throws(() => assertToolUnreferenced(ctx, 'python', version), /Required by service/);
   for (const id of ['old-token', 'new-token']) assert.ok(serviceReferences(ctx).some(row => row.credentials.includes(id)));
+});
+test('a stop that fails stays retryable and never exhausts', async t => {
+  const f = await fixture(t), review = await f.add({ enabled: true }); await f.apply(review);
+  let resource = f.store.get(review.target);
+  let stopFailures = 2;
+  const realStop = f.supervisor.stop;
+  f.supervisor.stop = async id => { if (stopFailures > 0) { stopFailures--; f.stops.push(id); throw new Error('s6 busy'); } return realStop(id); };
+  const op = await f.apply(await f.controller.plan({ action: 'disable', id: resource.id, expectedRevision: resource.revision }));
+  assert.equal(op.state, 'failed');
+  resource = f.store.get(resource.id);
+  assert.equal(resource.enabled, false);
+  assert.equal(resource.restart?.exhausted, undefined, 'a failed stop never marks the service exhausted');
+  // Desired intent is disabled but the process is still up: the same
+  // reconcile pass already retried the stop once, and now backs off.
+  assert.ok(resource.restart.nextAt > Date.now());
+  const stopsAfterFailure = f.stops.length;
+  await f.controller.reconcile();
+  assert.equal(f.stops.length, stopsAfterFailure, 'consecutive retries back off');
+  f.store.put({ ...f.store.get(resource.id), restart: { ...f.store.get(resource.id).restart, nextAt: 0 } });
+  await f.controller.reconcile();
+  assert.equal(f.running.get(resource.id), false);
+  assert.deepEqual(f.store.get(resource.id).restart, {});
+  assert.equal(f.store.meta('observation:' + resource.id).state, 'disabled');
+});
+test('a retried stop failure from an interrupted run never marks the service exhausted', async t => {
+  const f = await fixture(t), review = await f.add({ enabled: true }); await f.apply(review);
+  const resource = f.store.get(review.target);
+  const plan = await f.controller.plan({ action: 'disable', id: resource.id, expectedRevision: resource.revision });
+  const committed = f.controller.apply({ planId: plan.id, expectedRevision: plan.expectedRevision, idempotencyKey: randomUUID() });
+  // Simulate a crash between the intent commit and the stop acknowledgement.
+  const saved = f.store.operation(committed.id);
+  f.store.saveOperation({ ...saved, activated: true });
+  f.supervisor.stop = async id => { f.stops.push(id); throw new Error('s6 busy'); };
+  await f.controller.reconcile();
+  const failed = f.controller.operation(committed.id);
+  assert.equal(failed.state, 'failed');
+  assert.equal(f.store.get(resource.id).restart?.exhausted, undefined);
+});
+test('a bind conflict surfaces as port-conflict, not a startup failure', async t => {
+  const f = await fixture(t);
+  f.supervisor.start = async id => { const error = new Error('listen EADDRINUSE: address in use :::8080'); error.code = 'EADDRINUSE'; throw error; };
+  const review = await f.add({ enabled: true });
+  const op = await f.apply(review);
+  assert.equal(op.state, 'failed');
+  assert.equal(op.code, 'port-conflict');
+});
+test('a payload that dies on bind surfaces as port-conflict through its logs', async t => {
+  const f = await fixture(t);
+  const review = await f.add({ enabled: true });
+  f.supervisor.start = async id => {
+    const resource = f.store.get(id);
+    f.store.setMeta('exit:' + id, { revision: resource.revision, boot: 'boot', runId: 'crashed', exitCode: 1, endedAt: Date.now() });
+    const writer = (await import('../docker/services/logs.mjs')).logWriter(f.root, id, 'crashed', 'stdout');
+    writer.write(Buffer.from('listen EADDRINUSE: address in use :::8080\n'));
+    writer.end();
+  };
+  const op = await f.apply(review);
+  assert.equal(op.state, 'failed');
+  assert.equal(op.code, 'port-conflict');
+});
+test('a port claimed while staging fails the commit as port-conflict', async t => {
+  const f = await fixture(t);
+  const claimed = [];
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 't3-services-peer-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const peerStore = openStore(root);
+  t.after(() => peerStore.close());
+  const controller = createController({ store: f.store, tools: f.tools, supervisor: f.supervisor, boot: 'boot', peerPorts: async () => claimed });
+  t.after(() => controller.close());
+  const port = { port: 18080, protocol: 'http' };
+  const review = await controller.plan({ action: 'add', expectedRevision: 0, configuration: configuration({ enabled: true, endpoints: [port] }) });
+  claimed.push({ id: 'peer', endpoints: [port] });
+  const slow = f.tools.resolve;
+  f.tools.resolve = async config => { await new Promise(resolve => setTimeout(resolve, 20)); return slow(config); };
+  const op = controller.apply({ planId: review.id, expectedRevision: 0, idempotencyKey: randomUUID() });
+  await controller.reconcile();
+  while (!controller.idle()) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(controller.operation(op.id).code, 'port-conflict');
+});
+test('terminal operations prune newest-first and finished rows older than 30 days', async t => {
+  const f = await fixture(t), review = await f.add({ enabled: true }); await f.apply(review);
+  const resource = f.store.get(review.target);
+  await f.apply(await f.controller.plan({ action: 'stop', id: resource.id, expectedRevision: resource.revision }));
+  const count = () => f.store.db.prepare('SELECT count(*) AS n FROM operations').get().n;
+  const aged = f.store.operations().at(-1);
+  const agedValue = { ...f.store.operation(aged.id), finishedAt: Date.now() - 31 * 24 * 3600 * 1000 };
+  f.store.saveOperation({ ...agedValue, state: 'succeeded', finishedAt: agedValue.finishedAt });
+  // A pending operation is never pruned, however old the finished rows are.
+  const pendingPlan = await f.controller.plan({ action: 'disable', id: resource.id, expectedRevision: f.store.get(resource.id).revision });
+  for (let i = 0; i < 205; i++) {
+    const id = randomUUID();
+    f.store.db.prepare('INSERT INTO operations VALUES (?,?,?,?,?)').run(id, randomUUID(), 'sig', 'succeeded', JSON.stringify({ id, state: 'succeeded', finishedAt: Date.now() - i * 1000 }));
+  }
+  assert.ok(count() > 200);
+  // The next apply prunes: the aged row drops by age, the excess by count.
+  const pending = f.controller.apply({ planId: pendingPlan.id, expectedRevision: pendingPlan.expectedRevision, idempotencyKey: randomUUID() });
+  assert.ok(count() <= 200, `terminal history stays bounded, saw ${count()}`);
+  assert.equal(f.store.operation(aged.id), null, 'rows finished over 30 days ago are dropped');
+  assert.ok(f.store.operation(pending.id), 'pending operations are never pruned');
+  await f.controller.reconcile();
+  assert.equal(f.controller.operation(pending.id).state, 'succeeded');
+  assert.ok(f.store.operation(pending.id), 'finished operations within the window are retained');
+  // The idempotency window is the retained rows: a live key still dedupes.
+  const replay = await f.controller.plan({ action: 'enable', id: resource.id, expectedRevision: f.store.get(resource.id).revision });
+  const replayArgs = { planId: replay.id, expectedRevision: replay.expectedRevision, idempotencyKey: '0123456789abcdef' };
+  const first = f.controller.apply(replayArgs);
+  assert.equal(f.controller.apply(replayArgs).id, first.id);
 });

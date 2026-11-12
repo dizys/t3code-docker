@@ -5,6 +5,7 @@ export function createKeyThrottle({ matches, wait = ms => new Promise(resolve =>
   const active = new Map(), tails = new Map(), failures = new Map();
   let pending = 0;
   return {
+    clearFailures() { failures.clear(); },
     async check(ip, candidate) {
       const count = active.get(ip) ?? 0;
       if (count >= perAddress || pending >= pendingLimit) throw Object.assign(new Error('Too many login attempts. Wait a moment and try again.'), { code: 'login-limit' });

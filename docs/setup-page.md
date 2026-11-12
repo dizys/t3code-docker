@@ -7,30 +7,36 @@ publishes ports. None of this needs a shell in the container or a restart.
 
 It's guarded by a setup key. Leave `T3_SETUP_KEY` empty and the first start
 generates one and keeps it on the volume (`/home/t3/.t3/setup-key`), so it stays
-the same across restarts, redeploys and recreates. Only the first start prints
-it to the log, on the line after the one that names `T3_SETUP_KEY`:
-
-```bash
-docker compose logs t3code | grep -A1 T3_SETUP_KEY
-```
-
-Later starts do not print a kept key. If those first logs are gone, open
-**Settings → Setup → Server → This console** in an already paired T3 Code
-browser to show it, or read the file inside the container:
+the same across restarts, redeploys and recreates. Read it inside the container:
 
 ```bash
 docker compose exec t3code sh -c 'cat "${T3CODE_HOME:-/home/t3/.t3}/setup-key"'
 ```
 
+Logs carry only a SHA-256 fingerprint by default. In an already paired T3 Code
+browser, **Settings → Setup → Server → This console** can also show the key.
+
 If neither is available, set `T3_SETUP_KEY` in the container's settings and
 recreate it with the same volume. This replaces the saved key and signs out
 browsers using the old key; paired T3 Code devices stay connected.
 
+If the volume cannot keep a generated key, Setup announces that it is temporary.
+Set a long `T3_SETUP_KEY` and recreate the container to sign in. Hosting platforms
+without shell access can instead opt in to `T3_PRINT_SETUP_KEY=1` and recreate:
+only a newly generated or temporary key is then printed in full. Treat those logs
+as credentials and turn the option off afterward. Existing saved keys are never
+printed again.
+
 Or choose your own when you create the container:
 
 ```
-T3_SETUP_KEY=<something long>
+T3_SETUP_KEY=<a random value of at least 16 characters>
 ```
+
+Parallel key guesses are capped and failed guesses wait in sequence per visitor.
+The same protection covers the form, setup cookie and key header. A busy visitor
+receives a retry message before another key is compared. Short operator-chosen
+keys remain supported, with guidance in startup logs and the signed-in console.
 
 Open port 3774 and enter the key. **Server → This console** shows the key
 to a signed-in browser, and **Make a new key** in its **⋯** menu replaces a

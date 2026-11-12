@@ -67,18 +67,18 @@ test('punctuated key round-trips, throttle resets on any accepted key, hostile p
   // Wrong keys make later answers wait; an accepted header key - how
   // t3-expose and scripts authenticate - clears that wait again, as a
   // successful /login does. Before, only /login cleared it. Each failure
-  // adds 250ms to the *next* throttled answer, so four wrong keys make
-  // the following one wait a second - unless a right key reset the count.
+  // adds 250ms to that guess, so four wrong keys make the following
+  // guess wait over a second unless a right key reset the count.
   for (let i = 0; i < 4; i++) assert.equal((await login('wrong')).status, 303);
-  const throttled = await timed(fetch(`${base}/status`));
+  const throttled = await timed(fetch(`${base}/status`, { headers: { 'x-t3-setup-key': 'wrong' } }));
   assert.equal(throttled.response.status, 401);
   assert.ok(throttled.ms >= 750, `wrong guesses should slow the next answer, took ${throttled.ms}ms`);
   for (let i = 0; i < 3; i++) assert.equal((await login('wrong')).status, 303);
   const viaHeader = await fetch(`${base}/hello`, { headers: { 'x-t3-setup-key': KEY } });
   assert.equal((await viaHeader.json()).signedIn, true);
-  const cleared = await timed(fetch(`${base}/status`));
+  const cleared = await timed(fetch(`${base}/status`, { headers: { 'x-t3-setup-key': 'wrong' } }));
   assert.equal(cleared.response.status, 401);
-  assert.ok(cleared.ms < 250, `an accepted header key should reset the delay, took ${cleared.ms}ms`);
+  assert.ok(cleared.ms < 650, `an accepted header key should reset the delay, took ${cleared.ms}ms`);
 
   // A prefix that is not a plain path on this origin must not become the
   // redirect target or the cookie Path.

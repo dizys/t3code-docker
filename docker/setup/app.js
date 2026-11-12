@@ -1173,7 +1173,8 @@
     const menu = view.menu || [];
     return html`<div class="tc-row tc-row--compact" data-key="connect">
       <span class="tc-tile tc-tile--icon" aria-hidden="true">${icon('globe')}</span>
-      <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name">T3 Connect</span>${badge(view.badge)}</div><span class="tc-status tc-status--prose">${view.text}</span></div>
+      <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name">T3 Connect</span>${badge(view.badge)}</div><span class="tc-status tc-status--prose">${view.text}</span>
+        ${shortKey ? html`<span class="tc-status tc-status--warn">This setup key has fewer than 16 characters. Use a longer key before exposing this console.</span>` : ''}</div>
       <div class="tc-row-actions tc-row-actions--wrap">${view.action ? html`<button class="tc-btn tc-btn--sm" type="button" data-cmd="${view.action.cmd}">${view.action.icon ? icon(view.action.icon) : ''}${view.action.label}</button>` : ''}${menu.length ? html`<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" aria-label="More for T3 Connect" aria-haspopup="menu" aria-expanded="${String(Kit.menuOpenFor('menu-connect'))}" data-cmd="connect.menu" data-key="menu-connect">${icon('ellipsis')}</button>` : ''}</div>
     </div>`;
   };
@@ -1483,12 +1484,13 @@
     volume: { text: 'Made on the first start and kept on the volume, so it stays the same across restarts.' },
     boot: { text: html`Made at this start because the volume couldn’t keep one, so it changes on every start. Set <code>T3_SETUP_KEY</code> to keep one.`, badge: 'Changes on restart', tone: 'warn' },
   };
-  const keyRow = (source) => {
+  const keyRow = (source, shortKey) => {
     const view = KEY_STATES[source] || KEY_STATES.env;
     return html`<div class="tc-row tc-row--compact" data-key="setup-key">
       <span class="tc-tile tc-tile--icon" aria-hidden="true">${icon('key-round')}</span>
       <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name">Setup key</span>${view.badge ? html`<span class="tc-badge tc-badge--${view.tone}">${view.badge}</span>` : ''}</div>
         <span class="tc-status tc-status--prose">${view.text}</span>
+        ${shortKey ? html`<span class="tc-status tc-status--warn">This setup key has fewer than 16 characters. Use a longer key before exposing this console.</span>` : ''}
         ${keyView.value ? html`<div class="tc-key-field">${copyField(keyView.value, { label: 'Copy', wrap: true })}</div>` : ''}
       </div>
       <div class="tc-row-actions tc-row-actions--wrap">
@@ -1588,7 +1590,7 @@
         ${s.browser.devtoolsMcp ? html`<dt>Chrome DevTools MCP</dt><dd><span class="tc-mono tc-mono--body">${s.browser.devtoolsMcp}</span></dd>` : ''}
       </dl><div class="tc-card-foot">${icon('info', 'tc-icon--sm')}<span>Claude Code, Codex and OpenCode are set up to use these.</span></div></div>`) : ''}
       ${section('srv-console', 'This console', html`<div class="tc-group"><div class="tc-list">
-        ${s.setupKeySource ? keyRow(s.setupKeySource) : ''}
+        ${s.setupKeySource ? keyRow(s.setupKeySource, s.setupKeyShort) : ''}
         ${viaT3(s)
           ? html`<div class="tc-row tc-row--compact"><span class="tc-tile tc-tile--icon" aria-hidden="true">${icon('shield-check')}</span><div class="tc-row-main"><span class="tc-row-name">Signed in through T3 Code</span><span class="tc-status tc-status--prose">This browser is paired with T3 Code, which already gives it a terminal here, so the console didn’t ask for the key. Revoking it under Access ends both.</span></div></div>`
           : html`<div class="tc-row tc-row--compact"><span class="tc-tile tc-tile--icon" aria-hidden="true">${icon('lock')}</span><div class="tc-row-main"><span class="tc-row-name">Lock this browser</span><span class="tc-status">Ends this browser’s session here. Coming back takes the setup key.</span></div><div class="tc-row-actions tc-row-actions--wrap"><button class="tc-btn tc-btn--sm" type="button" data-cmd="lock">Lock</button></div></div>`}

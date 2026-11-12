@@ -15,7 +15,8 @@ Environment variables (all optional except where noted):
 | `T3_PREINSTALL` | `default` | What the first start installs onto the volume: `default` (Claude Code, Codex, OpenCode and the toolchains), `all` (every agent and toolchain), `agents`, `toolchains`, `source-control` (glab, fj, tea, az), ids like `claude,go,glab`, or `none`. They combine (`default,source-control`); one on its own replaces the default |
 | `T3_PAIR_TTL` | `30d` | How long links from `t3-pair` can be used |
 | `T3_SETUP_ENABLED` | `1` | Run the setup page |
-| `T3_SETUP_KEY` | *(generated)* | Password for the setup page. Without it, the first start generates one and keeps it on the volume, and the setup page can show and replace it. |
+| `T3_SETUP_KEY` | *(generated)* | Password for the setup page. Without it, the first start generates one and keeps it on the volume, and the setup page can show and replace it. The log carries only a fingerprint of a generated key unless `T3_PRINT_SETUP_KEY=1`. |
+| `T3_PRINT_SETUP_KEY` | `0` | Print a generated setup key to the log in full on a first/ephemeral start. Without it, only a SHA-256 fingerprint is logged. Prefer retrieving the owner-only key file; opt in only when the hosting platform has no shell. |
 | `T3_SETUP_PORT` | `3774` | Setup page port inside the container |
 | `T3_SETUP_BASE_PATH` | — | Serve the setup page under a path, such as `/__setup` |
 | `T3_TRUST_PROXY_HEADERS` | `0` | Trust the `X-Forwarded-Proto`/`Host` the proxy in front of `T3_SINGLE_PORT` set (`1` only when that port is reachable solely through your TLS-terminating proxy or tunnel) |

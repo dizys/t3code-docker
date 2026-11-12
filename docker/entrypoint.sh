@@ -538,24 +538,14 @@ start_preinstall() {
 
 start_preinstall
 
-# A fingerprint for the log: the first and last four characters, never the
-# key itself. A short key is not fingerprinted at all - even four characters
-# would give most of one away.
+# Identify a generated key without revealing any part of it.
 setup_key_fingerprint() {
-  local key="$1"
-  if [ "${#key}" -gt 8 ]; then
-    printf '%s...%s (%s chars)' "${key:0:4}" "${key: -4}" "${#key}"
-  else
-    printf 'short key (%s chars, not shown)' "${#key}"
-  fi
+  local digest
+  digest="$(printf '%s' "$1" | /usr/bin/sha256sum)"
+  printf 'sha256:%s' "${digest:0:12}"
 }
 
-# Say the setup key when it is new, and stay quiet otherwise. A generated key
-# is announced once so a hosting platform's log can serve it without a shell;
-# a kept key is never printed again, and a configured one was already chosen
-# by its owner. Only a fingerprint reaches the log - the full key lives in
-# the volume, in a paired browser, or behind T3_PRINT_SETUP_KEY=1.
-# Reads $T3_SETUP_KEY_SOURCE and $T3_SETUP_KEY.
+# Only explicitly opted-in first/ephemeral starts print a generated key.
 announce_setup_key() {
   local fingerprint
   fingerprint="$(setup_key_fingerprint "$T3_SETUP_KEY")"
@@ -567,7 +557,7 @@ announce_setup_key() {
         log "    It stays the same from now on. Set T3_SETUP_KEY to choose your own."
       else
         log "T3_SETUP_KEY was not set; generated a setup key and kept it on the volume (fingerprint: ${fingerprint})."
-        log "    Read it under Server → This console in a paired T3 Code browser, or read ${T3CODE_HOME}/setup-key. It stays the same from now on. Set T3_SETUP_KEY to choose your own."
+        log "    Read it with docker exec t3code cat ${T3CODE_HOME}/setup-key, or under Server → This console in a paired T3 Code browser. It stays the same from now on. Set T3_SETUP_KEY to choose your own."
       fi ;;
     boot)
       if [ "${T3_PRINT_SETUP_KEY:-}" = "1" ]; then
@@ -576,7 +566,7 @@ announce_setup_key() {
         log "    It changes on every start. Set T3_SETUP_KEY to keep one."
       else
         log "T3_SETUP_KEY was not set, and ${T3CODE_HOME} could not keep a key; generated one for this start (fingerprint: ${fingerprint})."
-        log "    Show it under Server → This console in a paired T3 Code browser. It changes on every start. Set T3_SETUP_KEY to keep one."
+        log "    Set T3_SETUP_KEY in your container settings and recreate with the same volume to sign in. Or opt in to T3_PRINT_SETUP_KEY=1 and recreate to read a new key from the logs. This temporary key changes on every start."
       fi ;;
     volume)
       log "using the setup key kept on the volume (show it under Server → This console in a paired T3 Code browser, or read ${T3CODE_HOME}/setup-key)" ;;

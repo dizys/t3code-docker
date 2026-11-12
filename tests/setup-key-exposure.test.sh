@@ -62,10 +62,11 @@ fi
 LONG="abcdef0123456789abcdef0123456789"
 out="$(load_announce; run_announce new "$LONG")"
 if ! printf '%s' "$out" | grep -qF "$LONG" &&
-    printf '%s' "$out" | grep -q "abcd\.\.\.6789 (32 chars)"; then
-  ok "a long key logs its first and last four characters plus its length"
+    printf '%s' "$out" | grep -q "sha256:$(printf '%s' "$LONG" | sha256sum | cut -c1-12)" &&
+    ! printf '%s' "$out" | grep -q 'abcd.*6789'; then
+  ok "a generated key logs a hash, without raw key fragments"
 else
-  no "a long key logs its first and last four characters plus its length (got: $out)"
+  no "a generated key logs a hash, without raw key fragments (got: $out)"
 fi
 
 out="$(load_announce; T3_PRINT_SETUP_KEY=1 run_announce new "$SECRET")"
@@ -168,7 +169,7 @@ boot generated
 generated="$(cat "$CASE_DIR/state/setup-key")"
 if [ "$(cat "$CASE_DIR/setup-env")" = "new $generated" ] &&
     ! grep -qF "$generated" "$CASE_DIR/log" &&
-    grep -q "fingerprint: ${generated:0:4}\.\.\.${generated: -4}" "$CASE_DIR/log" &&
+    grep -q "fingerprint: sha256:$(printf '%s' "$generated" | sha256sum | cut -c1-12)" "$CASE_DIR/log" &&
     ! grep -q "WARNING: the setup key is short" "$CASE_DIR/log" && children_have_no_key; then
   ok "a generated key reaches Setup; the first-start log carries its fingerprint only"
 else
@@ -195,6 +196,8 @@ ephemeral="$(cat "$CASE_DIR/setup-env")"
 ephemeral="${ephemeral#boot }"
 if [[ "$(cat "$CASE_DIR/setup-env")" == 'boot '* ]] &&
     children_have_no_key && grep -q 'generated one for this start' "$CASE_DIR/log" &&
+    grep -q 'Set T3_SETUP_KEY.*recreate' "$CASE_DIR/log" &&
+    grep -q 'T3_PRINT_SETUP_KEY=1' "$CASE_DIR/log" &&
     ! grep -qF "$ephemeral" "$CASE_DIR/log"; then
   ok "Setup still gets an ephemeral key when no file can be written"
 else

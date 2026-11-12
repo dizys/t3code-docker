@@ -250,7 +250,7 @@ ${scripts(assets.console, nonce)}
  * without JavaScript; unlock.js only keeps the user on the page to show a wrong
  * key in place, and reveals the key on request.
  */
-export function renderUnlock({ assets, nonce, mount, host, hostname, layout, publicUrl, error, shortKey = false, embed = false }) {
+export function renderUnlock({ assets, nonce, mount, host, hostname, layout, publicUrl, error, embed = false }) {
   const tab = embed && host === 'tab';
   hostname ??= tab ? '' : host;
   // Inside T3 Code there is no T3 Code to open: the dialog closes instead.
@@ -265,8 +265,8 @@ ${tab ? tabHeaders(true) + '\n' : ''}<main class="tc-standalone">
     <div class="tc-standalone-body">
       ${hostname ? `<span class="tc-eyebrow">${escapeHtml(hostname)}</span>` : ""}
       <h1 class="tc-standalone-title">Unlock the console</h1>
-      <p class="tc-standalone-desc">Pair devices, sign agents in and publish ports on this server. Enter the setup key: the one you set as <code>T3_SETUP_KEY</code>, or the one this server generated on its first start.</p>${shortKey ? `
-      <p class="tc-note" role="note"><strong>Warning:</strong> this console uses a short setup key, which is brute-forceable if this port is reachable. Set a longer <code>T3_SETUP_KEY</code> and recreate the container with the same volume.</p>` : ""}
+      <p class="tc-standalone-desc">Pair devices, sign agents in and publish ports on this server. Enter the setup key: the one you set as <code>T3_SETUP_KEY</code>, or the one this server generated on its first start.</p>
+
       <form class="tc-unlock-form" method="POST" action="${escapeHtml(mount)}/login" id="loginform" novalidate>${embed ? `
         <input type="hidden" name="embed" value="t3">${tab ? `\n        <input type="hidden" name="host" value="tab"><input type="hidden" name="layout" value="${layout === 'wide' ? 'wide' : 'compact'}">` : ''}` : ""}
         <div class="tc-field">
@@ -283,7 +283,7 @@ ${tab ? tabHeaders(true) + '\n' : ''}<main class="tc-standalone">
           ${t3Url ? `<a class="tc-btn tc-btn--lg" href="${escapeHtml(t3Url)}" rel="noopener">Open T3 Code</a>` : ""}
         </div>
       </form>
-      <div class="tc-note">Left <code>T3_SETUP_KEY</code> empty? The first start generated a key, kept it on the volume and printed it to the log once:<br><code>docker compose logs t3code | grep -A1 T3_SETUP_KEY</code><br>Logs gone? In a paired T3 Code browser, open Settings → Setup → Server → This console to show the key. Or read <code>$T3CODE_HOME/setup-key</code> in the container (default: <code>/home/t3/.t3/setup-key</code>). To replace a lost key, set <code>T3_SETUP_KEY</code> in the container's settings and recreate it with the same volume.</div>
+      <div class="tc-note">Left <code>T3_SETUP_KEY</code> empty? Read the generated key with:<br><code>docker compose exec t3code sh -c 'cat "\${T3CODE_HOME:-/home/t3/.t3}/setup-key"'</code><br>Already connected? In a paired T3 Code browser, open Settings → Setup → Server → This console to show the key. Or read <code>$T3CODE_HOME/setup-key</code> in the container (default: <code>/home/t3/.t3/setup-key</code>). To replace a lost key, set <code>T3_SETUP_KEY</code> in the container's settings and recreate it with the same volume.</div>
     </div>
   </div>
 </main>

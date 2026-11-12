@@ -107,15 +107,11 @@ test("the unlock page posts the key to the mount, and shows a wrong key in place
   assert.match(fresh, /id="key-error" role="alert" hidden>/);
 });
 
-test("a short setup key warns on the unlock page, and only there", () => {
-  const warned = markup(renderUnlock({ assets, nonce: "n", mount: "", host: "", publicUrl: "", error: false, shortKey: true }));
-  assert.match(warned, /brute-forceable/);
-  for (const page of [
-    markup(renderUnlock({ assets, nonce: "n", mount: "", host: "", publicUrl: "", error: false })),
-    markup(renderUnlock({ assets, nonce: "n", mount: "", host: "", publicUrl: "", error: false, shortKey: false })),
-  ]) {
-    assert.doesNotMatch(page, /brute-forceable/);
-  }
+test("unlock guidance retrieves a generated key without relying on logs or disclosing its strength", () => {
+  const page = markup(renderUnlock({ assets, nonce: "n", mount: "", publicUrl: "", error: false, shortKey: true }));
+  assert.match(page, /docker compose exec t3code/);
+  assert.match(page, /setup-key/);
+  assert.doesNotMatch(page, /brute-forceable|fewer than 16|grep -A1/);
 });
 
 test("anything a request controls is escaped", () => {

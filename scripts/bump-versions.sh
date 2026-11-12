@@ -84,6 +84,51 @@ for entry in $PINS; do
   fi
 done
 
+# The browser MCP tree installs from a lockfile so rebuilds resolve the same
+# tree. The Dockerfile ARGs stay the version record: keep the checked-in
+# package.json in sync with them, then re-snapshot the lockfile. --check only
+# compares, so a stale tree is reported, never refreshed.
+MCP_PINS="CHROME_DEVTOOLS_MCP_VERSION:chrome-devtools-mcp PLAYWRIGHT_MCP_VERSION:@playwright/mcp"
+if [ -f docker/browser-mcp/package.json ]; then
+  for entry in $MCP_PINS; do
+    mcp_arg="${entry%%:*}"; mcp_pkg="${entry#*:}"
+    mcp_pinned="$(grep -m1 "^ARG ${mcp_arg}=" Dockerfile | cut -d= -f2)"
+    mcp_current="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("dependencies", {}).get(sys.argv[2], ""))' docker/browser-mcp/package.json "$mcp_pkg")"
+    if [ "$mcp_current" != "$mcp_pinned" ]; then
+      drift=$((drift + 1))
+      printf '%-28s %-12s %s%-12s%s %sbehind%s\n' \
+        "browser-mcp ${mcp_pkg}" "${mcp_current:-none}" "$BOLD" "$mcp_pinned" "$RESET" "$YELLOW" "$RESET"
+      if [ "$CHECK_ONLY" = false ]; then
+        python3 - docker/browser-mcp/package.json "$mcp_pkg" "$mcp_pinned" <<'EOF'
+import json, sys
+path, pkg, version = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as handle:
+    manifest = json.load(handle)
+manifest.setdefault("dependencies", {})[pkg] = version
+with open(path, "w") as handle:
+    json.dump(manifest, handle, indent=2)
+    handle.write("\n")
+EOF
+        changed=$((changed + 1))
+      fi
+    fi
+  done
+  if [ "$CHECK_ONLY" = false ]; then
+    ( cd docker/browser-mcp && npm install --package-lock-only --no-audit --no-fund )
+  else
+    for entry in $MCP_PINS; do
+      mcp_arg="${entry%%:*}"; mcp_pkg="${entry#*:}"
+      mcp_pinned="$(grep -m1 "^ARG ${mcp_arg}=" Dockerfile | cut -d= -f2)"
+      mcp_locked="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("packages", {}).get("node_modules/" + sys.argv[2], {}).get("version", ""))' docker/browser-mcp/package-lock.json "$mcp_pkg" 2>/dev/null || true)"
+      if [ "$mcp_locked" != "$mcp_pinned" ]; then
+        drift=$((drift + 1))
+        printf '%-28s %-12s %s%-12s%s %sbehind%s\n' \
+          "browser-mcp lock ${mcp_pkg}" "${mcp_locked:-none}" "$BOLD" "$mcp_pinned" "$RESET" "$YELLOW" "$RESET"
+      fi
+    done
+  fi
+fi
+
 # gh is deliberately unpinned - GitHub's apt repo keeps only the current
 # release - so all that can drift is the floor the Dockerfile asserts against.
 # T3 Code states its own requirement in its bundle; report when that moves.

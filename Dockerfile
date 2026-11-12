@@ -265,6 +265,7 @@ COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 # ends the container when it exits, as `exec` did.
 COPY docker/run-t3.sh /usr/local/lib/t3code/run-t3.sh
 COPY docker/bin/ /usr/local/bin/
+COPY docker/lib/ /usr/local/lib/t3code/
 # Plain ESM modules shared by the setup service, the entrypoint and the shell
 # helpers: the harness manager owns install/resolve, and the provider
 # integration turns its selection into T3's per-provider `binaryPath`.
@@ -361,7 +362,6 @@ FROM core AS browser
 # web/desktop client, so a phone-only setup has no eyes without this.
 ARG CHROME_DEVTOOLS_MCP_VERSION=1.13.0
 ARG PLAYWRIGHT_MCP_VERSION=0.0.85
-USER root
 
 RUN set -eux; \
     apt-get -o Acquire::Retries=8 update; \
@@ -383,13 +383,14 @@ ENV T3CODE_SERVER_BROWSER_SANDBOX=0 \
     PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 # Image infrastructure like T3 itself: root-owned so an agent cannot rewrite
 # the server it launches, with the entry points linked into /usr/local/bin so
-# the bare names t3-browser-mcp registers resolve for every user.
+# the bare names t3-browser-mcp registers resolve for every user. The tree is
+# reproducible: docker/browser-mcp pins the resolved versions and npm ci
+# installs exactly that tree (refresh it with scripts/bump-versions.sh).
+COPY docker/browser-mcp/package.json docker/browser-mcp/package-lock.json /opt/t3-mcp/
 RUN set -eux; \
-    npm install -g --no-audit --no-fund --prefix /opt/t3-mcp \
-        "chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}" \
-        "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}"; \
+    npm ci --prefix /opt/t3-mcp --no-audit --no-fund; \
     npm cache clean --force; \
-    for bin in /opt/t3-mcp/bin/*; do ln -sfn "$bin" /usr/local/bin/; done; \
+    for bin in chrome-devtools chrome-devtools-mcp playwright-mcp; do ln -sfn "/opt/t3-mcp/node_modules/.bin/$bin" /usr/local/bin/"$bin"; done; \
     chown -R root:root /opt/t3-mcp; \
     chmod -R go-w /opt/t3-mcp; \
     playwright-mcp --help >/dev/null; \

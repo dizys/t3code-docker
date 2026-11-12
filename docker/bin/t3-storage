@@ -1,11 +1,9 @@
 #!/bin/bash
 # Inspect and manage storage through the setup console's shared service.
 set -euo pipefail
-inherited_path="$PATH"
-[ "$EUID" -ne 0 ] || PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-if [ "$EUID" -eq 0 ] && command -v gosu >/dev/null 2>&1 && id t3 >/dev/null 2>&1; then
-  exec env PATH="$inherited_path" "$(command -v gosu)" t3 "$0" "$@"
-fi
+# Shared root step-down (PATH reset + gosu re-exec): docker/lib/step-down.sh.
+# shellcheck source=../lib/step-down.sh
+. "${T3_STEP_DOWN_LIB:-/usr/local/lib/t3code}/step-down.sh"
 # shellcheck source=/dev/null
 [ -r /etc/profile.d/t3-user-env.sh ] && . /etc/profile.d/t3-user-env.sh
 : "${T3_INFRA_NODE:=/usr/local/bin/node}"

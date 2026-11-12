@@ -57,6 +57,7 @@ else process.exit(1);
   const env = { ...process.env, HOME: home, T3CODE_HOME: path.join(home, '.t3'), CLAUDE_CONFIG_DIR: path.join(home, '.claude'), T3_WORKSPACE: root,
     T3_SETUP_KEY: 'fixture', T3_SETUP_KEY_SOURCE: 'env', T3_SETUP_PORT: String(port), T3CODE_PORT: String(native.address().port),
     T3_INFRA_LAUNCHER: launcher, T3_HARNESS_MODULE: fileURLToPath(new URL('../docker/harness/index.mjs', import.meta.url)),
+    T3_STEP_DOWN_LIB: fileURLToPath(new URL('../docker/lib', import.meta.url)),
     MISE_DATA_DIR: path.join(root, 'mise-data'), MISE_STATE_DIR: path.join(root, 'mise-state'), MISE_CONFIG_DIR: path.join(root, 'mise-config') };
   const child = spawn(process.execPath, [fileURLToPath(new URL('../docker/setup/server.mjs', import.meta.url))], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = ''; child.stdout.on('data', x => { logs += x; }); child.stderr.on('data', x => { logs += x; });

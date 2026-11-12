@@ -15,15 +15,9 @@
 # you do here shows up there, and whatever you do there shows up here.
 set -euo pipefail
 
-# Root runs nothing through the PATH it was handed: under `docker exec` that is
-# the container's own, which a container recreated from an older image may have
-# carried over (see the entrypoint). The step-down gives it back to t3.
-inherited_path="$PATH"
-[ "$EUID" -ne 0 ] || PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-if [ "$EUID" -eq 0 ] && command -v gosu >/dev/null 2>&1 && id t3 >/dev/null 2>&1; then
-  exec env PATH="$inherited_path" "$(command -v gosu)" t3 "$0" "$@"
-fi
+# Shared root step-down (PATH reset + gosu re-exec): docker/lib/step-down.sh.
+# shellcheck source=../lib/step-down.sh
+. "${T3_STEP_DOWN_LIB:-/usr/local/lib/t3code}/step-down.sh"
 
 SETUP_PORT="${T3_SETUP_PORT:-3774}"
 API="http://127.0.0.1:${SETUP_PORT}"

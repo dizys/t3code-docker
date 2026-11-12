@@ -10,7 +10,7 @@ const run = (ids) => spawnSync("bash", ["-c", `
   id() { return 99; }
   export -f realpath id
   exec bash "$1"
-`, "fixture", entrypoint], { encoding: "utf8", env: { PATH: process.env.PATH, T3_RUN_DIR: "/tmp/t3-boot-test/run", ...ids } });
+`, "fixture", entrypoint], { encoding: "utf8", env: { PATH: process.env.PATH, T3_RUN_DIR: "/tmp/t3-boot-test/run", T3_STEP_DOWN_LIB: fileURLToPath(new URL("../docker/lib", import.meta.url)), ...ids } });
 
 test("invalid owner ids fail before account tools or volume changes", () => {
   for (const name of ["PUID", "PGID"]) for (const value of ["-1", "abc", "1 2", "1\n2", "4294967295", "9".repeat(100)]) {

@@ -38,7 +38,8 @@ async function fixture() {
     async call(command, ...args) {
       const result = await run("bash", [cli, command, "muse", ...args, "--json"], {
         env: { ...process.env, HOME: home, T3_INFRA_NODE: process.execPath,
-          T3_HARNESS_MODULE: manager, T3_PROVIDER_MODULE: provider },
+          T3_HARNESS_MODULE: manager, T3_PROVIDER_MODULE: provider,
+          T3_STEP_DOWN_LIB: fileURLToPath(new URL("../docker/lib", import.meta.url)) },
         timeout: 10_000,
       });
       return JSON.parse(result.stdout);

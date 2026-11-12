@@ -10,6 +10,9 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_T3="$ROOT/docker/run-t3.sh"
+# The entrypoint and helpers source the shared step-down from the image path;
+# point them at the checkout instead.
+export T3_STEP_DOWN_LIB="$ROOT/docker/lib"
 
 pass=0
 fail=0
@@ -147,6 +150,53 @@ wait_for 5 '[ -f "$TMP_SUBDIR/t3.pid" ]' \
 kill -TERM "$sup" 2>/dev/null || true
 wait "$sup" 2>/dev/null || true
 rm -rf "$TMP_SUBDIR"
+
+# Project registration walks every checkout and shells out to node per repo, so
+# it must not delay the server: the entrypoint backgrounds it and execs the
+# supervisor immediately.
+entrypoint_text="$(cat "$ROOT/docker/entrypoint.sh")"
+case "$entrypoint_text" in
+  *"( register_projects || true ) &"*)
+    ok "project registration is backgrounded" ;;
+  *) no "project registration is backgrounded" ;;
+esac
+reg_fn="$(sed -n '/^register_projects() {/,/^}/p' "$ROOT/docker/entrypoint.sh")"
+if [ -z "$reg_fn" ]; then
+  no "register_projects is still defined in the entrypoint"
+else
+  ok "register_projects is still defined in the entrypoint"
+  REG_WORK="$(mktemp -d)"
+  mkdir -p "$REG_WORK/ws/repo/.git" "$REG_WORK/ws/empty"
+  cat > "$REG_WORK/launcher" <<'EOF'
+#!/usr/bin/env bash
+sleep 2
+printf '%s\n' "$*" >> "${REG_CALLS:?}"
+EOF
+  chmod +x "$REG_WORK/launcher"
+  : > "$REG_WORK/calls"
+  eval "$reg_fn"
+  start="$SECONDS"
+  REG_CALLS="$REG_WORK/calls" T3_AUTO_ADD_PROJECTS=1 T3_WORKSPACE="$REG_WORK/ws" \
+    T3_INFRA_LAUNCHER="$REG_WORK/launcher" \
+    bash -c 'log() { :; }; eval "$0"; ( register_projects || true ) &' "$reg_fn"
+  elapsed=$((SECONDS - start))
+  [ "$elapsed" -lt 2 ] \
+    && ok "a slow launcher does not block boot" \
+    || no "a slow launcher does not block boot (took ${elapsed}s)"
+  for _ in $(seq 1 50); do
+    [ -s "$REG_WORK/calls" ] && break
+    sleep 0.1
+  done
+  grep -qF "project add $REG_WORK/ws/repo" "$REG_WORK/calls" \
+    && ok "the backgrounded run still registers every checkout" \
+    || no "the backgrounded run still registers every checkout"
+  if grep -q "empty" "$REG_WORK/calls"; then
+    no "directories without a checkout stay unregistered"
+  else
+    ok "directories without a checkout stay unregistered"
+  fi
+  rm -rf "$REG_WORK"
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

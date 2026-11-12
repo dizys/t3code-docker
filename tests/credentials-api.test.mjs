@@ -69,7 +69,7 @@ test('saved API token works through the CLI and connection test without returnin
   const rejected = await f.request('/credentials/test', { id: 'project-api', revision: saved.credential.revision });
   assert.equal(rejected.status, 200); assert.equal((await rejected.clone().json()).result.code, 'rejected'); assert.equal((await rejected.text()).includes(secret), false);
   failAuth = false;
-  const helperEnv = { ...f.env, T3_INFRA_NODE: process.execPath, T3_VAULT_CLI: fileURLToPath(new URL('../docker/setup/credentials/cli.mjs', import.meta.url)) };
+  const helperEnv = { ...f.env, T3_INFRA_NODE: process.execPath, T3_VAULT_CLI: fileURLToPath(new URL('../docker/setup/credentials/cli.mjs', import.meta.url)), T3_STEP_DOWN_LIB: fileURLToPath(new URL('../docker/lib', import.meta.url)) };
   const vault = fileURLToPath(new URL('../docker/bin/t3-vault', import.meta.url));
   const child = spawn('/bin/bash', [vault, 'http', 'project-api', 'POST', 'projects', '--stdin'], { env: helperEnv, stdio: ['pipe', 'pipe', 'pipe'] });
   let out = '', err = ''; child.stdout.on('data', chunk => { out += chunk; }); child.stderr.on('data', chunk => { err += chunk; });

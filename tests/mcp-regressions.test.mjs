@@ -180,7 +180,7 @@ test("the browser CLI and console can alternate without duplicate TOML or ignore
   await fs.writeFile(resolver, `console.log(${JSON.stringify(path.join(bin, 'managed'))});`);
   const adapters = new URL('../docker/setup/mcp/adapters.mjs', import.meta.url).href;
   const command = fileURLToPath(new URL('../docker/bin/t3-browser-mcp', import.meta.url));
-  const env = {...process.env,...f.env,PATH:bin+path.delimiter+process.env.PATH,T3_INFRA_NODE:process.execPath,T3_PROVIDER_CLI:resolver,T3_MCP_ADAPTERS_MODULE:adapters,CODEX_HOME:path.join(f.home,'.codex'),XDG_CONFIG_HOME:path.join(f.home,'.config'),OPENCODE_CONFIG_DIR:path.join(f.home,'.config/opencode')};
+  const env = {...process.env,...f.env,PATH:bin+path.delimiter+process.env.PATH,T3_INFRA_NODE:process.execPath,T3_PROVIDER_CLI:resolver,T3_MCP_ADAPTERS_MODULE:adapters,T3_STEP_DOWN_LIB:fileURLToPath(new URL('../docker/lib',import.meta.url)),CODEX_HOME:path.join(f.home,'.codex'),XDG_CONFIG_HOME:path.join(f.home,'.config'),OPENCODE_CONFIG_DIR:path.join(f.home,'.config/opencode')};
   delete env.CLAUDE_CONFIG_DIR;
   const ocFile=path.join(f.home,'.config/opencode/opencode.jsonc');
   await fs.mkdir(path.dirname(ocFile),{recursive:true});await fs.writeFile(ocFile,'{\n// keep\n"mcp":{"servers":{}}\n}\n');

@@ -25,6 +25,7 @@ const MODEL = path.join(ROOT, "docker/setup/client/model.js");
 const KIT = path.join(ROOT, "docker/setup/client/kit.js");
 const CSS = path.join(ROOT, "docker/setup/console.css");
 const CLI = path.join(ROOT, "docker/bin/t3-harness");
+const STEP_DOWN = path.join(ROOT, "docker/lib/step-down.sh");
 
 const findings = [];
 const pass = [];
@@ -138,10 +139,11 @@ check("CLI documents its exit codes",
   has(CLI, "Exit codes"),
   "document 0 ok / 1 failed / 2 usage / 4 no module");
 check("CLI drops privileges and sources the user environment",
-  has(CLI, '"$(command -v gosu)" t3') && has(CLI, "t3-user-env.sh"),
+  has(CLI, "step-down.sh") && has(CLI, "t3-user-env.sh")
+    && has(STEP_DOWN, '"$(command -v gosu)" t3'),
   "docker exec as root must step down to t3 with MISE_* set");
 check("CLI resolves nothing through the PATH root was handed",
-  has(CLI, "#!/bin/bash") && has(CLI, '[ "$EUID" -ne 0 ] || PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'),
+  has(CLI, "#!/bin/bash") && has(STEP_DOWN, '[ "$EUID" -ne 0 ] || PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'),
   "bash by absolute path, and the system PATH for the root step");
 
 // -- 5. live schema (optional) --------------------------------------------------

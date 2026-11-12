@@ -5,15 +5,18 @@ set -euo pipefail
 log() { printf '[t3code] %s\n' "$*" >&2; }
 
 # The root half below resolves commands only through the image's own system
-# directories. The PATH it inherits is the container's, and a container
-# recreated from an older image can carry that image's PATH, which listed
-# directories the t3 user can write ahead of the system ones. The inherited PATH
-# is handed back to the unprivileged half, where the user environment
-# (docker/user-env.sh) drops what that older image added.
-inherited_path="$PATH"
-if [ "$EUID" -eq 0 ]; then
-  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-fi
+# directories (shared with the docker/bin helpers in docker/lib/step-down.sh).
+# The PATH it inherits is the container's, and a container recreated from an
+# older image can carry that image's PATH, which listed directories the t3 user
+# can write ahead of the system ones. The inherited PATH is handed back to the
+# unprivileged half, where the user environment (docker/user-env.sh) drops what
+# that older image added. The privileged half steps down explicitly after the
+# remap below, so take only the PATH reset here.
+# shellcheck disable=SC2034 # read by the sourced step-down fragment.
+T3_STEP_DOWN_DEFER=1
+# shellcheck source=lib/step-down.sh
+. "${T3_STEP_DOWN_LIB:-/usr/local/lib/t3code}/step-down.sh"
+unset T3_STEP_DOWN_DEFER
 
 T3_USER=t3
 T3_HOME=/home/t3
@@ -211,6 +214,7 @@ if [ "$(id -u)" -eq 0 ]; then
   # It never opens custom configuration before the worker's full step-down.
   # One-off entrypoint commands keep their existing behavior.
   if [ "${1:-}" = "t3-serve" ] && [ -f /opt/t3-services/init.mjs ]; then
+    # shellcheck disable=SC2154 # assigned by the sourced step-down fragment.
     exec env PATH="$inherited_path" /usr/local/bin/node /opt/t3-services/init.mjs "$@"
   fi
 
@@ -306,7 +310,10 @@ register_projects() {
   done
 }
 
-register_projects
+# Registration shells out to node once per checkout, which outlasts boot on a
+# large mount. Like the preinstall below it runs in the background: the server
+# execs immediately and projects appear as they register.
+( register_projects || true ) &
 
 # Agent credentials default to $HOME - ~/.claude, ~/.codex and friends - which
 # only survives a recreate if the whole home is mounted. The state directory is

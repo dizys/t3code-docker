@@ -33,6 +33,7 @@ on amd64.
 | --- | --- |
 | Setup layout or interactions | [Console development](docs/development/console.md) and [browser audits](docs/development/ui-audits.md) |
 | Agents, toolchains, auth, MCP, gateways or Vault | [Feature and native checks](docs/development/testing.md#native-feature-checks) |
+| Services, networking or Tailscale | [Managed service checks](docs/development/testing.md#managed-services-and-tailscale) |
 | Container-specific native T3 behavior | [Maintaining native T3 patches](docs/native-runtime-patches.md) |
 | Tags, release evidence and registry delivery | [Making a release](docs/development/releases.md) |
 

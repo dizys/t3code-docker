@@ -105,6 +105,9 @@ case "${1:-}" in
   stop|unexpose)
     port="${2:-}"
     [ -n "$port" ] || { echo "usage: t3-expose stop <port>" >&2; exit 2; }
+    case "$port" in
+      ''|*[!0-9]*) echo "t3-expose: '$port' is not a port number" >&2; exit 2 ;;
+    esac
     answer POST /ports/unexpose "{\"port\":${port}}"
     if [ "$(printf '%s' "$out" | jq -r '.ok // false')" = "true" ]; then
       printf 'Stopped publishing port %s.\n' "$port"

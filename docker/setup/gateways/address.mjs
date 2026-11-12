@@ -17,7 +17,41 @@ const stripBrackets = host => host.replace(/^\[|\]$/g, '');
 
 export function isLoopback(hostname) {
   const host = stripBrackets(String(hostname ?? '').toLowerCase());
-  return host === 'localhost' || host === '::1' || host === '0.0.0.0' || host.endsWith('.localhost') || /^127(?:\.\d{1,3}){3}$/.test(host);
+  return host === 'localhost' || host === '::1' || host === '0.0.0.0' || host === '::' || host.endsWith('.localhost') || /^127(?:\.\d{1,3}){3}$/.test(host);
+}
+
+/** Link-local and cloud metadata: 169.254.169.254 answers where a gateway never should. */
+export function isMetadata(hostname) {
+  const host = stripBrackets(String(hostname ?? '').toLowerCase());
+  const m = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host);
+  return Boolean(m) && Number(m[1]) === 169 && Number(m[2]) === 254;
+}
+
+/** A Compose service name or LAN host: no dot, no colon, just letters, digits and dashes. */
+export function isSingleLabel(hostname) {
+  const host = stripBrackets(String(hostname ?? '').toLowerCase());
+  return /^[a-z0-9-]+$/i.test(host);
+}
+
+/** Addresses that need an explicit "Private host" tick before a key goes near them. */
+export function needsPrivateConfirm(hostname) {
+  const host = stripBrackets(String(hostname ?? '').toLowerCase());
+  if (!host) return false;
+  return isLoopback(host) || isMetadata(host) || isSingleLabel(host);
+}
+
+/** A DNS answer that must never receive a key without a confirm, even for a public name. */
+export function isBlockedIp(ip) {
+  const v = stripBrackets(String(ip ?? '').toLowerCase());
+  const m = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(v);
+  if (m) {
+    const a = Number(m[1]), b = Number(m[2]);
+    if (a === 127) return true;
+    if (a === 0 && b === 0 && Number(m[3]) === 0 && Number(m[4]) === 0) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+  }
+  return v === '::1' || v === '::' || v === '::ffff:127.0.0.1' || v === '::ffff:0.0.0.0';
 }
 
 /** Addresses that stay on a machine or a private network, where plain http is ordinary. */
@@ -42,9 +76,12 @@ const assumedScheme = text => {
 
 /**
  * Read an address. Answers `{ ok, url, host, notes, insecure, loopback }`, or
- * `{ ok: false, error }` with a sentence for the field.
+ * `{ ok: false, error, code }` with a sentence for the field.
+ * Loopback, 0.0.0.0, link-local/metadata and single-label names need
+ * `{ allowPrivateHost: true }`, the tick of an explicit "Private host" confirm.
  */
-export function parseAddress(input) {
+export function parseAddress(input, options = {}) {
+  const { allowPrivateHost = false } = options ?? {};
   const text = String(input ?? '').trim();
   if (!text) return { ok: false, error: 'Enter your gateway’s address.' };
   if (text.length > MAX_URL || /[\s\0]/.test(text)) return { ok: false, error: 'Enter a single address, without spaces.' };
@@ -61,9 +98,14 @@ export function parseAddress(input) {
     notes.push(`Removed ${pathname.slice(trimmed.length)}. Each agent adds the path it needs.`);
     pathname = trimmed;
   }
+  const hostname = stripBrackets(parsed.hostname);
+  if (!allowPrivateHost && needsPrivateConfirm(hostname)) {
+    return { ok: false, code: 'private-host', hostname, host: parsed.host,
+      error: `“${hostname}” looks like a private host. Tick “Private host” to confirm this address is yours.` };
+  }
   // Codex's launch arguments are single-quoted, and URLs leave an apostrophe as it is.
   const url = parsed.origin + pathname.replaceAll("'", '%27');
-  return { ok: true, url, host: parsed.host, hostname: stripBrackets(parsed.hostname), notes,
+  return { ok: true, url, host: parsed.host, hostname, notes,
     insecure: parsed.protocol === 'http:' && !isPrivate(parsed.hostname), loopback: isLoopback(parsed.hostname) };
 }
 

@@ -30,7 +30,7 @@ const T3GatewayEditor = (() => {
         agents: new Set(editing ? [] : S.agents().filter(agent => ctx.installed(agent.id)).map(agent => agent.id)), agentsTouched: false,
         // Fixed at opening: a window that reloaded mustn't save what it read before that.
         revision: ctx.revision(), stale: false,
-        managementKey: '', limitsOpen: limits, refusedKeys: new Set(), replacingLimits: limits,
+        managementKey: '', limitsOpen: limits, refusedKeys: new Set(), replacingLimits: limits, allowPrivate: false,
       };
       if (replaceKey) view.keySource = 'type';
       active = view;
@@ -46,7 +46,7 @@ const T3GatewayEditor = (() => {
       // Nothing typed leaves the saved key in place, on the server's side.
       const keyNow = () => view.keySource === 'vault' ? { credentialId: view.credentialId } : view.keySource === 'type' && view.key.trim() ? { key: view.key.trim() } : {};
       const keyed = () => view.keySource !== 'type' || Boolean(view.key.trim()) || gateway?.key.state === 'saved';
-      const signature = () => JSON.stringify([view.url.trim(), keyNow()]);
+      const signature = () => JSON.stringify([view.url.trim(), keyNow(), view.allowPrivate]);
       const untested = () => !view.result || view.tested !== signature();
 
       const paint = () => { if (active !== view || view.layer?.closed) return; view.layer.render(); sync(); };
@@ -87,7 +87,7 @@ const T3GatewayEditor = (() => {
         if (view.testing) return view.testing;
         const asked = signature();
         view.busy = 'test'; view.result = null; view.errors = {}; view.error = null; paint();
-        view.testing = ctx.api('/gateways/test', { body: { url: view.url, ...keyNow(), ...(view.id ? { id: view.id } : {}) } }).then(response => {
+        view.testing = ctx.api('/gateways/test', { body: { url: view.url, ...keyNow(), ...(view.allowPrivate ? { allowPrivateHost: true } : {}), ...(view.id ? { id: view.id } : {}) } }).then(response => {
           view.busy = null; view.testing = null;
           if (active !== view) return null;
           // Someone kept typing: this answer is about an address that's gone, and must not put it back.
@@ -165,8 +165,8 @@ const T3GatewayEditor = (() => {
         if (active !== view || !canSubmit()) return;
         view.busy = 'save'; view.error = null; paint();
         const response = editing
-          ? await ctx.api('/gateways/save', { body: { id: view.id, revision: view.revision, gateway: { url: view.url, name: nameNow(), preset: view.preset }, ...keyNow(), ...limitsNow() } })
-          : await ctx.api('/gateways/create', { body: { revision: view.revision, gateway: { name: nameNow(), preset: view.preset, url: view.url, agents: selection() }, ...keyNow(), ...limitsNow() } });
+          ? await ctx.api('/gateways/save', { body: { id: view.id, revision: view.revision, gateway: { url: view.url, name: nameNow(), preset: view.preset }, ...keyNow(), ...limitsNow(), ...(view.allowPrivate ? { allowPrivateHost: true } : {}) } })
+          : await ctx.api('/gateways/create', { body: { revision: view.revision, gateway: { name: nameNow(), preset: view.preset, url: view.url, agents: selection() }, ...keyNow(), ...limitsNow(), ...(view.allowPrivate ? { allowPrivateHost: true } : {}) } });
         view.busy = null;
         if (active !== view) return;
         if (!response.ok) return handleFailure(response);
@@ -204,6 +204,7 @@ const T3GatewayEditor = (() => {
           if (held?.ok) return html`<div class="tc-gw-check" data-tone="ok" data-key="gw-check">${icon('circle-check')}<span class="tc-gw-check-text"><strong>Connected</strong><span>${[held.listed ? S.models(held.count) : '', 'tested ' + T3Model.relTime(held.at, Date.now())].filter(Boolean).join(' · ')}</span></span><button class="tc-btn tc-btn--ghost tc-btn--xs" type="button" data-key="gw-test" data-gw-editor="test">Test again</button></div>`;
           return html`<div class="tc-gw-check" data-key="gw-check">${icon('circle-dashed')}<span class="tc-gw-check-text"><strong>Not tested yet</strong><span>From this container, and it can’t spend tokens.</span></span><button class="tc-btn tc-btn--xs" type="button" data-key="gw-test" data-gw-editor="test"${disabled(!view.url.trim())}>Test</button></div>`;
         }
+        if (result.code === 'private-host') return html`<div class="tc-gw-check" data-tone="danger" data-key="gw-check" role="alert">${icon('circle-alert')}<span class="tc-gw-check-text"><strong>Confirm “${result.confirmHost || result.host || view.url.trim()}” before any key is sent</strong>${result.hint ? html`<span>${result.hint}</span>` : ''}<label class="tc-gw-private"><input class="tc-checkbox" type="checkbox" data-gw-private${view.allowPrivate ? raw(' checked') : ''}>Private host — I confirm this address is mine</label></span><button class="tc-btn tc-btn--xs" type="button" data-key="gw-test" data-gw-editor="test">Test again</button></div>`;
         if (!result.ok) return html`<div class="tc-gw-check" data-tone="danger" data-key="gw-check" role="alert">${icon('circle-alert')}<span class="tc-gw-check-text"><strong>${result.message}</strong>${result.hint ? html`<span>${result.hint}</span>` : ''}</span>${result.fix?.url ? html`<button class="tc-btn tc-btn--xs" type="button" data-key="gw-fix" data-gw-editor="fix" data-url="${result.fix.url}">${result.fix.label}</button>` : html`<button class="tc-btn tc-btn--xs" type="button" data-key="gw-test" data-gw-editor="test">Test again</button>`}</div>`;
         const product = result.product && S.presetOf(result.product) ? S.presetOf(result.product).name : null;
         const facts = [result.ms + ' ms', result.models.listed ? S.models(result.models.ids.length) : 'No model list', product].filter(Boolean);
@@ -225,7 +226,12 @@ const T3GatewayEditor = (() => {
         const found = conflict();
         return found && !found.active ? html`<div class="tc-notice tc-notice--warn" role="status" data-key="gw-editor-conflict">${icon('triangle-alert')}<div class="tc-notice-body"><strong class="tc-notice-title">Claude Code’s settings file would override this</strong><span class="tc-notice-desc">${S.conflictSentence(found)}</span></div><button class="tc-btn tc-btn--sm" type="button" data-key="gw-editor-fix" data-gw-editor="fix-conflict" data-id="${found.id}">Review…</button></div>` : '';
       };
-      const main = () => html`${view.error ? html`<div class="tc-notice tc-notice--danger" role="alert">${icon('circle-alert')}<div class="tc-notice-body"><strong class="tc-notice-title">That didn’t finish</strong><span class="tc-notice-desc">${view.error}</span></div>${view.stale ? html`<button class="tc-btn tc-btn--sm" type="button" data-key="gw-reopen" data-gw-editor="reopen">Reopen</button>` : ''}</div>` : ''}${conflictBlock()}<div class="tc-form">${editing ? '' : presetPicker()}${addressField()}${keyField()}${check()}${nameField()}${limitsField()}</div>`;
+      const privateField = () => {
+        const needs = view.result?.code === 'private-host' || /Private host/.test(view.errors.url || '');
+        if (!needs && !view.allowPrivate) return '';
+        return html`<div class="tc-form-field" data-key="gw-field-private"><label class="tc-gw-private"><input class="tc-checkbox" type="checkbox" data-gw-private${view.allowPrivate ? raw(' checked') : ''}>Private host — I confirm this address is mine</label><p class="tc-hint">Local names, loopback and 169.254.x.x never get your key until you tick this.</p></div>`;
+      };
+      const main = () => html`${view.error ? html`<div class="tc-notice tc-notice--danger" role="alert">${icon('circle-alert')}<div class="tc-notice-body"><strong class="tc-notice-title">That didn’t finish</strong><span class="tc-notice-desc">${view.error}</span></div>${view.stale ? html`<button class="tc-btn tc-btn--sm" type="button" data-key="gw-reopen" data-gw-editor="reopen">Reopen</button>` : ''}</div>` : ''}${conflictBlock()}<div class="tc-form">${editing ? '' : presetPicker()}${addressField()}${privateField()}${keyField()}${check()}${nameField()}${limitsField()}</div>`;
 
       // ---- the rail --------------------------------------------------------------
       const pickRow = agent => {
@@ -282,6 +288,11 @@ const T3GatewayEditor = (() => {
       // Leaving a field is the moment it's finished. Never the management key: see above.
       panel.addEventListener('change', event => {
         if (event.target.id === 'gw-url' || event.target.id === 'gw-key') testWhenReady();
+        if (event.target.matches('[data-gw-private]')) {
+          view.allowPrivate = event.target.checked;
+          view.result = null; view.tested = ''; view.errors = {};
+          paint(); testWhenReady(); return;
+        }
         if (event.target.dataset.gwAgent) {
           view.agentsTouched = true;
           if (event.target.checked) view.agents.add(event.target.dataset.gwAgent); else view.agents.delete(event.target.dataset.gwAgent);

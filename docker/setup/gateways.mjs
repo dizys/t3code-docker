@@ -71,9 +71,10 @@ const cleanManagementKey = value => {
   if (!key || key.length > 4096 || /[^\x21-\x7e]/.test(key)) throw new GatewayError('A management key is one line of plain characters, without spaces.', 400, 'invalid', { field: 'managementKey' });
   return key;
 };
-const cleanAddress = value => {
-  const parsed = parseAddress(value);
-  if (!parsed.ok) throw new GatewayError(parsed.error, 400, 'invalid', { field: 'url' });
+const allowPrivate = input => Boolean(input?.allowPrivateHost ?? input?.gateway?.allowPrivateHost);
+const cleanAddress = (value, allowPrivateHost = false) => {
+  const parsed = parseAddress(value, { allowPrivateHost });
+  if (!parsed.ok) throw new GatewayError(parsed.error, 400, parsed.code ?? 'invalid', { field: 'url', ...(parsed.code === 'private-host' ? { confirmHost: parsed.hostname, host: parsed.host } : {}) });
   return parsed;
 };
 const cleanManual = values => {
@@ -111,16 +112,16 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
   // One change at a time: each reads T3 and the Vault, then writes both.
   const serial = work => { const run = queue.catch(() => {}).then(work); queue = run; return run; };
 
-  const fingerprint = (url, key) => createHash('sha256').update(`${url}\0${key}`).digest('hex');
-  const remember = (url, key, probe) => { probes.set(fingerprint(url, key), { at: now(), probe }); for (const [id, entry] of probes) if (now() - entry.at > PROBE_REUSE_MS) probes.delete(id); return probe; };
-  const probe = async (url, key) => remember(url, key, await probeGateway({ url, key, fetchImpl, now }));
-  const recentProbe = (url, key) => { const entry = probes.get(fingerprint(url, key)); return entry && now() - entry.at <= PROBE_REUSE_MS && entry.probe.ok ? entry.probe : null; };
+  const fingerprint = (url, key, allowPrivateHost = false) => createHash('sha256').update(`${url}\0${key}\0${allowPrivateHost ? 'private' : ''}`).digest('hex');
+  const remember = (url, key, probe, allowPrivateHost = false) => { probes.set(fingerprint(url, key, allowPrivateHost), { at: now(), probe }); for (const [id, entry] of probes) if (now() - entry.at > PROBE_REUSE_MS) probes.delete(id); return probe; };
+  const probe = async (url, key, allowPrivateHost = false) => remember(url, key, await probeGateway({ url, key, fetchImpl, now, allowPrivateHost }), allowPrivateHost);
+  const recentProbe = (url, key, allowPrivateHost = false) => { const entry = probes.get(fingerprint(url, key, allowPrivateHost)); return entry && now() - entry.at <= PROBE_REUSE_MS && entry.probe.ok ? entry.probe : null; };
   // Only a pass is remembered, so a key shown as good isn't spent on a second request.
   const hubChecks = new Map();
-  const checkHub = async (url, key, { reuse = false } = {}) => {
-    const id = fingerprint(`hub\0${url}`, key), held = hubChecks.get(id);
+  const checkHub = async (url, key, { reuse = false, allowPrivateHost = false } = {}) => {
+    const id = fingerprint(`hub\0${url}`, key, allowPrivateHost), held = hubChecks.get(id);
     if (reuse && held && now() - held.at <= PROBE_REUSE_MS) return held.result;
-    const result = await probeHub({ url, key, fetchImpl });
+    const result = await probeHub({ url, key, fetchImpl, allowPrivateHost });
     if (result.ok) hubChecks.set(id, { at: now(), result }); else hubChecks.delete(id);
     return result;
   };
@@ -332,10 +333,10 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
   // --- usage limits ---------------------------------------------------------
 
   /** Give T3 a verified key. Refused without touching anything, so T3 never polls with a bad one. */
-  const verifyHub = async (url, key, state, gateway) => {
+  const verifyHub = async (url, key, state, gateway, allowPrivateHost = false) => {
     // Someone's own hub stays theirs. Checked first, so it doesn't cost an attempt.
     if (!gateway?.limits && hubAt(url, state.hubSources)) throw new GatewayError('T3 Code already has a hub at this address.', 409, 'limits-exists', { field: 'managementKey', hint: 'Its key is changed in T3 Code’s settings.' });
-    const result = await checkHub(url, key, { reuse: true });
+    const result = await checkHub(url, key, { reuse: true, allowPrivateHost });
     if (!result.ok) throw new GatewayError(result.message, 409, 'limits', { field: 'managementKey', hint: result.hint, limits: result });
     return result;
   };
@@ -472,16 +473,23 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     if (!object(input)) throw new GatewayError('Enter a gateway address.');
     const { gateways } = await store.read();
     if (typeof input.id === 'string' && input.url === undefined) {
-      const gateway = find(gateways, input.id), result = await probe(gateway.url, await keyFor(gateway));
+      const gateway = find(gateways, input.id), result = await probe(gateway.url, await keyFor(gateway), true);
       // Only if it's still the gateway that was tested: this can finish after a save.
       await store.update(undefined, rows => rows.map(entry => entry.id === gateway.id && entry.url === gateway.url && entry.credentialId === gateway.credentialId ? { ...entry, ...observed(entry, result) } : entry));
       return { ok: true, result: { ...result, offers: offersOf(result) } };
     }
+    const privateHost = allowPrivate(input);
     const gateway = typeof input.id === 'string' ? gateways.find(entry => entry.id === input.id) : undefined;
-    const { url, notes } = cleanAddress(input.url), managementKey = cleanManagementKey(input.managementKey);
-    const result = await probe(url, await resolveKey({ key: input.key, credentialId: input.credentialId, gateway }));
+    let parsed;
+    try { parsed = cleanAddress(input.url, privateHost); }
+    catch (error) {
+      if (error?.code === 'private-host') return { ok: true, result: { at: now(), ok: false, code: 'private-host', message: error.message, hint: 'Tick “Private host” to confirm this address is yours, then test again.', confirmHost: error.extra?.confirmHost, host: error.extra?.host, models: { listed: false, ids: [], capabilities: {} }, protocols: {}, offers: {} } };
+      throw error;
+    }
+    const { url, notes } = parsed, managementKey = cleanManagementKey(input.managementKey);
+    const result = await probe(url, await resolveKey({ key: input.key, credentialId: input.credentialId, gateway }), privateHost);
     // Only with a key, only on request: see hub.mjs. A gateway that didn't answer can't vouch for one.
-    const limits = managementKey && result.ok ? await checkHub(url, managementKey) : undefined;
+    const limits = managementKey && result.ok ? await checkHub(url, managementKey, { allowPrivateHost: privateHost }) : undefined;
     return { ok: true, result: { ...result, notes, offers: offersOf(result), ...(limits ? { limits } : {}) } };
   };
 
@@ -492,14 +500,15 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
 
   const create = input => serial(async () => {
     if (!object(input?.gateway)) throw new GatewayError('Enter a gateway address.');
-    const { url } = cleanAddress(input.gateway.url), preset = presetOf(input.gateway.preset) ?? presetOf('custom');
+    const privateHost = allowPrivate(input);
+    const { url } = cleanAddress(input.gateway.url, privateHost), preset = presetOf(input.gateway.preset) ?? presetOf('custom');
     const name = cleanName(input.gateway.name || suggestName(url, preset.id === 'custom' ? null : preset.name));
     const selection = cleanSelection(input.gateway.agents ?? []), manual = cleanManual(input.gateway.manual), typed = cleanKey(input.key);
     const state = await requireT3(), { gateways, revision } = await store.read();
     if (input.revision !== undefined && input.revision !== revision) throw new GatewayError('Gateways changed in another window. Refresh before adding this one.', 409, 'conflict');
     const key = await resolveKey({ key: typed, credentialId: input.credentialId ?? undefined }), managementKey = cleanManagementKey(input.managementKey);
-    if (managementKey) await verifyHub(url, managementKey, state);
-    const result = recentProbe(url, key) ?? await probe(url, key);
+    if (managementKey) await verifyHub(url, managementKey, state, undefined, privateHost);
+    const result = recentProbe(url, key, privateHost) ?? await probe(url, key, privateHost);
     const taken = new Set([...gateways.map(entry => entry.id), ...RESERVED_IDS]), base = slug(name);
     let id = base;
     for (let index = 2; taken.has(id); index++) id = `${base.slice(0, 28).replace(/-+$/, '')}-${index}`;
@@ -519,9 +528,10 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
   const save = input => serial(async () => {
     if (!object(input?.gateway) || typeof input.id !== 'string') throw new GatewayError('Enter gateway details.');
     const state = await requireT3(), { gateways } = await current(input.revision), previous = find(gateways, input.id);
-    const { url } = cleanAddress(input.gateway.url ?? previous.url), name = cleanName(input.gateway.name ?? previous.name), typed = cleanKey(input.key);
+    const privateHost = allowPrivate(input) || input.gateway.url === undefined;
+    const { url } = cleanAddress(input.gateway.url ?? previous.url, privateHost), name = cleanName(input.gateway.name ?? previous.name), typed = cleanKey(input.key);
     const manual = input.gateway.manual === undefined ? previous.models?.manual ?? [] : cleanManual(input.gateway.manual), managementKey = cleanManagementKey(input.managementKey);
-    if (managementKey) await verifyHub(url, managementKey, state, previous);
+    if (managementKey) await verifyHub(url, managementKey, state, previous, privateHost || url === previous.url);
     let credentialId = input.credentialId === undefined ? previous.credentialId : input.credentialId, key;
     if (typed) {
       const held = credentialId && (await vault.list()).some(entry => entry.id === credentialId);
@@ -530,7 +540,7 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     } else if (credentialId !== previous.credentialId) key = await resolveKey({ credentialId: credentialId ?? null });
     const moved = url !== previous.url || key !== undefined;
     const known = key ?? (moved ? await keyFor({ credentialId }) : '');
-    const result = moved ? recentProbe(url, known) ?? await probe(url, known) : null;
+    const result = moved ? recentProbe(url, known, true) ?? await probe(url, known, true) : null;
     const next = { ...previous, name, url, credentialId, preset: presetOf(input.gateway.preset)?.id ?? previous.preset, ...(result ? observed(previous, result) : {}),
       models: { ...previous.models, manual, ...(result?.ok && result.models.listed ? { ids: cleanModelIds(result.models.ids), at: now(), capabilities: cleanCapabilities(result.models.ids, result.models.capabilities) } : {}) } };
     if (result?.ok) { next.latest = null; next.latestCapabilities = null; }
@@ -569,7 +579,7 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
     }
     const key = cleanManagementKey(input.managementKey);
     if (!key) throw new GatewayError('Enter the management key.', 400, 'invalid', { field: 'managementKey' });
-    await verifyHub(gateway.url, key, state, gateway);
+    await verifyHub(gateway.url, key, state, gateway, true);
     await writeHub(gateway, key, state);
     return { ok: true, ...await status() };
   });
@@ -605,7 +615,7 @@ export function createGatewayService({ baseDir, home, env = process.env, io, t3,
   /** Fetch the gateway's list and apply it. The person asked, so this may restart instances. */
   const refreshModels = input => serial(async () => {
     const state = await requireT3(), { gateways } = await current(input?.revision), previous = find(gateways, input.id);
-    const result = await probe(previous.url, await keyFor(previous));
+    const result = await probe(previous.url, await keyFor(previous), true);
     if (!result.ok) {
       await store.update(undefined, rows => rows.map(entry => entry.id === previous.id ? { ...entry, ...observed(entry, result) } : entry));
       return { ok: true, results: [], result, ...await status() };

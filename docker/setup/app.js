@@ -1173,8 +1173,7 @@
     const menu = view.menu || [];
     return html`<div class="tc-row tc-row--compact" data-key="connect">
       <span class="tc-tile tc-tile--icon" aria-hidden="true">${icon('globe')}</span>
-      <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name">T3 Connect</span>${badge(view.badge)}</div><span class="tc-status tc-status--prose">${view.text}</span>
-        ${shortKey ? html`<span class="tc-status tc-status--warn">This setup key has fewer than 16 characters. Use a longer key before exposing this console.</span>` : ''}</div>
+      <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name">T3 Connect</span>${badge(view.badge)}</div><span class="tc-status tc-status--prose">${view.text}</span></div>
       <div class="tc-row-actions tc-row-actions--wrap">${view.action ? html`<button class="tc-btn tc-btn--sm" type="button" data-cmd="${view.action.cmd}">${view.action.icon ? icon(view.action.icon) : ''}${view.action.label}</button>` : ''}${menu.length ? html`<button class="tc-btn tc-btn--ghost tc-btn--icon tc-btn--sm" type="button" aria-label="More for T3 Connect" aria-haspopup="menu" aria-expanded="${String(Kit.menuOpenFor('menu-connect'))}" data-cmd="connect.menu" data-key="menu-connect">${icon('ellipsis')}</button>` : ''}</div>
     </div>`;
   };

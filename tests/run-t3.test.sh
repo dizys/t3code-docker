@@ -10,6 +10,9 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_T3="$ROOT/docker/run-t3.sh"
+# The entrypoint and helpers source the shared step-down from the image path;
+# point them at the checkout instead.
+export T3_STEP_DOWN_LIB="$ROOT/docker/lib"
 
 pass=0
 fail=0
@@ -147,6 +150,82 @@ wait_for 5 '[ -f "$TMP_SUBDIR/t3.pid" ]' \
 kill -TERM "$sup" 2>/dev/null || true
 wait "$sup" 2>/dev/null || true
 rm -rf "$TMP_SUBDIR"
+
+# Project registration walks every checkout and shells out to node per repo, so
+# it must not delay the server: the entrypoint backgrounds it and execs the
+# supervisor immediately.
+entrypoint_text="$(cat "$ROOT/docker/entrypoint.sh")"
+case "$entrypoint_text" in
+  *"( register_projects_when_ready || true ) &"*)
+    ok "project registration is backgrounded" ;;
+  *) no "project registration is backgrounded" ;;
+esac
+reg_fn="$(sed -n '/^register_projects() {/,/^}/p' "$ROOT/docker/entrypoint.sh")"
+if [ -z "$reg_fn" ]; then
+  no "register_projects is still defined in the entrypoint"
+else
+  ok "register_projects is still defined in the entrypoint"
+  REG_WORK="$(mktemp -d)"
+  mkdir -p "$REG_WORK/ws/repo/.git" "$REG_WORK/ws/empty" "$REG_WORK/ws/worktree"
+  printf 'gitdir: /fixture/git\n' > "$REG_WORK/ws/worktree/.git"
+  cat > "$REG_WORK/launcher" <<'EOF'
+#!/usr/bin/env bash
+sleep 2
+printf '%s\n' "$*" >> "${REG_CALLS:?}"
+EOF
+  chmod +x "$REG_WORK/launcher"
+  : > "$REG_WORK/calls"
+  eval "$reg_fn"
+  start="$SECONDS"
+  REG_CALLS="$REG_WORK/calls" T3_AUTO_ADD_PROJECTS=1 T3_WORKSPACE="$REG_WORK/ws" \
+    T3_INFRA_LAUNCHER="$REG_WORK/launcher" \
+    bash -c 'log() { :; }; eval "$0"; ( register_projects || true ) & exec sleep 0.1' "$reg_fn"
+  elapsed=$((SECONDS - start))
+  [ "$elapsed" -lt 2 ] \
+    && ok "a slow launcher does not block boot" \
+    || no "a slow launcher does not block boot (took ${elapsed}s)"
+  for _ in $(seq 1 75); do
+    [ "$(wc -l < "$REG_WORK/calls")" -ge 2 ] && break
+    sleep 0.1
+  done
+  grep -qF "project add $REG_WORK/ws/repo" "$REG_WORK/calls" \
+    && ok "the backgrounded run still registers every checkout" \
+    || no "the backgrounded run still registers every checkout"
+  grep -qF "project add $REG_WORK/ws/worktree" "$REG_WORK/calls" \
+    && ok "registration survives parent exec and handles Git worktrees" \
+    || no "background worktree registration did not complete"
+  if grep -q "empty" "$REG_WORK/calls"; then
+    no "directories without a checkout stay unregistered"
+  else
+    ok "directories without a checkout stay unregistered"
+  fi
+  ready_fn="$(sed -n '/^register_projects_when_ready() {/,/^}/p' "$ROOT/docker/entrypoint.sh")"
+  : > "$REG_WORK/ready"
+  READY_AUDIT="$REG_WORK/ready" REG_CALLS="$REG_WORK/calls" T3_AUTO_ADD_PROJECTS=1 T3_WORKSPACE="$REG_WORK/ws" T3CODE_PORT=3773 \
+    bash -c '
+      eval "$1"
+      probes=0
+      curl() { probes=$((probes + 1)); [ "$probes" -ge 3 ]; }
+      sleep() { :; }
+      register_projects() { printf "%s\n" "$probes" > "$READY_AUDIT"; }
+      register_projects_when_ready
+    ' fixture "$ready_fn"
+  [ "$(cat "$REG_WORK/ready")" = 3 ] \
+    && ok "registration waits for server readiness before opening the database" \
+    || no "registration did not wait for readiness"
+  cat > "$REG_WORK/retry-launcher" <<'RETRY'
+#!/bin/bash
+printf '%s\n' "$*" >> "$REG_TRIES"
+if [ ! -e "$REG_ONCE" ]; then : > "$REG_ONCE"; exit 1; fi
+RETRY
+  chmod +x "$REG_WORK/retry-launcher"
+  REG_TRIES="$REG_WORK/retries" REG_ONCE="$REG_WORK/once" T3_AUTO_ADD_PROJECTS=1 T3_WORKSPACE="$REG_WORK/ws" T3_INFRA_LAUNCHER="$REG_WORK/retry-launcher" \
+    bash -c 'log() { :; }; eval "$1"; register_projects' fixture "$reg_fn"
+  [ "$(wc -l < "$REG_WORK/retries")" = 3 ] \
+    && ok "a transient project registration failure is retried without skipping other repos" \
+    || no "project registration retries did not complete"
+  rm -rf "$REG_WORK"
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

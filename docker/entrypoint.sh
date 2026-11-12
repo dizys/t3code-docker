@@ -5,15 +5,18 @@ set -euo pipefail
 log() { printf '[t3code] %s\n' "$*" >&2; }
 
 # The root half below resolves commands only through the image's own system
-# directories. The PATH it inherits is the container's, and a container
-# recreated from an older image can carry that image's PATH, which listed
-# directories the t3 user can write ahead of the system ones. The inherited PATH
-# is handed back to the unprivileged half, where the user environment
-# (docker/user-env.sh) drops what that older image added.
-inherited_path="$PATH"
-if [ "$EUID" -eq 0 ]; then
-  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-fi
+# directories (shared with the docker/bin helpers in docker/lib/step-down.sh).
+# The PATH it inherits is the container's, and a container recreated from an
+# older image can carry that image's PATH, which listed directories the t3 user
+# can write ahead of the system ones. The inherited PATH is handed back to the
+# unprivileged half, where the user environment (docker/user-env.sh) drops what
+# that older image added. The privileged half steps down explicitly after the
+# remap below, so take only the PATH reset here.
+step_down_lib=/usr/local/lib/t3code/step-down.sh
+if [ "$EUID" -ne 0 ]; then step_down_lib="${T3_STEP_DOWN_LIB:-/usr/local/lib/t3code}/step-down.sh"; fi
+# shellcheck source=lib/step-down.sh
+. "$step_down_lib" || exit 1
+t3_reset_root_path
 
 T3_USER=t3
 T3_HOME=/home/t3
@@ -211,6 +214,7 @@ if [ "$(id -u)" -eq 0 ]; then
   # It never opens custom configuration before the worker's full step-down.
   # One-off entrypoint commands keep their existing behavior.
   if [ "${1:-}" = "t3-serve" ] && [ -f /opt/t3-services/init.mjs ]; then
+    # shellcheck disable=SC2154 # assigned by the sourced step-down fragment.
     exec env PATH="$inherited_path" /usr/local/bin/node /opt/t3-services/init.mjs "$@"
   fi
 
@@ -291,9 +295,19 @@ register_projects() {
   [ -d "$T3_WORKSPACE" ] || return 0
 
   local dir
+  register_one_project() {
+    local attempt
+    for attempt in 1 2 3; do
+      if "$T3_INFRA_LAUNCHER" project add "$1" >/dev/null 2>&1; then
+        log "registered project $1"
+        return 0
+      fi
+      [ "$attempt" = 3 ] || sleep 1
+    done
+    log "could not register project $1; add it from T3 Code or retry on the next start"
+  }
   if [ -e "${T3_WORKSPACE}/.git" ]; then
-    "$T3_INFRA_LAUNCHER" project add "$T3_WORKSPACE" >/dev/null 2>&1 \
-      && log "registered project ${T3_WORKSPACE}" || true
+    register_one_project "$T3_WORKSPACE"
     return 0
   fi
 
@@ -301,12 +315,29 @@ register_projects() {
     [ -d "$dir" ] || continue
     [ -e "${dir}.git" ] || continue
     dir="${dir%/}"
-    "$T3_INFRA_LAUNCHER" project add "$dir" >/dev/null 2>&1 \
-      && log "registered project ${dir}" || true
+    register_one_project "$dir"
   done
 }
 
-register_projects
+# Registration shells out to node once per checkout, which outlasts boot on a
+# large mount. Like the preinstall below it runs in the background: the server
+# execs immediately and projects appear as they register.
+register_projects_when_ready() {
+  [ "$T3_AUTO_ADD_PROJECTS" = "1" ] || return 0
+  [ -d "$T3_WORKSPACE" ] || return 0
+  # Wait for database preparation before launching another CLI against it.
+  # This is background work; a slow migration must not hold server startup.
+  local attempt
+  for ((attempt=0; attempt<150; attempt++)); do
+    if curl -fsS --max-time 3 "http://127.0.0.1:${T3CODE_PORT}/.well-known/t3/environment" >/dev/null 2>&1; then
+      register_projects
+      return
+    fi
+    sleep 2
+  done
+  log "server did not become healthy in time; skipping automatic project registration"
+}
+( register_projects_when_ready || true ) &
 
 # Agent credentials default to $HOME - ~/.claude, ~/.codex and friends - which
 # only survives a recreate if the whole home is mounted. The state directory is

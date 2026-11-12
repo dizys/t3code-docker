@@ -27,6 +27,7 @@ if(args[1]==='list')console.log(JSON.stringify(mode.list||[]));
   await fs.writeFile(resolver, `console.log(${JSON.stringify(executable)});`);
   const env = { ...process.env, HOME: home, T3_INFRA_NODE: process.execPath, T3_PROVIDER_CLI: resolver,
     T3_HARNESS_MODULE: path.join(root, 'docker/harness/index.mjs'),
+    T3_STEP_DOWN_LIB: path.join(root, 'docker/lib'),
     XDG_DATA_HOME: path.join(home, '.local/share'), XDG_CONFIG_HOME: path.join(home, '.config'),
     XDG_STATE_HOME: path.join(home, '.local/state'), XDG_CACHE_HOME: path.join(home, '.cache') };
   for (const key of Object.keys(env)) if (/TOKEN|API_KEY|^OPENCODE/.test(key)) delete env[key];

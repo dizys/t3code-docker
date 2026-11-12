@@ -13,11 +13,13 @@
 # directory from the server's PATH, and login shells never add it.
 set -euo pipefail
 
-# Root runs nothing through the PATH it was handed: under `docker exec` that is
-# the container's own, which a container recreated from an older image may have
-# carried over (see the entrypoint). The step-down gives it back to t3.
-inherited_path="$PATH"
-[ "$EUID" -ne 0 ] || PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Shared root step-down (PATH reset + gosu re-exec): docker/lib/step-down.sh.
+step_down_lib=/usr/local/lib/t3code/step-down.sh
+if [ "$EUID" -ne 0 ]; then step_down_lib="${T3_STEP_DOWN_LIB:-/usr/local/lib/t3code}/step-down.sh"; fi
+# shellcheck source=../lib/step-down.sh
+. "$step_down_lib" || exit 1
+t3_reset_root_path
+t3_step_down "$0" "$@"
 
 name="$(basename "$0")"
 case "$name" in
@@ -25,10 +27,6 @@ case "$name" in
   cursor-agent) harness=cursor ;;
   *) echo "t3-agent: run this as claude, codex, opencode, grok, cursor-agent or muse" >&2; exit 2 ;;
 esac
-
-if [ "$EUID" -eq 0 ] && command -v gosu >/dev/null 2>&1 && id t3 >/dev/null 2>&1; then
-  exec env PATH="$inherited_path" "$(command -v gosu)" t3 "$0" "$@"
-fi
 
 : "${T3_INFRA_NODE:=/usr/local/bin/node}"
 : "${T3_PROVIDER_CLI:=/opt/t3-provider/cli.mjs}"

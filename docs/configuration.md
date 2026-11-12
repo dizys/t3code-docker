@@ -10,7 +10,7 @@ Environment variables (all optional except where noted):
 | `T3CODE_HOME` | `/home/t3/.t3` | State directory (`userdata/state.sqlite`) |
 | `T3_WORKSPACE` | `/workspace` | Absolute workspace directory, scanned for projects and used for New project, browsing and repository cloning defaults |
 | `T3CODE_PROJECTS_DIR` | `T3_WORKSPACE` | Override the native New project directory independently of the workspace |
-| `T3_AUTO_ADD_PROJECTS` | `1` | Register each git checkout under the workspace |
+| `T3_AUTO_ADD_PROJECTS` | `1` | Register each Git checkout under the workspace in the background after the server becomes ready. Startup does not wait for the scan; temporary registration failures are retried. |
 | `T3_PRINT_PAIRING_ON_START` | `0` | Create a pairing link at startup and print it to the log |
 | `T3_PREINSTALL` | `default` | What the first start installs onto the volume: `default` (Claude Code, Codex, OpenCode and the toolchains), `all` (every agent and toolchain), `agents`, `toolchains`, `source-control` (glab, fj, tea, az), ids like `claude,go,glab`, or `none`. They combine (`default,source-control`); one on its own replaces the default |
 | `T3_PAIR_TTL` | `30d` | How long links from `t3-pair` can be used |

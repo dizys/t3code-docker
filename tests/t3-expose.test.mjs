@@ -21,7 +21,7 @@ const run = (t, ...args) => {
   t.after(() => rmSync(home, { recursive: true, force: true }));
   try {
     execFileSync("bash", [EXPOSE, ...args], {
-      env: { PATH: "/usr/bin:/bin", T3_SETUP_KEY: "fixture-setup-key", T3CODE_HOME: home },
+      env: { PATH: "/usr/bin:/bin", T3_SETUP_KEY: "fixture-setup-key", T3CODE_HOME: home, T3_STEP_DOWN_LIB: fileURLToPath(new URL("../docker/lib", import.meta.url)) },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
     });
     return { status: 0, stdout: "", stderr: "" };

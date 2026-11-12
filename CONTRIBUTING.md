@@ -22,6 +22,11 @@ docker build --target browser -t t3code:browser .
 ./scripts/smoke-test.sh t3code:browser
 ```
 
+The browser MCP dependency tree lives in `docker/browser-mcp`. Run
+`scripts/bump-versions.sh` to update its manifest and lockfile with the Dockerfile
+pins. Browser MCP build arguments must match those checked-in files; a mismatch
+fails the build instead of silently installing a different version.
+
 **The smoke suite defines what must keep working.** It checks the running
 container from a user's perspective. Add a regression for the behavior you fix.
 CI tests both `core` and `browser` on amd64 and arm64, plus the agent lifecycle

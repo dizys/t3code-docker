@@ -338,6 +338,24 @@ const SECRET = 'sk-audit-secret-value', MANAGEMENT = 'management-audit-value';
 
       // ---- whatever needs a person says so, with the one thing to do --------------
       step('whatever needs a person says so, with the one thing to do');
+      installed = ['claude', 'codex', 'opencode', 'pi'];
+      await reload('pi-error');
+      if (!phone) {
+        const retry = target.locator('[data-key="gw-fix-cliproxy"]');
+        await retry.waitFor();
+        assert.equal(await retry.innerText(), 'Try again…');
+        await target.locator('[data-key="gw-cliproxy-grok"]').getByText('Not installed').waitFor();
+        const spacing = await target.evaluate(() => {
+          const row = document.querySelector('.tc-gw-row');
+          const grok = row.querySelector('[data-key="gw-cliproxy-grok"]').getBoundingClientRect();
+          const actions = row.querySelector('.tc-gw-actions').getBoundingClientRect();
+          const buttons = [...row.querySelectorAll('.tc-gw-actions > button')].map(node => node.getBoundingClientRect());
+          return buttons.every(button => button.left >= actions.left && button.left >= grok.right && button.right <= actions.right);
+        });
+        assert.ok(spacing, 'Retry and menu stay inside their column, clear of Grok’s Not installed cell');
+        await noOverflow('pi-error'); await shot('pi-error');
+      }
+      installed = ['claude', 'codex', 'opencode', 'pi', 'grok'];
       await reload('attention');
       if (!phone) {
         await target.getByText('settings file overrides gateways').waitFor();

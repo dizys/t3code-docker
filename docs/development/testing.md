@@ -15,6 +15,7 @@ node --test tests/*.test.mjs
 node scripts/harness-ui-audit.js
 scripts/generate-mise-idiomatic.sh --check
 docker compose config >/dev/null
+docker compose -f compose.yaml -f compose.tailscale.yaml config >/dev/null
 ```
 
 You can also run the source suite with `bun test tests/*.test.mjs`. Keep Node 24
@@ -78,6 +79,29 @@ Invalid worker counts and empty selections fail.
 Use exact executable paths. These scripts use disposable homes and local
 fixtures, without paid inference. Run the relevant native check when a change
 affects how an agent reads configuration, credentials or resources.
+
+### Managed services and Tailscale
+
+```bash
+node --test tests/services*.test.mjs tests/tailscale-networking.test.mjs
+node scripts/services-ui-audit.mjs
+scripts/test-services-e2e.sh t3code:core
+scripts/test-services-tailscale-e2e.sh t3code:core
+```
+
+The Tailscale acceptance test requires a Linux Docker host with `/dev/net/tun`
+and nftables support. It creates two disposable containers, separate persistent
+volumes and a private network with a digest-pinned Headscale test controller.
+Its generated credentials stay in temporary files and are removed with the
+containers. It never uses a production tailnet or user credential.
+
+Real pinned Tailscale daemons exercise IPv4/IPv6 TCP and UDP, HTTP, HTTPS with a
+fixture CA, MagicDNS full/short names, Docker/public DNS, explicit TCP Serve
+and blocked implicit listeners. It checks daemon failure, container restart
+and recreation, retained device identity and service registrations, exact DNS
+restoration, other services staying up, and disabled startup. CI runs it on
+native amd64 and arm64 `core` images; the shared Services/browser suites also
+run on both image variants.
 
 ### MCP and agent resources
 

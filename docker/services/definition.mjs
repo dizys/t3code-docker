@@ -76,9 +76,11 @@ export function systemDefinition(id, input) {
     return { name: "SSH", port: input.port ?? 2222, listen: input.listen ?? "127.0.0.1", keys: input.keys.map(key => text(key, 16384, "keys")), enabled: Boolean(input.enabled), restart: "on-failure", shutdownMs: 10000, health: { kind: "tcp", port: input.port ?? 2222, intervalMs: 15000, graceMs: 5000 }, endpoints: [{ protocol: "ssh", port: input.port ?? 2222 }] };
   }
   if (id === "tailscale") {
-    object(input, ["hostname", "enabled"]);
+    object(input, ["hostname", "enabled", "networkMode"]);
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(input.hostname ?? "t3code")) fail("Use a DNS hostname for this tailnet device.", "hostname");
-    return { name: "Tailscale", hostname: input.hostname ?? "t3code", enabled: Boolean(input.enabled), restart: "on-failure", shutdownMs: 10000, endpoints: [], health: { kind: "process", intervalMs: 15000, graceMs: 5000 } };
+    if (!["userspace", "kernel"].includes(input.networkMode ?? "userspace")) fail("Choose published routes only or full container networking.", "networkMode");
+    if (input.enabled !== undefined && typeof input.enabled !== 'boolean') fail('Choose whether to enable Tailscale.', 'enabled');
+    return { name: "Tailscale", hostname: input.hostname ?? "t3code", networkMode: input.networkMode ?? "userspace", enabled: Boolean(input.enabled), restart: "on-failure", shutdownMs: 10000, endpoints: [], health: { kind: "process", intervalMs: 15000, graceMs: 5000 } };
   }
   if (id === "cloudflared") {
     object(input, ["token", "enabled"]);

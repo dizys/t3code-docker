@@ -11,6 +11,8 @@ import { withToolLock } from "./tool-lock.mjs";
 import { systemStorage, readCatalogue, createArtifacts } from "./artifacts.mjs";
 import * as system from "./system.mjs";
 import { serviceRequest } from "./client.mjs";
+import { createTailscaleNetworking } from './tailscale-networking.mjs';
+import { containerBoot } from './paths.mjs';
 const domain = process.argv[2];
 if (!["user", "system"].includes(domain)) process.exit(100);
 if (domain === "user") {
@@ -19,7 +21,7 @@ if (domain === "user") {
   if (!/^NoNewPrivs:\s+1$/m.test(status) || !/^CapEff:\s+0+$/m.test(status) || !/^CapPrm:\s+0+$/m.test(status)) process.exit(100);
 }
 const p = paths(domain);
-let store = null, controller = null, blocked = null;
+let store = null, controller = null, blocked = null, networking = null;
 const shutdown = new AbortController();
 try {
   if (domain === "system") await systemStorage(p.root);
@@ -27,9 +29,10 @@ try {
   const catalogue = domain === "system" ? await readCatalogue() : null;
   const artifacts = catalogue ? { ...createArtifacts({ root: p.root, catalogue, signal: shutdown.signal }), catalogue } : null;
   const supervisor = createSupervision({ ...p, domain });
+  networking = domain === 'system' ? createTailscaleNetworking({ store, boot: containerBoot() }) : null;
   const tools = domain === "user" ? createUserTools({ home: p.home, stateHome: p.root, dataDir: process.env.MISE_DATA_DIR }) : null;
   const reservedPorts = (process.env.T3_SERVICES_RESERVED_PORTS || "3773,3774").split(",").map(Number).filter(Boolean);
-  controller = createController({ store, supervisor, tools, artifacts, reservedPorts, systemSnapshot: domain === "user" ? () => serviceRequest("system", "snapshot", {}, { timeout: 2000 }) : undefined,
+  controller = createController({ store, supervisor, tools, artifacts, reservedPorts, networking, systemSnapshot: domain === "user" ? () => serviceRequest("system", "snapshot", {}, { timeout: 2000 }) : undefined,
     secrets: config => resolveSecrets(config, { home: p.home, stateHome: process.env.T3CODE_HOME || path.join(p.home, ".t3") }),
     systemRequest: domain === 'user' ? (action, input) => serviceRequest('system', action, input) : undefined,
     networkReferences: domain === 'system' ? async () => (await serviceRequest('user', 'references', {}, { timeout: 2000 })).references : undefined,
@@ -54,6 +57,7 @@ const server = createServer(async (req, res) => {
     const args = input.input || {};
     let result;
     if (input.action === "snapshot") result = await controller.snapshot();
+    else if (input.action === 'requirements' && domain === 'system') result = await controller.requirements();
     else if (input.action === "plan") result = await controller.plan(args);
     else if (input.action === "apply") result = controller.apply(args);
     else if (input.action === "operation") result = controller.operation(args.id);
@@ -84,6 +88,9 @@ const stop = async () => {
   controller?.close(); shutdown.abort(); server.close();
   // s6 owns child shutdown; do not turn a container shutdown into Disable.
   while (controller && !controller.idle()) await new Promise(resolve => setTimeout(resolve, 20));
+  // Restore DNS before closing its listener. The inbound guard remains until
+  // the daemon is confirmed stopped, including during controller replacement.
+  try { await networking?.close(); } catch { /* Durable recovery stays in the protected store. */ }
   store?.close(); await fs.rm(p.socket, { force: true }); process.exit(0);
 };
 process.on("SIGTERM", () => void stop()); process.on("SIGINT", () => void stop());

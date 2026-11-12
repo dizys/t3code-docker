@@ -167,7 +167,7 @@ export function attachPlan(release) {
 
 export async function findRelease(gh, tag) {
   try {
-    return JSON.parse(await gh(['release', 'view', tag, '-R', REPOSITORY, '--json', 'isDraft,assets']));
+    return JSON.parse(await gh(['release', 'view', tag, '-R', REPOSITORY, '--json', 'isDraft,assets,body']));
   } catch (error) {
     if (/release not found/i.test(error.stderr ?? '')) return null;
     throw error;
@@ -183,7 +183,7 @@ async function tagTitle(gh, tag) {
 }
 
 /** `files` holds `{ name, path, digest }` for each evidence file. */
-export async function attachEvidence({ tag, files, gh }) {
+export async function attachEvidence({ tag, files, gh, notes = '' }) {
   const plan = attachPlan(await findRelease(gh, tag));
   const chosen = plan.upload.map((name) => {
     const file = files.find((entry) => entry.name === name);
@@ -192,7 +192,7 @@ export async function attachEvidence({ tag, files, gh }) {
   });
   const paths = chosen.map((file) => file.path);
   if (plan.create) {
-    await gh(['release', 'create', tag, '-R', REPOSITORY, '--draft', '--verify-tag', '--title', await tagTitle(gh, tag), '--notes', '', ...(tag.includes('-') ? ['--prerelease'] : []), ...paths]);
+    await gh(['release', 'create', tag, '-R', REPOSITORY, '--draft', '--verify-tag', '--title', await tagTitle(gh, tag), '--notes', notes, ...(tag.includes('-') ? ['--prerelease'] : []), ...paths]);
   } else if (paths.length) {
     await gh(['release', 'upload', tag, '-R', REPOSITORY, ...(plan.clobber ? ['--clobber'] : []), ...paths]);
   }

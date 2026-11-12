@@ -7,6 +7,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { EVIDENCE_FILES, REPOSITORY, releaseVersion, releasePlan, publishPlan, verifyIndex, SOURCE } from './lib/dockerhub-release.mjs';
+import { contributorInventory, checkContributorAcknowledgements } from './lib/release-contributors.mjs';
 const exec = promisify(execFile);
 const run = async (command, args, timeout = 60_000) => (await exec(command, args, { timeout, maxBuffer: 4 * 1024 * 1024 })).stdout;
 const api = async (route) => JSON.parse(await run('gh', ['api', `repos/${REPOSITORY}/${route}`]));
@@ -18,6 +19,7 @@ const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 't3-dockerhub-'));
 try {
   const release = await api(`releases/tags/${encodeURIComponent(tag)}`);
   const commit = await api(`commits/${encodeURIComponent(tag)}`);
+  if (!tag.includes('-')) checkContributorAcknowledgements(release.body, await contributorInventory({ tag, sourceSha: commit.sha, api }));
   const latest = async () => (await api('releases/latest')).tag_name;
   // Only the fixed evidence files are downloaded; no code from the release
   // tag is checked out or executed in this credentialed workflow.

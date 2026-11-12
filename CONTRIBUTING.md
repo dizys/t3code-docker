@@ -70,3 +70,5 @@ Merge reviewed changes, tag the intended commit, and create a draft release.
 Publish only after CI has tested the exact images and attached evidence.
 Publication triggers Docker Hub delivery. Follow the
 [release guide](docs/development/releases.md) for the commands and verification.
+Every stable release explicitly thanks its contributors. The pipeline preserves
+original PR author credit when maintainers revise or merge their work.

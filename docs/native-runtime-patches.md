@@ -42,6 +42,8 @@ arrive before local skills, so their presence does not establish readiness. The
 wait is bounded at ten seconds; failures leave the inventory retryable instead
 of caching partial results. Warm and genuinely empty workspaces use the same
 native readiness signal.
+Current Nightly workspace paths retain upstream's resolved directory. A loaded
+location and built-in commands still cannot bypass the config plugin check.
 
 The agent resources patch loads Cursor's global instruction directory as an
 additional local SDK workspace. It preserves the primary project, existing

@@ -32,6 +32,18 @@ evidence to the draft. Before publication, verify successful checks, the tagged
 source, each platform digest and architecture, provenance, and all attached
 test and promotion evidence. `latest` uses the browser image.
 
+## Thank contributors in every stable release
+
+The evidence job adds a **Contributors** section to each stable draft. It thanks
+the original authors of merged PRs and the public commit authors since the
+previous stable version, including returning contributors. Maintainer fixes,
+rewrites and merge commits retain the original PR author's credit.
+
+Keep this generated section when editing notes or adding measurements. Before
+publishing, reconcile it with GitHub's generated notes and check that every
+contributor and PR remains credited. Docker Hub publishing checks the section
+again and refuses to copy a stable release with missing or incomplete credits.
+
 ## Publish and check delivery
 
 Publish the existing stable draft after verification:

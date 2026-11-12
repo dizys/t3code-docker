@@ -188,6 +188,13 @@ test('with no release yet, a draft is created with the evidence and the tag mess
   assert.equal(fake.state().isDraft, true);
 });
 
+test('a fallback draft retains supplied contributor acknowledgements verbatim', async () => {
+  const fake = github(), notes = '## Contributors\n\nThank you to @original-author for [#126](https://github.com/dizys/t3code-docker/pull/126).\n';
+  await attachEvidence({ tag: 'v0.18.0', files: FILES, gh: fake.gh, notes });
+  const create = fake.writes()[0];
+  assert.equal(create[create.indexOf('--notes') + 1], notes);
+});
+
 test('a lightweight tag titles the draft with its name, and a prerelease draft is marked as one', async () => {
   const lightweight = github({ tagType: 'commit' });
   await attach(lightweight);

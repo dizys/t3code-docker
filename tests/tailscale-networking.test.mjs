@@ -16,6 +16,31 @@ import { createController } from '../docker/services/controller.mjs';
 
 const original = '# Docker DNS\nnameserver 127.0.0.11\nsearch workspace.internal\noptions ndots:0 rotate\n';
 const nativeStateMatch = JSON.parse(await fs.readFile(new URL('./fixtures/nftables-ct-state.json', import.meta.url), 'utf8')).expression;
+test('real-peer crash recovery waits through cached readiness for a healthy new run and the exact exit receipt', async () => {
+  const smoke = await fs.readFile(new URL('../scripts/services-tailscale-smoke.mjs', import.meta.url), 'utf8');
+  const source = smoke.slice(smoke.indexOf('const connected ='), smoke.indexOf('\nconst publicIdentity ='));
+  const ready = runId => ({ revision: 1, observation: { state: 'running', process: { up: true }, run: { runId, boot: 'current-boot', revision: 1 }, exit: { runId: 'crashed-run', exitCode: 128 }, networking: { state: 'ready', dns: 'ready' } } });
+  const previous = ready('crashed-run'), next = ready('recovered-run');
+  const states = [
+    undefined,
+    previous,
+    { ...previous, observation: { ...previous.observation, at: Date.now() } },
+    { ...next, observation: { ...next.observation, exit: { runId: 'older-run' } } },
+    { ...next, observation: { ...next.observation, run: { ...next.observation.run, boot: 'previous-boot' } } },
+    { ...next, observation: { ...next.observation, run: { ...next.observation.run, revision: 0 } } },
+    { ...next, observation: { ...next.observation, process: { up: false } } },
+    { ...next, observation: { ...next.observation, state: 'starting' } },
+    { ...next, observation: { ...next.observation, networking: { state: 'ready', dns: 'error' } } },
+    next,
+  ];
+  let reads = 0;
+  const until = async (_label, check) => { for (let attempt = 0; attempt < states.length; attempt++) { const value = await check(); if (value) return value; } throw new Error('No recovered run'); };
+  const makeConnected = (until, tail) => new Function('until', 'tail', 'boot', source + '\nreturn connected;')(until, tail, 'current-boot');
+  const connected = makeConnected(until, async () => states[reads++]);
+  assert.equal(await connected('crashed-run'), next);
+  assert.equal(reads, states.length, 'cached or incomplete observations must not finish recovery');
+  assert.equal(await makeConnected(async (_label, check) => check(), async () => previous)(), previous, 'initial readiness does not require a prior crash');
+});
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 't3-tail-network-'));
   const store = openStore(root, { domain: 'system' }), file = path.join(root, 'resolv.conf');

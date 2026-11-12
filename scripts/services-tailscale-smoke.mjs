@@ -11,8 +11,9 @@ import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { serviceRequest } from '/opt/t3-services/client.mjs';
+import { containerBoot } from '/opt/t3-services/paths.mjs';
 
-const phase = process.argv[2], exec = promisify(execFile), receipt = '/home/t3/.t3/tailscale-fixture-receipt.json';
+const phase = process.argv[2], exec = promisify(execFile), receipt = '/home/t3/.t3/tailscale-fixture-receipt.json', boot = containerBoot();
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const call = (domain, action, input = {}) => serviceRequest(domain, action, input);
 const until = async (label, fn, timeout = 90000) => { const end = Date.now() + timeout; while (Date.now() < end) { try { const value = await fn(); if (value) return value; } catch {} await pause(200); } throw new Error('Timed out: ' + label); };
@@ -26,7 +27,16 @@ const apply = async (domain, input) => {
 };
 const edit = async action => { const current = await tail(); return apply('system', { action, id: 'tailscale', expectedRevision: current.revision }); };
 const cli = async args => exec((await tail()).artifact.path + '/tailscale', ['--socket=/run/t3code-services/tailscale.sock', ...args], { timeout: 60000, maxBuffer: 65536 });
-const connected = () => until('full networking and MagicDNS', async () => { const value = await tail(); return value?.observation.networking?.state === 'ready' && value.observation.networking.dns === 'ready' && value; });
+// Snapshots contain the last completed observation. DNS cleanup can finish
+// while a snapshot still describes the run that just crashed.
+const connected = (afterRun = null) => until('full networking and MagicDNS', async () => {
+  const value = await tail(), observed = value?.observation;
+  return observed?.networking?.state === 'ready' && observed.networking.dns === 'ready'
+    && observed.process?.up === true && ['ready', 'running'].includes(observed.state)
+    && typeof observed.run?.runId === 'string' && observed.run.runId !== afterRun
+    && observed.run.boot === boot && observed.run.revision === value.revision
+    && (!afterRun || observed.exit?.runId === afterRun) && value;
+});
 const publicIdentity = async () => { const value = JSON.parse((await cli(['status', '--json'])).stdout); assert.equal(typeof value.Self.PublicKey, 'string'); assert.ok(value.Self.PublicKey.startsWith('nodekey:')); return { key: value.Self.PublicKey, dnsName: value.Self.DNSName, ips: value.TailscaleIPs }; };
 const baselineDNS = () => {
   const db = new DatabaseSync('/var/lib/t3code/services/state.sqlite', { readOnly: true });
@@ -124,7 +134,10 @@ if (phase === 'install-peer' || phase === 'install-client') {
   process.kill(before.observation.run.payloadPid, 'SIGKILL');
   await until('crash DNS cleanup', async () => !(await fs.readFile('/etc/resolv.conf', 'utf8')).includes('Managed by t3code'), 10000);
   await ordinary();
-  const after = await connected(); assert.notEqual(after.observation.run.runId, previous);
+  const after = await connected(previous);
+  assert.notEqual(after.observation.run.runId, previous);
+  assert.equal(after.observation.exit.runId, previous);
+  assert.notEqual(after.observation.exit.exitCode, 0);
 } else if (phase === 'disabled') {
   const value = await until('disabled service observation', async () => { const value = await tail(); return value?.observation.state === 'disabled' && value; });
   assert.equal(value.enabled, false); await assert.rejects(fs.access('/sys/class/net/tailscale0')); await ordinary();

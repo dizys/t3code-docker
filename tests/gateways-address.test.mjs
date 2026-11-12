@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isLoopback, isPrivate, parseAddress, suggestName, withHost } from '../docker/setup/gateways/address.mjs';
+import { isBlockedIp, isLoopback, isMetadata, isPrivate, isSingleLabel, needsPrivateConfirm, parseAddress, suggestName, withHost } from '../docker/setup/gateways/address.mjs';
 
 test('an address is reduced to the base every agent can build on', () => {
   for (const [input, url] of [
@@ -15,17 +15,17 @@ test('an address is reduced to the base every agent can build on', () => {
     ['https://openrouter.ai/api', 'https://openrouter.ai/api'],
     ['https://openrouter.ai/api/v1', 'https://openrouter.ai/api'],
     ['https://example.com/proxy/anthropic/', 'https://example.com/proxy/anthropic'],
-  ]) assert.equal(parseAddress(input).url, url, input);
+  ]) assert.equal(parseAddress(input, { allowPrivateHost: true }).url, url, input);
 });
 
 test('a removed path is explained, and an address with nothing to remove has no note', () => {
-  assert.deepEqual(parseAddress('http://gateway:8317').notes, []);
-  assert.match(parseAddress('http://gateway:8317/v1/').notes[0], /Removed \/v1\./);
+  assert.deepEqual(parseAddress('http://gateway:8317', { allowPrivateHost: true }).notes, []);
+  assert.match(parseAddress('http://gateway:8317/v1/', { allowPrivateHost: true }).notes[0], /Removed \/v1\./);
 });
 
 test('a missing scheme is http where that is ordinary and https elsewhere', () => {
-  assert.equal(parseAddress('localhost:8317').url, 'http://localhost:8317');
-  assert.equal(parseAddress('cliproxy:8317').url, 'http://cliproxy:8317');
+  assert.equal(parseAddress('localhost:8317', { allowPrivateHost: true }).url, 'http://localhost:8317');
+  assert.equal(parseAddress('cliproxy:8317', { allowPrivateHost: true }).url, 'http://cliproxy:8317');
   assert.equal(parseAddress('192.168.1.20:4000').url, 'http://192.168.1.20:4000');
   assert.equal(parseAddress('openrouter.ai/api').url, 'https://openrouter.ai/api');
 });
@@ -42,7 +42,7 @@ test('a bad address gets a sentence that says what to change', () => {
 test('plain http is flagged only when it leaves a private network', () => {
   assert.equal(parseAddress('http://api.example.com').insecure, true);
   for (const address of ['https://api.example.com', 'http://localhost:1', 'http://10.0.0.2', 'http://172.20.0.2', 'http://192.168.0.2', 'http://100.100.1.1', 'http://cliproxy:8317', 'http://box.tail1234.ts.net', 'http://host.docker.internal:8317'])
-    assert.equal(parseAddress(address).insecure, false, address);
+    assert.equal(parseAddress(address, { allowPrivateHost: true }).insecure, false, address);
 });
 
 test('loopback means this container, which is what the connection hint turns on', () => {
@@ -61,7 +61,7 @@ test('only real IPv6 private addresses count as private, not names that look lik
 });
 
 test('an apostrophe can’t break out of Codex’s quoted launch arguments', () => {
-  assert.equal(parseAddress("http://gw:1/o'brien").url, 'http://gw:1/o%27brien');
+  assert.equal(parseAddress("http://gw:1/o'brien", { allowPrivateHost: true }).url, 'http://gw:1/o%27brien');
 });
 
 test('another host keeps the scheme, port and path', () => {
@@ -81,4 +81,29 @@ test('a pasted admin address loses its admin path, so a test can’t count as a 
     const parsed = parseAddress(input);
     assert.equal(parsed.url, url, input); assert.match(parsed.notes[0], /^Removed /);
   }
+});
+
+test('loopback, metadata and single-label names need a private-host confirm', () => {
+  for (const input of ['http://localhost:8317', 'http://127.0.0.1:8317', 'http://127.1.2.3:8317', 'http://0.0.0.0:8317', 'http://[::1]:8317', 'http://169.254.169.254', 'http://169.254.10.20:80', 'http://gateway:8317', 'cliproxy:8317', 'localhost:8317']) {
+    const rejected = parseAddress(input);
+    assert.equal(rejected.ok, false, input);
+    assert.equal(rejected.code, 'private-host', input);
+    assert.match(rejected.error, /Confirm that you trust/, input);
+    const allowed = parseAddress(input, { allowPrivateHost: true });
+    assert.equal(allowed.ok, true, input);
+  }
+  assert.equal(parseAddress('https://openrouter.ai/api').ok, true);
+  assert.equal(parseAddress('http://192.168.1.20:4000').ok, true);
+  assert.equal(parseAddress('http://10.0.0.2:4000').ok, true);
+  for (const host of ['169.254.169.254', '169.254.0.1']) assert.equal(isMetadata(host), true, host);
+  assert.equal(isMetadata('169.253.169.254'), false);
+  for (const host of ['gateway', 'cliproxy', 'localhost']) assert.equal(isSingleLabel(host), true, host);
+  assert.equal(isSingleLabel('gateway.example.com'), false);
+  assert.equal(needsPrivateConfirm('gateway'), true);
+  assert.equal(needsPrivateConfirm('openrouter.ai'), false);
+  assert.equal(isBlockedIp('127.0.0.1'), true);
+  assert.equal(isBlockedIp('0.0.0.0'), true);
+  assert.equal(isBlockedIp('::1'), true);
+  assert.equal(isBlockedIp('169.254.169.254'), true);
+  assert.equal(isBlockedIp('8.8.8.8'), false);
 });

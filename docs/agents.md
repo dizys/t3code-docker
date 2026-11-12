@@ -61,6 +61,10 @@ Node.js meets Pi's Node 22.19 minimum; T3 Code requires Pi 0.80.5 or newer.
 subscription (see [Signing agents in](#signing-agents-in-and-keeping-them-up-to-date)).
 Enable Pi under T3 Code's **Settings → Providers** and refresh it.
 Its credentials and sessions in `~/.pi/agent` survive updates and uninstall.
+Setup refuses to replace `auth.json` if it is a symbolic link, hard-linked,
+or owned by another user. The existing file and sign-ins stay intact. Manage
+linked credentials through their existing owner, or replace the link with a
+private regular file before saving a key in Setup.
 Updates from Setup and T3 Code's provider settings use the same managed updater.
 See [T3 Code's Pi guide](https://github.com/pingdotgg/t3code/blob/main/docs/user/providers-pi.md)
 and [Pi's installation guide](https://pi.dev/docs/latest/quickstart).

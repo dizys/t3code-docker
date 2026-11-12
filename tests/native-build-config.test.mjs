@@ -3,7 +3,14 @@ import test from "node:test";
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { executableBuildPlan, publicBuildEnvironment, assertPublicBuildEnvironment, installBuiltClient } from "../scripts/build-t3-runtime.mjs";
+import { executableBuildPlan, publicBuildEnvironment, assertPublicBuildEnvironment, installBuiltClient, serviceLauncherProtocol } from "../scripts/build-t3-runtime.mjs";
+
+test("native builds bind launcher IPC to the exact source contract and reject unreviewed protocols", () => {
+  for (const protocol of [3, 4]) assert.equal(serviceLauncherProtocol(`export const SERVICE_LAUNCHER_PROTOCOL = ${protocol} as const;\n`), protocol);
+  for (const source of ["", "export const SERVICE_LAUNCHER_PROTOCOL = 5 as const;", "export const SERVICE_LAUNCHER_PROTOCOL = 3 as const;\nexport const SERVICE_LAUNCHER_PROTOCOL = 4 as const;"]) {
+    assert.throws(() => serviceLauncherProtocol(source), /protocol requires review/);
+  }
+});
 
 test("native Linux ARM64 retains upstream's host SEA packaging and artifact name", () => {
   const plan = executableBuildPlan("arm64", { platform: "linux", hostArch: "arm64" });

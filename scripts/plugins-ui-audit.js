@@ -6,6 +6,7 @@ const path=require('node:path');
 let chromium;try{({chromium}=require('playwright'));}catch{({chromium}=require('playwright-core'));}
 const {statusFor}=require('./lib/console-fixtures.cjs');
 const {createSkillsFixtures}=require('./lib/skills-fixtures.cjs');
+const auditPluginBatches=require('./lib/plugins-batch-ui.cjs');
 const base=process.argv[2]||'http://127.0.0.1:23785/__setup/';
 const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkdirSync(output,{recursive:true});
 (async()=>{
@@ -18,7 +19,7 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
    const providers=[{id:'codex',name:'Codex',coverage:'filesystem',warnings:[]},{id:'claude',name:'Claude Code',coverage:'filesystem',warnings:[]},{id:'pi',name:'Pi',coverage:'filesystem',warnings:[]}];
    const compatible=[...providers.map(p=>({id:p.id,compatible:true,format:p.id,reason:'Native '+p.name+' package'})),{id:'opencode',detected:true,compatible:true,experimental:true,format:'local-module',reason:'Experimental local module. May reload in running sessions.'},...['cursor','grok','antigravity'].map(id=>({id,detected:true,compatible:false,experimental:true,reason:'Integration found; native setup required.'}))];
    const plan={ok:true,planId:'review',operation:'install',provider:'codex',name:'tokeneconomizer',description:rows[0].description,source:rows[0].source,version:'0.1.0',commit:'b'.repeat(40),components:rows[0].components,hooks:[{event:'SessionStart',command:'<script>window.pluginInjected=true</script> --safe-text'}],files:[{name:'.codex-plugin/plugin.json',bytes:300,text:'{"name":"tokeneconomizer"}'},{name:'scripts/run.py',bytes:400,executable:true}],effects:['Install this complete package for new sessions.','Native permissions remain separate.'],blocked:[],canApply:true};
-   const posts=[];let applyAttempts=0;
+   const posts=[];
    const skillsApi=createSkillsFixtures();
    await page.addInitScript(t=>localStorage.setItem('t3-console-theme',t),theme);
    await page.route('**/*',async route=>{
@@ -32,7 +33,7 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
      if(suffix==='')result={ok:true,plugins:rows,providers,warnings:[],installNote:'Reviewed native packages. Other integrations are read-only.'};
      else if(suffix==='/source')result={ok:true,previewId:'source',source:plan.source,commit:plan.commit,packages:[{...plan,prefix:'plugin/',providers:compatible},{...plan,name:'companion-tools',prefix:'companion/',providers:compatible}]};
      else if(suffix==='/plan')result={...plan,provider:req.postDataJSON().provider||'codex',operation:req.postDataJSON().operation||'install',...(req.postDataJSON().operation==='update'?{changes:[{name:'removed.txt',status:'removed',beforeText:'Old file being deleted.'}]}:{})};
-     else if(suffix==='/apply'){if(++applyAttempts===1)return route.fulfill({status:503,json:{ok:false,error:'Response interrupted. Retry this reviewed operation.'}});result={ok:true,jobId:'job'};}
+     else if(suffix==='/apply')result={ok:true,jobId:'job'};
      else if(suffix==='/job')result={ok:true,state:'succeeded',message:'Saved. Start a new session.'};
      else result={ok:true};
      return route.fulfill({json:result});
@@ -77,6 +78,7 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
    await dialog.locator('summary').filter({hasText:'removed.txt'}).click();
    await dialog.locator('pre').filter({hasText:'Old file being deleted.'}).waitFor();
    await page.getByRole('button',{name:'Close plugin inspector',exact:true}).click();
+   posts.length=0;
    await library.getByRole('button',{name:'Install from source',exact:true}).filter({visible:true}).click();
    dialog=page.getByRole('dialog');await dialog.getByLabel('Repository or container folder').fill(plan.source);
    await dialog.getByRole('button',{name:'Read',exact:true}).click();
@@ -93,38 +95,34 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
    await dialog.getByRole('button',{name:'Choose agents',exact:true}).click();
    await dialog.locator('[data-plugin-agent="codex"]').uncheck();
    await dialog.locator('[data-plugin-agent="opencode"]').check();
-   await dialog.getByRole('button',{name:'Review installation',exact:true}).click();
-   assert.equal(posts.filter(p=>p.suffix==='/plan').at(-1).input.provider,'opencode');
+   await dialog.getByRole('button',{name:'Review 2 installations',exact:true}).click();
+   await dialog.locator('[data-plugin-replan]:enabled').waitFor();
+   assert.deepEqual(posts.filter(p=>p.suffix==='/plan').map(p=>p.input.provider),['opencode','opencode']);
    await dialog.getByText('OpenCode may immediately load or reload this module',{exact:false}).waitFor();
-   assert(await dialog.getByRole('button',{name:'Install for OpenCode',exact:true}).isDisabled());
+   assert(await dialog.getByRole('button',{name:'Install 2 plugins',exact:true}).isDisabled(),'code access requires consent');
    await dialog.locator('[data-plugin-agent="opencode"]').uncheck();
    await dialog.locator('[data-plugin-agent="claude"]').check();
    await dialog.locator('[data-plugin-agent="pi"]').check();
    assert(await dialog.locator('[data-plugin-agent="cursor"]').isDisabled(),'detected integrations without a Setup adapter require native setup');
-   await dialog.getByRole('button',{name:'Review installation',exact:true}).click();
-   await dialog.getByText('Destination 1 of 4:',{exact:false}).waitFor();
-   await dialog.getByText('Automatic commands',{exact:true}).waitFor();
-   assert.equal(posts.filter(p=>p.suffix==='/plan').at(-1).input.provider,'claude');
+   await dialog.getByRole('button',{name:'Review 4 installations',exact:true}).click();
+   await dialog.locator('[data-plugin-replan]:enabled').waitFor();
+   assert.equal(await dialog.getByText('Automatic commands',{exact:true}).count(),4);
+   assert.deepEqual(posts.filter(p=>p.suffix==='/plan').map(p=>p.input.provider),['opencode','opencode','claude','pi','claude','pi']);
    assert.equal(await page.evaluate(()=>window.pluginInjected),undefined);
    assert.equal(posts.filter(p=>p.suffix==='/apply').length,0,'source preview never installs');
    await dialog.locator('details > summary').first().click();
-   await dialog.locator('summary').filter({hasText:'.codex-plugin/plugin.json'}).click();
-   await dialog.locator('pre').filter({hasText:'{"name":"tokeneconomizer"}'}).waitFor();
-   assert(await dialog.getByRole('button',{name:'Install for Claude Code',exact:true}).isDisabled(),'code access requires consent');
+   await dialog.locator('summary').filter({hasText:'.codex-plugin/plugin.json'}).first().click();
+   await dialog.locator('pre').filter({hasText:'{"name":"tokeneconomizer"}'}).first().waitFor();
+   assert(await dialog.getByRole('button',{name:'Install 4 plugins',exact:true}).isDisabled(),'code access requires consent');
    await dialog.locator('[data-plugin-consent]').check();
    await page.screenshot({path:path.join(output,theme+'-'+width+'-review.png')});
    assert(await dialog.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=-1&&r.right<=innerWidth+1&&r.top>=-1&&r.bottom<=innerHeight+1;}),'installer fits viewport');
-   await dialog.getByRole('button',{name:'Install for Claude Code',exact:true}).click();
-   await dialog.getByRole('button',{name:'Retry installation',exact:true}).waitFor();
-   assert(await dialog.locator('[data-plugin-agent="claude"]').isDisabled(),'uncertain apply keeps the same destination');
-   await dialog.getByRole('button',{name:'Retry installation',exact:true}).click();
-   await dialog.getByText('Installed for Claude Code',{exact:true}).waitFor();
-   assert.equal(posts.filter(p=>p.suffix==='/apply').length,2);
-   assert.deepEqual(posts.filter(p=>p.suffix==='/apply').map(p=>p.input.planId),['review','review'],'retry uses the same plan');
-   await dialog.getByRole('button',{name:'Review next installation',exact:true}).click();
-   await dialog.getByRole('button',{name:'Review installation',exact:true}).click();
-   assert.equal(posts.filter(p=>p.suffix==='/plan').at(-1).input.provider,'pi');
-   assert(await dialog.getByRole('button',{name:'Install for Pi',exact:true}).isDisabled(),'agent change resets consent');
+   await dialog.getByRole('button',{name:'Install 4 plugins',exact:true}).click();
+   await dialog.getByText('Installed for Claude Code, Pi',{exact:true}).waitFor();
+   await dialog.getByText('Check it works',{exact:true}).waitFor();
+   await dialog.getByText('Follow each installed package’s README',{exact:false}).waitFor();
+   assert.equal(await dialog.getByText('~/.tokeneconomizer/bin/te',{exact:false}).count(),0,'verification guidance never assumes a plugin-specific binary');
+   assert.equal(posts.filter(p=>p.suffix==='/apply').length,4);
    await dialog.getByRole('button',{name:'Close plugin installation',exact:true}).click();
    rows.push({...rows[0],id:'c'.repeat(32),provider:'claude',nativeId:'tokeneconomizer@claude-fixture',enabled:false,path:'/home/fixture/.claude/plugins/cache/tokeneconomizer'});
    await library.getByRole('button',{name:'Rescan',exact:true}).click();
@@ -163,8 +161,9 @@ const output=process.env.T3_PLUGINS_UI_OUTPUT||'/tmp/t3-plugins-ui-audit';fs.mkd
    await library.getByText('No plugins to show',{exact:true}).waitFor();
    await library.getByRole('button',{name:'Clear filters',exact:true}).click();
    await library.getByRole('button',{name:'curated-default',exact:true}).filter({visible:true}).waitFor();
-   assert.equal(posts.filter(p=>p.suffix==='/apply').length,2,'hiding and showing never change plugin settings');
+   assert.equal(posts.filter(p=>p.suffix==='/apply').length,4,'hiding and showing never change plugin settings');
    assert.deepEqual(errors,[]);console.log('Passed Plugins',theme,width);await page.close();
   }
+  await auditPluginBatches({browser,base,output});
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

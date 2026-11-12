@@ -98,14 +98,18 @@ export function patchGatewayQuota(source) {
     const read = Effect.gen(function* () {`);
     change(files[0], '!account.disabled && (account.provider === "codex" || account.provider === "claude"),', '!account.disabled,');
   }
-  change(files[1], `      } else if (source.accounts.length === 0) {
-        notices.push(\x60${'${label(environmentLabel, source.label)}'}: No accounts reported.\x60);
-      }`, `      } else if (source.accounts.length === 0) {
-        notices.push(\x60${'${label(environmentLabel, source.label)}'}: No accounts reported.\x60);
-      }
+  // Stable uses an array; current Nightly deduplicates notices in a Set.
+  // Keep that collector and require exactly one known insertion site.
+  const noticeAnchor = method => `      } else if (source.accounts.length === 0) {
+        notices.${method}(\x60${'${label(environmentLabel, source.label)}'}: No accounts reported.\x60);
+      }`;
+  const noticeMethods = ['push', 'add'].filter(method => typeof next[files[1]] === 'string' && next[files[1]].includes(noticeAnchor(method)));
+  if (noticeMethods.length !== 1) throw new Error(`The gateway-quota patch no longer matches ${files[1]}. Review the upstream source before publishing this runtime.`);
+  const [noticeMethod] = noticeMethods;
+  change(files[1], noticeAnchor(noticeMethod), `${noticeAnchor(noticeMethod)}
       for (const account of source.accounts) {
         const notice = limitsNotice(account.usageLimits);
-        if (notice) notices.push(\x60${'${label(environmentLabel, source.label)}'} · ${'${account.email ?? hubAccountName(account)}'}: ${'${notice}'}\x60);
+        if (notice) notices.${noticeMethod}(\x60${'${label(environmentLabel, source.label)}'} · ${'${account.email ?? hubAccountName(account)}'}: ${'${notice}'}\x60);
       }`);
   // Unknown gateway providers are valid contract drivers. Give their pool a
   // human-readable label without assigning it to a different native driver.

@@ -5,6 +5,7 @@ import { files, quotaFile, quotaSource, patchGatewayQuota } from '../docker/runt
 import { patches, createdFiles } from '../docker/runtime/patches/index.mjs';
 import { source } from './fixtures/gateway-quota-source.mjs';
 import { source as providerTableSource } from './fixtures/gateway-quota-provider-table-source.mjs';
+import { source as setNoticesSource } from './fixtures/gateway-quota-set-notices-source.mjs';
 
 // Run the production parsers directly, with erased type-only imports. The
 // runtime integration smoke covers their real Effect transport and contracts.
@@ -109,6 +110,51 @@ test('provider-table patch preserves native readers, transport, diagnostics and 
   assert.match(patched[files[2]], /OpenCode Go/);
 });
 
+test('account warnings preserve native array and deduplicating Set notice collectors', () => {
+  const warning = notice => ({windows: [], notice});
+  const presentations = new Map([
+    ['one', {entry: {target: {label: 'First'}}, serverConfig: {
+      providers: [{driver: 'codex', displayName: 'Native', usageLimits: warning('Native warning')},
+        {driver: 'unsupported', usageLimits: {...warning('Skip native unsupported'), unavailable: {reason: 'unsupported'}}}],
+      usageLimitSources: [
+        {label: 'Gateway', accounts: [{id: 'account.json', usageLimits: warning('No quota')},
+          {id: 'duplicate.json', email: 'account', usageLimits: warning('No quota')},
+          {id: 'healthy', usageLimits: {windows: [{}]}}]},
+        {label: 'Empty', accounts: []},
+        {label: 'Offline', error: 'Could not connect', accounts: []},
+      ],
+    }}],
+    ['two', {entry: {target: {label: 'Second'}}, serverConfig: {
+      usageLimitSources: [{label: 'Gateway', accounts: [{id: 'named.json', email: 'named@example.test', usageLimits: warning('Read failed')}]}],
+    }}],
+  ]);
+  const before = structuredClone(presentations);
+  const expected = ['First · Native: Native warning', 'First · Gateway · account: No quota',
+    'First · Empty: No accounts reported.', 'First · Offline: Could not connect', 'Second · Gateway · named@example.test: Read failed'];
+  for (const fixture of [source, setNoticesSource]) {
+    const patched = patchGatewayQuota(fixture)[files[1]];
+    const collect = new Function('providersWithLimits', 'limitsNotice', 'hubAccountName',
+      stripTypeScriptTypes(patched.replace('export ', ''), {mode: 'transform'}) + '\nreturn collectLimitNotices;')(
+      providers => providers, limits => limits.notice ?? null, account => account.id.replace(/\.json$/i, ''));
+    const result = collect(presentations);
+    if (fixture === setNoticesSource) {
+      assert.deepEqual(result, expected, 'Nightly retains native deduplication for repeated account warnings');
+      assert.match(patched, /const notices = new Set<string>\(\)/);
+      assert.match(patched, /return \[\.\.\.notices\]/);
+    } else {
+      assert.deepEqual(result, [expected[0], expected[1], ...expected.slice(1)], 'Stable retains native array ordering and duplicate behavior');
+    }
+    assert.deepEqual(presentations, before, 'notice collection does not alter account snapshots');
+  }
+});
+
+test('notice patches reject unknown, duplicated and mixed collector layouts', () => {
+  const array = source[files[1]], set = setNoticesSource[files[1]];
+  for (const collector of [set.replaceAll('notices.add(', 'notices.append('), set + set, array + set]) {
+    assert.throws(() => patchGatewayQuota({...setNoticesSource, [files[1]]: collector}), /no longer matches/);
+  }
+});
+
 test('provider-table patch fails closed on missing, duplicate, mixed and changed upstream anchors', () => {
   const original = providerTableSource[files[0]];
   for (const anchor of [
@@ -124,7 +170,7 @@ test('provider-table patch fails closed on missing, duplicate, mixed and changed
       assert.throws(() => patchGatewayQuota({ ...providerTableSource, [files[0]]: original.replace(anchor, replacement) }), /no longer matches/, anchor);
     }
   }
-  for (const fixture of [source, providerTableSource]) {
+  for (const fixture of [source, providerTableSource, setNoticesSource]) {
     for (const file of files) for (const replacement of ['', fixture[file] + fixture[file]]) {
       assert.throws(() => patchGatewayQuota({ ...fixture, [file]: replacement }), /no longer matches/);
     }

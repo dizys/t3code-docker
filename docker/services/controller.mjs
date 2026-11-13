@@ -302,7 +302,7 @@ export function createController({ store, supervisor, tools, secrets = async () 
       const live = await supervisor.observe(id), run = store.meta("run:" + id);
       if (op.phase === "activate" && live.up && run?.revision === resource.revision) { await startAndCheck(resource); finish(op, "succeeded"); return; }
       const comparable = config => { if (!config) return null; const { name, ...rest } = config; return rest; };
-      if (action === "edit" && original && hash(comparable(resource.config)) === hash(comparable(original.config)) && live.up && hash(resource.receipt) === hash(original.receipt) && hash(resource.artifact) === hash(original.artifact)) {
+      if (action === "edit" && original && hash(comparable(resource.config)) === hash(comparable(original.config)) && live.up && hash(resource.receipt ?? null) === hash(original.receipt ?? null) && hash(resource.artifact ?? null) === hash(original.artifact ?? null)) {
         store.setMeta("run:" + id, { ...run, revision: resource.revision, originalLaunchRevision: run.originalLaunchRevision || run.revision });
         await observe(resource); finish(op, "succeeded"); return;
       }

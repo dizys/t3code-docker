@@ -15,7 +15,7 @@ export function patchGatewayContext(source) {
   };
   change(files[0], 'import * as DocumentText from "../../provider/DocumentText.ts";',
     'import { applyClaudeGatewayContext, claudeGatewayContextKey } from "../../provider/GatewayModelContext.ts";\nimport * as DocumentText from "../../provider/DocumentText.ts";');
-  // Stable and current Nightly differ in how they merge model-alias flags.
+  // Stable and Nightly differ in alias and explicit-compaction environment flags.
   // Match one complete reviewed initializer, retaining its flag precedence.
   const settingsVariants = [`  // A settings file path cannot take extra keys, so it goes through unchanged.
   const effectiveQuerySettings =
@@ -35,6 +35,28 @@ export function patchGatewayContext(source) {
           env: {
             ...compactQuerySettings?.env,
             ...aliasOverrideEnv,
+            ...(input.toolSearchOverride === undefined
+              ? {}
+              : { ENABLE_TOOL_SEARCH: input.toolSearchOverride }),
+          },
+        } as ClaudeSdkSettings);`,
+  // Reviewed against v0.1.10-nightly.20261113.4616 (59e64eef881632a23f89c4138bcf37f23d92bf93).
+  `  // A settings file path cannot take extra keys, so it goes through unchanged.
+  const effectiveQuerySettings =
+    (input.toolSearchOverride === undefined &&
+      aliasOverrideEnv === undefined &&
+      autoCompactWindow === undefined) ||
+    typeof compactQuerySettings === "string"
+      ? compactQuerySettings
+      : ({
+          ...compactQuerySettings,
+          env: {
+            ...compactQuerySettings?.env,
+            ...aliasOverrideEnv,
+            // Claude Code ranks this env var above the autoCompactWindow setting.
+            ...(autoCompactWindow === undefined
+              ? {}
+              : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: autoCompactWindow }),
             ...(input.toolSearchOverride === undefined
               ? {}
               : { ENABLE_TOOL_SEARCH: input.toolSearchOverride }),

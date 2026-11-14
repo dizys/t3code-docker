@@ -27,3 +27,7 @@ export function clientAddress(req) {
   const last = plainAddress(forwarded[forwarded.length - 1].trim());
   return isIP(last) ? last : peer;
 }
+
+/** Whether the request arrived over loopback: the only peer whose forwarded
+ * headers are believed. Anything else could have written them itself. */
+export const peerIsLoopback = (req) => isLoopback(plainAddress(req?.socket?.remoteAddress));

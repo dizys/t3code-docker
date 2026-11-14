@@ -67,6 +67,9 @@ const where = config.setup
   ? `T3 Code (port ${config.t3.port}) at /, the setup page (port ${config.setup.port}) at ${config.setupPrefix}`
   : `T3 Code (port ${config.t3.port}); the setup page is off`;
 log(`listening on ${host === "::" ? "[::]" : host}:${config.port}: ${where}`);
+if (config.trustedProxy) {
+  log("WARNING: T3_TRUST_PROXY_HEADERS=1 trusts X-Forwarded-Proto/Host from the proxy. Keep this only when this port is reachable solely through your TLS-terminating proxy or tunnel: anyone who can reach it directly can spoof the scheme and host the services behind it see.");
+}
 
 // Stop taking connections, let what is in flight finish briefly, then go.
 const stop = () => {

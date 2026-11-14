@@ -45,8 +45,8 @@ import { createGatewayProcesses } from "./gateways/processes.mjs";
 import { createGatewayT3 } from "./gateways/t3.mjs";
 import { createGatewayVault } from "./gateways/vault.mjs";
 import { createSessionStore, TERMINAL_STATES } from "./signin-sessions.mjs";
-import { clientAddress } from "./client-address.mjs";
-import { cookieValue, forwardedPrefix } from "./request-auth.mjs";
+import { clientAddress, peerIsLoopback } from "./client-address.mjs";
+import { cookieValue, forwardedHost, forwardedPrefix, forwardedProto } from "./request-auth.mjs";
 import { createKeyThrottle } from "./key-throttle.mjs";
 import { newKey, readKeyFile, validKey, writeKeyFile } from "./setup-key.mjs";
 import { createCredentialStore, credentialFailure, CredentialError, credentialDirectory } from "./credentials.mjs";
@@ -1079,6 +1079,16 @@ const revoke = async ({ kind, id }) => {
 };
 
 const mintPairing = async ({ ttl, label }) => {
+  // argv, not a shell, but the CLI still parses a leading `-` as its own
+  // flag (`--ttl --help` prints help instead of issuing a pairing). Refuse
+  // flag-like values before anything else, so a bad ttl/label fails here
+  // rather than as a confusing error from further down.
+  if (ttl !== undefined && ttl !== null && ttl !== "" && (typeof ttl !== "string" || !/^[1-9][0-9]{0,6}[smhdw]$/.test(ttl))) {
+    throw new Error('invalid ttl: use a duration like "30d" (a number followed by s, m, h, d or w)');
+  }
+  if (label !== undefined && label !== null && label !== "" && (typeof label !== "string" || label.length > 128 || label.startsWith("-") || /[^\x20-\x7E]/.test(label))) {
+    throw new Error("invalid label: use up to 128 printable characters that do not start with -");
+  }
   const { url } = publicUrl();
   if (!url) {
     throw new Error("Set the public URL first: a pairing link points at it, and without it a device has nowhere to go.");
@@ -2534,8 +2544,11 @@ const startStorageWork = async (storage, kind, input) => {
 
 // The session cookie. Secure when the request reached us over HTTPS (directly
 // or through a proxy that says so); a plain-http LAN address must still work.
+// The proxy's word is only believed over loopback: from a direct peer
+// X-Forwarded-Proto is the visitor's own claim, and a forged `https` would
+// set a Secure cookie the browser never sends back over http.
 const cookie = (req, mount, value, maxAge) => {
-  const secure = req.socket.encrypted || /^https$/i.test(String(req.headers["x-forwarded-proto"] ?? "").split(",")[0].trim());
+  const secure = req.socket.encrypted || forwardedProto(req.headers, { trusted: peerIsLoopback(req) }) === "https";
   return `${COOKIE}=${value}; HttpOnly; SameSite=Strict; Path=${mount || "/"}; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
 };
 
@@ -2639,7 +2652,10 @@ const server = createServer(async (req, res) => {
   const route = resolved.route;
   // The inferred mount wins when the prefix survived the hop; otherwise fall
   // back to what the proxy declared.
-  const mount = resolved.mount || forwardedPrefix(req.headers);
+  // The inferred mount wins when the prefix survived the hop; otherwise fall
+  // back to what the proxy declared - but only when the peer is loopback.
+  // From a direct peer the header is the visitor's own claim.
+  const mount = resolved.mount || forwardedPrefix(req.headers, { trusted: peerIsLoopback(req) });
   // The page sends a cookie; the in-container CLIs send a header. Same key,
   // same comparison - so `t3-expose` and the page are the same client as far
   // as this server is concerned, and neither can act on state the other cannot.
@@ -2719,7 +2735,9 @@ const server = createServer(async (req, res) => {
     if (route === "/") {
       if (authed) return sendPage(req, res, (nonce) => renderConsole({ assets: ASSETS, nonce, mount, embed, host, layout }));
       // The host the browser asked for, for the card's eyebrow; escaped by the template.
-      const hostname = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "").split(",")[0].trim().slice(0, 200);
+      // The host the browser asked for, for the card's eyebrow; escaped by the template.
+      // A proxy's X-Forwarded-Host is only believed over loopback.
+      const hostname = String(forwardedHost(req.headers, { trusted: peerIsLoopback(req) }) ?? "").split(",")[0].trim().slice(0, 200);
       return sendPage(req, res, (nonce) => renderUnlock({
         assets: ASSETS, nonce, mount, host, hostname, layout, publicUrl: publicUrl().url, error: raw.searchParams.get("error") === "1", embed,
       }));
@@ -2984,6 +3002,12 @@ const server = createServer(async (req, res) => {
     if (req.method === "POST" && route === "/ports/expose") {
       try {
         const input = JSON.parse((await readBody(req)) || "{}");
+        // A quick tunnel has nothing in front of it, so a dev database must
+        // not be published by port number alone: refuse looks-like-database
+        // ports unless the request says it means it.
+        if (looksLikeDatabase(Number(input.port)) && input.confirmDatabase !== true) {
+          return sendJson(res, 400, { error: `Port ${Number(input.port)} looks like a database. Resend with {"confirmDatabase": true} to publish it anyway.` });
+        }
         return sendJson(res, 200, publicTunnel(startTunnel(input.port)));
       } catch (error) {
         return sendJson(res, 400, { error: String(error?.message ?? error) });

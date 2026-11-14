@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { fail, inside, normalizePath } from './paths.mjs';
@@ -22,7 +22,14 @@ export function createTrash({policy,guard,sizes,git,now=Date.now,recordEvent=()=
       const marker=await fs.lstat(path.join(policy.workspace,'.git'));let directory;
       if(marker.isDirectory())directory=path.join(policy.workspace,'.git');
       else if(marker.isFile()){const result=await git.command(policy.workspace,['rev-parse','--absolute-git-dir']);directory=result.stdout.trim();}
-      if(directory){const info=path.join(directory,'info');await fs.mkdir(info,{recursive:true});const exclude=path.join(info,'exclude'),before=await maybeStat(exclude);if(before?.isSymbolicLink())fail('invalid','Git’s exclude file is a link. Add .t3-trash/ in Git before using workspace Trash.');const content=await fs.readFile(exclude,'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});if(!content.split('\n').includes('.t3-trash/'))await fs.appendFile(exclude,(content&&!content.endsWith('\n')?'\n':'')+'.t3-trash/\n');}
+      if(directory){const info=path.join(directory,'info');await fs.mkdir(info,{recursive:true});const exclude=path.join(info,'exclude'),before=await maybeStat(exclude);if(before?.isSymbolicLink())fail('invalid','Git’s exclude file is a link. Add .t3-trash/ in Git before using workspace Trash.');
+        // Read and append through one O_NOFOLLOW descriptor so a link swapped in
+        // after the check above cannot redirect the write, as in text.mjs.
+        let handle;try{handle=await fs.open(exclude,constants.O_RDWR|constants.O_CREAT|constants.O_NOFOLLOW|constants.O_APPEND,0o666);}
+        catch(error){if(error.code==='ELOOP')fail('invalid','Git’s exclude file is a link. Add .t3-trash/ in Git before using workspace Trash.');throw error;}
+        try{const stat=await handle.stat({bigint:true});if(!stat.isFile())fail('invalid','Git’s exclude file is not a regular file. Add .t3-trash/ in Git before using workspace Trash.');
+          const content=await handle.readFile('utf8');if(!content.split('\n').includes('.t3-trash/'))await handle.write((content&&!content.endsWith('\n')?'\n':'')+'.t3-trash/\n',null,'utf8');}
+        finally{await handle.close();}}
     }
     return root;
   };

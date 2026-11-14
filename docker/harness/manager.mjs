@@ -1080,11 +1080,17 @@ export function createHarnessManager(options = {}) {
     }
   }
 
-  /** Read-only facts for every catalogue entry. */
-  async function status(options = {}) {
+  /**
+   * Read-only facts for every catalogue entry. Cheap by default: one
+   * `mise ls` plus filesystem checks, no CLI subprocesses. Auth verdicts
+   * come only with `authenticate: true` (one bounded probe per installed
+   * harness), which the setup service refreshes in the background on a
+   * 15-minute TTL and after mutations - never on every 15-second poll.
+   */
+  async function status({ authenticate = false } = {}) {
     const snap = await snapshot();
     const harnesses = await Promise.all(
-      CATALOGUE.map((entry) => factsFor(entry, snap, options)),
+      CATALOGUE.map((entry) => factsFor(entry, snap, { authenticate })),
     );
     return { harnesses, degraded: snap.degraded };
   }

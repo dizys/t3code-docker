@@ -668,7 +668,13 @@ const withT3SignIn = async (harness, harnesses) => {
 const harnessCache = createHarnessCache({
   full: async () => {
     const harness = await loadHarness();
-    const { harnesses, degraded } = await harness.status({});
+    // The only authenticated read on the poll path: one bounded probe per
+    // installed harness. Every poll in between serves the last verdicts
+    // from `warm` instead of forking (~11 CLI execs per 15s poll, each with
+    // a 20s timeout, mostly discarded when the 4s budget loses). Mutations
+    // invalidate the cache, so a sign-in, install or uninstall still shows
+    // at once; nothing else needs fresh auth state.
+    const { harnesses, degraded } = await harness.status({ authenticate: true });
     return { harnesses: await withT3SignIn(harness, harnesses), degraded };
   },
   cheap: async () => {
@@ -677,6 +683,9 @@ const harnessCache = createHarnessCache({
     return { harnesses: await withT3SignIn(harness, harnesses), degraded };
   },
   budgetMs: HARNESS_BUDGET_MS,
+  // Auth verdicts refresh here at most every 15 minutes; the manager also
+  // caches each verdict, and every mutation invalidates this cache outright.
+  refreshIntervalMs: 15 * 60 * 1000,
 });
 
 // Who each source control CLI is signed in as, the same way: a check asks the

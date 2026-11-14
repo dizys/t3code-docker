@@ -34,7 +34,7 @@ test('commands and snippets follow what the server can actually do for each cred
 });
 
 test('draft validation mirrors saved path and authentication restrictions with field errors', () => {
-  const valid = S.draftOf(api), secrets = { token: 'fixture' };
+  const valid = S.draftOf(api), secrets = { token: 'fixture-value' };
   assert.deepEqual(plain(S.validate(valid, { secrets })), {});
   assert.ok(S.validate({ ...valid, id: 'Bad ID' }, { secrets }).id);
   assert.match(S.validate({ ...valid, id: 'new' }, { secrets }).id, /reserved/);
@@ -53,6 +53,10 @@ test('the page and the server agree about what a credential may hold', () => {
   const page = (input, secrets) => Object.keys(S.validate({ ...S.draftOf(input), id: input.id }, { secrets })).length === 0;
   const cases = [
     [{ id: 'fine', type: 'token', fields: {} }, { token: 'fixture-value' }, true],
+    [{ id: 'short', type: 'token', fields: {} }, { token: 'abc' }, false],
+    [{ id: 'seven', type: 'token', fields: {} }, { token: '1234567' }, false],
+    [{ id: 'eight', type: 'token', fields: {} }, { token: '12345678' }, true],
+    [{ id: 'short-file', type: 'file', fields: {} }, { content: 'tiny' }, false],
     [{ id: 'bad-env', type: 'token', fields: {}, env: { token: 'PATH' } }, { token: 'fixture-value' }, false],
     [{ id: 'box', type: 'ssh', fields: { host: '2001:db8::1', username: 'deploy', auth: 'password' } }, { password: 'fixture-value' }, true],
     [{ id: 'box', type: 'ssh', fields: { host: '-oProxyCommand=bad', username: 'deploy', auth: 'password' } }, { password: 'fixture-value' }, false],
@@ -103,6 +107,8 @@ test('drafts and payloads hold only what each type needs, and a saved secret is 
   assert.match(S.validate({ ...custom, vars: [{ name: 'PATH', value: 'x', secret: true }] }).vars, /letters, numbers/);
   assert.match(S.validate({ ...custom, vars: [{ name: 'SAME', value: 'x' }, { name: 'SAME', value: 'y' }] }).vars, /twice/);
   assert.match(S.validate({ ...custom, vars: [{ name: 'EMPTY', value: '', secret: true }] }).vars, /Enter a value/);
+  assert.match(S.validate({ ...custom, vars: [{ name: 'API_KEY', value: 'abc', secret: true }] }).vars, /at least 8/);
+  assert.throws(() => normalize({ id: 'mixed', type: 'custom', secretNames: ['API_KEY'], secrets: { API_KEY: 'abc' } }), { status: 400, extra: { field: 'API_KEY' } });
   assert.deepEqual(plain(S.givesPreview(S.draftOf({ id: 'app-db', type: 'database', fields: { engine: 'postgres', host: 'x' } }))), [{ name: 'DATABASE_URL' }, { name: 'PGPASSWORD' }]);
   assert.deepEqual(plain(S.givesPreview({ ...S.defaults('kubernetes'), id: 'kube' })), [{ name: 'KUBECONFIG', file: true }]);
   assert.deepEqual(plain(S.givesPreview({ ...S.defaults('custom'), vars: [{ name: 'ONE' }, { name: '' }] })), [{ name: 'ONE' }]);

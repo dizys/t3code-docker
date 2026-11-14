@@ -119,6 +119,13 @@ test('normalizing keeps only what a type holds and treats a pasted value the way
   assert.deepEqual([edited.fields, edited.secrets], [{ REGION: 'us' }, { KEEP: secret }]);
 });
 
+test('secrets too short to mask are refused instead of stored in the clear', () => {
+  for (const secrets of [{ token: 'abc' }, { token: '1234567' }]) assert.throws(() => normalize({ id: 'tiny', type: 'token', secrets }), { status: 400, extra: { field: 'token' } });
+  assert.throws(() => normalize({ id: 'tiny', type: 'file', secrets: { content: 'tiny\n' } }), { status: 400, extra: { field: 'content' } });
+  assert.equal(normalize({ id: 'tiny', type: 'token', secrets: { token: '12345678' } }).secrets.token, '12345678', 'eight characters is enough to mask');
+  assert.throws(() => normalize({ id: 'tiny', type: 'token', secrets: {} }, { id: 'tiny', type: 'token', secrets: { token: 'abc' } }), { status: 400 }, 'a kept value is re-checked like any other');
+});
+
 test('an omitted or blank optional secret is kept, an explicit null removes it', () => {
   const aws = secrets => ({ id: 'cloud', type: 'aws', fields: { accessKeyId: 'AKIAFIXTURE' }, secrets });
   const previous = normalize(aws({ secretAccessKey: 'fixture-secret', sessionToken: 'fixture-session' }));

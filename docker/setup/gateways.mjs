@@ -63,12 +63,15 @@ const cleanKey = value => {
   if (value === undefined || value === null) return undefined;
   const key = String(value).trim();
   if (key.length > 4096 || /[^\x21-\x7e]/.test(key)) throw new GatewayError('An API key is one line of plain characters, without spaces.', 400, 'invalid', { field: 'key' });
+  // Short keys can't be masked in output without hiding ordinary text.
+  if (key && key.length < 8) throw new GatewayError('An API key is at least 8 characters of plain text, without spaces.', 400, 'invalid', { field: 'key' });
   return key;
 };
 const cleanManagementKey = value => {
   if (value === undefined || value === null || value === '') return undefined;
   const key = String(value).trim();
   if (!key || key.length > 4096 || /[^\x21-\x7e]/.test(key)) throw new GatewayError('A management key is one line of plain characters, without spaces.', 400, 'invalid', { field: 'managementKey' });
+  if (key.length < 8) throw new GatewayError('A management key is at least 8 characters of plain text, without spaces.', 400, 'invalid', { field: 'managementKey' });
   return key;
 };
 const allowPrivate = input => (input?.allowPrivateHost ?? input?.gateway?.allowPrivateHost) === true;

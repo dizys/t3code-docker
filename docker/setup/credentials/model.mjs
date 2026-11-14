@@ -5,6 +5,8 @@ import { TYPES, applies, isType, withDefaults } from './types.mjs';
 const fail = (message, field) => { throw new CredentialError(message, 400, 'invalid', field ? { field } : {}); };
 const MULTILINE_MAX = 48 * 1024;
 const SECRET_MAX = 8192;
+// Short values can't be masked without hiding ordinary text (see redact.mjs),
+// so nothing this short is accepted as a secret in the first place.
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 // A saved value under these names would break the command, or change what it runs.
 const RESERVED_ENV = /^(?:PATH|HOME|USER|SHELL|PWD|IFS|LD_.*|DYLD_.*|NODE_OPTIONS|BASH_ENV|ENV)$/;
@@ -64,11 +66,13 @@ function normalizeSecret(entry, raw, previous) {
   if (value === undefined) { if (entry.optional) return undefined; fail(`Enter ${entry.label.toLowerCase()}.`, entry.key); }
   if (typeof value !== 'string' || !value.isWellFormed()) fail(`Enter ${entry.label.toLowerCase()} as plain text.`, entry.key);
   if (entry.multiline) {
+    if (value.trim().length < 8) fail(`Use at least 8 characters for ${entry.label.toLowerCase()}.`, entry.key);
     if (value.length > MULTILINE_MAX || value.includes('\0') || !value.trim()) fail(`Enter ${entry.label.toLowerCase()} as text of up to 48 KiB.`, entry.key);
     return value;
   }
   // A pasted value or a file often ends in a line break that isn't part of it.
   const line = value.replace(/\r?\n$/, '');
+  if (line.length < 8) fail(`Use at least 8 characters for ${entry.label.toLowerCase()}.`, entry.key);
   if (!text(line, SECRET_MAX)) fail(`Enter ${entry.label.toLowerCase()}, up to ${SECRET_MAX} characters without line breaks.`, entry.key);
   return line;
 }

@@ -67,7 +67,15 @@ Linux ARM64 runners use upstream's native `build-exe` command without a
 cross-build target, retaining its SEA injection workaround for 16/64 KiB page
 kernels. The builder reads that path's `dist-exe/t3` output; explicit targets
 use the platform-named output. Keep the build Node version aligned with the
-upstream release's declared version for native ARM64 compilation.
+upstream release's declared version for native ARM64 compilation. CI reads
+`engines.node` from each exact upstream tag's `package.json` and selects that
+version's official Node builder image for both architectures. Stable and
+Nightly can therefore use different build Node versions. Missing or non-exact
+declarations stop the plan before builds start. A local Docker build of another
+T3 release must set `T3_BUILD_NODE_IMAGE` to its declared Node version as well
+as setting `T3_VERSION`; the default builder remains aligned with the bundled
+Stable release. This changes the compiler image only. The container's runtime
+Node version and user-managed toolchains keep their existing configuration.
 
 Compilation loads the exact tag's checked-in `.env.example`, allowing only the
 four public Clerk and relay settings that enable T3 Connect. It excludes local

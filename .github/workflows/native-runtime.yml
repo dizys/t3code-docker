@@ -81,7 +81,9 @@ jobs:
           target: t3-runtime-artifact
           platforms: linux/${{ matrix.arch }}
           outputs: type=local,dest=native-output
-          build-args: T3_VERSION=${{ matrix.version }}
+          build-args: |
+            T3_VERSION=${{ matrix.version }}
+            T3_BUILD_NODE_IMAGE=${{ matrix.buildNodeImage }}
           cache-from: type=gha,scope=native-${{ matrix.version }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=native-${{ matrix.version }}-${{ matrix.arch }}
       - name: Verify the native project API

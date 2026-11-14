@@ -45,7 +45,7 @@ import { createGatewayProcesses } from "./gateways/processes.mjs";
 import { createGatewayT3 } from "./gateways/t3.mjs";
 import { createGatewayVault } from "./gateways/vault.mjs";
 import { createSessionStore, TERMINAL_STATES } from "./signin-sessions.mjs";
-import { clientAddress, peerIsLoopback } from "./client-address.mjs";
+import { clientAddress, trustsProxyHeaders } from "./client-address.mjs";
 import { cookieValue, forwardedHost, forwardedPrefix, forwardedProto } from "./request-auth.mjs";
 import { createKeyThrottle } from "./key-throttle.mjs";
 import { newKey, readKeyFile, validKey, writeKeyFile } from "./setup-key.mjs";
@@ -1086,8 +1086,8 @@ const mintPairing = async ({ ttl, label }) => {
   if (ttl !== undefined && ttl !== null && ttl !== "" && (typeof ttl !== "string" || !/^[1-9][0-9]{0,6}[smhdw]$/.test(ttl))) {
     throw new Error('invalid ttl: use a duration like "30d" (a number followed by s, m, h, d or w)');
   }
-  if (label !== undefined && label !== null && label !== "" && (typeof label !== "string" || label.length > 128 || label.startsWith("-") || /[^\x20-\x7E]/.test(label))) {
-    throw new Error("invalid label: use up to 128 printable characters that do not start with -");
+  if (label !== undefined && label !== null && label !== "" && (typeof label !== "string" || !label.isWellFormed() || label.length > 128 || label.startsWith("-") || /[\x00-\x1F\x7F-\x9F]/.test(label))) {
+    throw new Error("invalid label: use up to 128 characters without control characters or a leading -");
   }
   const { url } = publicUrl();
   if (!url) {
@@ -2544,11 +2544,11 @@ const startStorageWork = async (storage, kind, input) => {
 
 // The session cookie. Secure when the request reached us over HTTPS (directly
 // or through a proxy that says so); a plain-http LAN address must still work.
-// The proxy's word is only believed over loopback: from a direct peer
-// X-Forwarded-Proto is the visitor's own claim, and a forged `https` would
-// set a Secure cookie the browser never sends back over http.
+// Trust the in-container router or an explicitly configured proxy. A direct
+// visitor cannot choose the cookie's Secure flag through forwarding headers.
+const proxyHeadersTrusted = req => trustsProxyHeaders(req, process.env.T3_TRUST_PROXY_HEADERS === "1");
 const cookie = (req, mount, value, maxAge) => {
-  const secure = req.socket.encrypted || forwardedProto(req.headers, { trusted: peerIsLoopback(req) }) === "https";
+  const secure = req.socket.encrypted || forwardedProto(req.headers, { trusted: proxyHeadersTrusted(req) }) === "https";
   return `${COOKIE}=${value}; HttpOnly; SameSite=Strict; Path=${mount || "/"}; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
 };
 
@@ -2646,16 +2646,13 @@ const resolve = (pathname) => {
 
 const server = createServer(async (req, res) => {
   // The visitor, not the router in front of them: see client-address.mjs.
-  const ip = clientAddress(req);
+  const ip = clientAddress(req, { trustProxyHeaders: process.env.T3_TRUST_PROXY_HEADERS === "1" });
   const raw = new URL(req.url ?? "/", "http://localhost");
   const resolved = resolve(raw.pathname);
   const route = resolved.route;
   // The inferred mount wins when the prefix survived the hop; otherwise fall
-  // back to what the proxy declared.
-  // The inferred mount wins when the prefix survived the hop; otherwise fall
-  // back to what the proxy declared - but only when the peer is loopback.
-  // From a direct peer the header is the visitor's own claim.
-  const mount = resolved.mount || forwardedPrefix(req.headers, { trusted: peerIsLoopback(req) });
+  // back to a trusted proxy's prefix. Direct visitors cannot choose it.
+  const mount = resolved.mount || forwardedPrefix(req.headers, { trusted: proxyHeadersTrusted(req) });
   // The page sends a cookie; the in-container CLIs send a header. Same key,
   // same comparison - so `t3-expose` and the page are the same client as far
   // as this server is concerned, and neither can act on state the other cannot.
@@ -2735,9 +2732,8 @@ const server = createServer(async (req, res) => {
     if (route === "/") {
       if (authed) return sendPage(req, res, (nonce) => renderConsole({ assets: ASSETS, nonce, mount, embed, host, layout }));
       // The host the browser asked for, for the card's eyebrow; escaped by the template.
-      // The host the browser asked for, for the card's eyebrow; escaped by the template.
-      // A proxy's X-Forwarded-Host is only believed over loopback.
-      const hostname = String(forwardedHost(req.headers, { trusted: peerIsLoopback(req) }) ?? "").split(",")[0].trim().slice(0, 200);
+      // Forwarded host names require the same explicit trust as the scheme.
+      const hostname = String(forwardedHost(req.headers, { trusted: proxyHeadersTrusted(req) }) ?? "").split(",")[0].trim().slice(0, 200);
       return sendPage(req, res, (nonce) => renderUnlock({
         assets: ASSETS, nonce, mount, host, hostname, layout, publicUrl: publicUrl().url, error: raw.searchParams.get("error") === "1", embed,
       }));

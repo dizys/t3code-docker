@@ -13,7 +13,7 @@ import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 
 import { createKeyThrottle } from "../docker/setup/key-throttle.mjs";
-import { clientAddress, peerIsLoopback } from "../docker/setup/client-address.mjs";
+import { clientAddress, peerIsLoopback, trustsProxyHeaders } from "../docker/setup/client-address.mjs";
 import { forwardedHost, forwardedPrefix, forwardedProto } from "../docker/setup/request-auth.mjs";
 
 // ------------------------------------------------------- login lockout --
@@ -127,6 +127,19 @@ test("the peer gate follows the socket, not the headers", () => {
   assert.equal(clientAddress(req("192.168.1.20", { "x-forwarded-for": "127.0.0.1" })), "192.168.1.20");
 });
 
+test("an explicitly configured direct Setup proxy preserves scheme, prefix and visitor identity", () => {
+  const req={socket:{remoteAddress:'10.0.0.4'},headers:{host:'internal:3774','x-forwarded-proto':'https','x-forwarded-host':'t3.example.com','x-forwarded-prefix':'/console','x-forwarded-for':'192.0.2.42'}};
+  assert.equal(trustsProxyHeaders(req),false);
+  assert.equal(trustsProxyHeaders(req,'false'),false);
+  assert.equal(clientAddress(req),'10.0.0.4');
+  const trusted=trustsProxyHeaders(req,true);
+  assert.equal(trusted,true);
+  assert.equal(forwardedProto(req.headers,{trusted}),'https');
+  assert.equal(forwardedHost(req.headers,{trusted}),'t3.example.com');
+  assert.equal(forwardedPrefix(req.headers,{trusted}),'/console');
+  assert.equal(clientAddress(req,{trustProxyHeaders:true}),'192.0.2.42');
+});
+
 // ------------------------------------------------------- live server --
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -148,6 +161,9 @@ const launch = async (t) => {
       T3_HARNESS_MODULE: fileURLToPath(new URL("../docker/harness/index.mjs", import.meta.url)),
       T3_SETUP_KEY: "front-door-fixture-key", T3_SETUP_KEY_SOURCE: "env",
       T3_SETUP_PORT: String(port), T3CODE_PORT: "1", T3_INFRA_LAUNCHER: "/bin/false",
+      // Exercise validation and startup acceptance without ever publishing
+      // a real host port, even when cloudflared is installed on the machine.
+      T3CODE_CLOUDFLARED_PATH: "/bin/false", T3_TRUST_PROXY_HEADERS: "0",
       T3_RUN_DIR: path.join(root, "run"),
       T3_RUNTIME_MODULE: fileURLToPath(new URL("../docker/runtime/manager.mjs", import.meta.url)),
     },
@@ -172,7 +188,7 @@ const launch = async (t) => {
   return base;
 };
 
-test("a database port is refused without confirmation and published with it", { timeout: 30000 }, async (t) => {
+test("a database port needs confirmation before tunnel startup", { timeout: 30000 }, async (t) => {
   const base = await launch(t);
   const auth = { "x-t3-setup-key": "front-door-fixture-key", "content-type": "application/json" };
   const refused = await fetch(`${base}/ports/expose`, { method: "POST", headers: auth, body: JSON.stringify({ port: 5432 }) });
@@ -216,7 +232,7 @@ test("/pair refuses flag-like ttl and label values", { timeout: 30000 }, async (
   }
   // Well-formed values get past validation: whatever the launcher or the
   // public URL then says, it is not a complaint about the value itself.
-  for (const input of [{ ttl: "30d" }, { ttl: "5m", label: "my phone" }, { label: "tablet" }, {}]) {
+  for (const input of [{ ttl: "30d" }, { ttl: "5m", label: "my phone" }, { label: "tablet" }, {label:"我的手机 📱"}, {}]) {
     const response = await pair(input);
     assert.equal(response.status, 400, JSON.stringify(input));
     assert.doesNotMatch((await response.json()).error, /invalid (ttl|label)/, JSON.stringify(input));

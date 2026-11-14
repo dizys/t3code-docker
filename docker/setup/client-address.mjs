@@ -18,12 +18,20 @@ export const isLoopback = (address) => {
   return plain === "::1" || /^127\.\d+\.\d+\.\d+$/.test(plain);
 };
 
-/** The visitor's address: the socket's peer, or the router's word for it. */
-export function clientAddress(req) {
+/** The visitor's address: the peer, or an explicitly trusted proxy's report. */
+export function clientAddress(req, { trustProxyHeaders = false } = {}) {
   const peer = plainAddress(req?.socket?.remoteAddress) || "?";
-  if (!isLoopback(peer)) return peer;
+  if (!trustsProxyHeaders(req, trustProxyHeaders)) return peer;
   const header = req?.headers?.["x-forwarded-for"];
   const forwarded = (Array.isArray(header) ? header.join(",") : String(header ?? "")).split(",");
   const last = plainAddress(forwarded[forwarded.length - 1].trim());
   return isIP(last) ? last : peer;
 }
+
+/** Whether the request arrived over loopback, as the in-container router does. */
+export const peerIsLoopback = (req) => isLoopback(plainAddress(req?.socket?.remoteAddress));
+
+// Direct Setup deployments can opt in to their TLS proxy using the same
+// explicit trust setting as the single-port router. Never infer trust from
+// request headers or accept a truthy string as authorization.
+export const trustsProxyHeaders = (req, configured = false) => peerIsLoopback(req) || configured === true;

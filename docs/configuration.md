@@ -19,7 +19,7 @@ Environment variables (all optional except where noted):
 | `T3_PRINT_SETUP_KEY` | `0` | Print a generated setup key to the log in full on a first/ephemeral start. Without it, only a SHA-256 fingerprint is logged. Prefer retrieving the owner-only key file; opt in only when the hosting platform has no shell. |
 | `T3_SETUP_PORT` | `3774` | Setup page port inside the container |
 | `T3_SETUP_BASE_PATH` | — | Serve the setup page under a path, such as `/__setup` |
-| `T3_TRUST_PROXY_HEADERS` | `0` | Trust the `X-Forwarded-Proto`/`Host` the proxy in front of `T3_SINGLE_PORT` set (`1` only when that port is reachable solely through your TLS-terminating proxy or tunnel) |
+| `T3_TRUST_PROXY_HEADERS` | `0` | Trust forwarding headers from the proxy in front of `T3_SINGLE_PORT` or the direct Setup listener. This preserves the external HTTPS scheme, host, path prefix and visitor address. Use `1` only when the listener is reachable solely through your trusted proxy or tunnel. Loopback requests from the in-container router remain trusted. |
 | `T3_SINGLE_PORT` | — | Also serve T3 Code and the setup page together on this port, the setup page under `/__setup`, for a tunnel, proxy or hosting platform that routes one port. See [Exposing it through one hostname](remote-access.md#exposing-it-through-one-hostname). |
 | `T3_SETUP_ACCEPT_T3_SESSIONS` | `1` | Let a browser signed in to T3 Code with terminal access open the setup page without the key. `0` always asks for the key. |
 | `T3_ALLOW_SUDO` | `0` | Give agents passwordless sudo in the container |

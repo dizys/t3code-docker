@@ -55,13 +55,17 @@ test('DNS resolution uses the same bounded probe deadline', async t => {
 });
 
 test('IPv6 link-local, metadata and mapped loopback forms require literal boolean consent', () => {
-  for (const address of ['::ffff:127.0.0.1', '::ffff:7f00:1', '0:0:0:0:0:ffff:a9fe:a9fe', 'fe80::1', 'febf::1', 'fd00:ec2::254', '::']) {
+  for (const address of ['::ffff:127.0.0.1', '::ffff:7f00:1', 'fe80::1', 'febf::1', '::']) {
     assert.equal(isBlockedIp(address), true, address);
     assert.equal(parseAddress(`http://[${address}]`).code, 'private-host', address);
     assert.equal(parseAddress(`http://[${address}]`, { allowPrivateHost: 'false' }).code, 'private-host', address);
     assert.equal(parseAddress(`http://[${address}]`, { allowPrivateHost: true }).ok, true, address);
   }
   assert.equal(isBlockedIp('2606:4700:4700::1111'), false);
+  for (const address of ['fd00:ec2::254', '0:0:0:0:0:ffff:a9fe:a9fe']) {
+    assert.equal(parseAddress(`http://[${address}]`).code, 'metadata-host', address);
+    assert.equal(parseAddress(`http://[${address}]`, { allowPrivateHost: true }).code, 'metadata-host', address);
+  }
 });
 
 test('a landing-page redirect does not reject working API paths or send a key to the target', async t => {

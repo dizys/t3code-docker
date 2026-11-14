@@ -123,7 +123,7 @@ export function parseAddress(input, options = {}) {
     pathname = trimmed;
   }
   const hostname = stripBrackets(parsed.hostname);
-  if (isMetadata(hostname)) {
+  if (isMetadata(hostname) || isMetadataIp(hostname)) {
     return { ok: false, code: 'metadata-host', hostname, host: parsed.host,
       error: `“${hostname}” is a cloud metadata address. A gateway can never use it.` };
   }

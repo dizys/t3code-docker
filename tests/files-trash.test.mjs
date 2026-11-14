@@ -22,3 +22,22 @@ test('emptying Trash needs confirmation and deletes only the explicitly selected
   const {workspace,trash}=await filesFixture(t),a=path.join(workspace,'a'),b=path.join(workspace,'b');await fs.writeFile(a,'a');await fs.writeFile(b,'b');const first=await trash.move({paths:[a]}),second=await trash.move({paths:[b]});
   await assert.rejects(trash.empty({ids:first.ids}),{code:'conflicts'});await trash.empty({ids:first.ids,confirmed:true});assert.deepEqual((await trash.list()).items.map(row=>row.id),second.ids);
 });
+
+test('workspace Trash refuses to append through an exclude link',async t=>{
+  const f=await filesFixture(t);
+  await fs.mkdir(path.join(f.workspace,'.git','info'),{recursive:true});
+  const victim=path.join(f.root,'victim');await fs.writeFile(victim,'precious');
+  await fs.symlink(victim,path.join(f.workspace,'.git','info','exclude'));
+  const target=path.join(f.workspace,'a');await fs.writeFile(target,'a');
+  await assert.rejects(f.trash.move({paths:[target]}),{code:'invalid'});
+  assert.equal(await fs.readFile(victim,'utf8'),'precious');assert.equal(await fs.readFile(target,'utf8'),'a');
+});
+
+test('workspace Trash records its ignore line in a regular exclude file',async t=>{
+  const f=await filesFixture(t);
+  await fs.mkdir(path.join(f.workspace,'.git','info'),{recursive:true});
+  await fs.writeFile(path.join(f.workspace,'.git','info','exclude'),'*.log\n');
+  const target=path.join(f.workspace,'a');await fs.writeFile(target,'a');
+  const moved=await f.trash.move({paths:[target]});assert.equal(moved.ids.length,1);
+  assert.equal(await fs.readFile(path.join(f.workspace,'.git','info','exclude'),'utf8'),'*.log\n.t3-trash/\n');
+});

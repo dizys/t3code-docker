@@ -6,10 +6,10 @@ const MIN_LINE = 16;
 
 // The forms a value commonly takes in output. A file's long lines count as well,
 // so printing part of a private key is caught too.
-export function maskValues(secrets) {
+export function maskValues(secrets, { minimumLength = MIN_LENGTH } = {}) {
   const values = new Set();
   for (const secret of [secrets].flat()) {
-    if (typeof secret !== 'string' || secret.length < MIN_LENGTH) continue;
+    if (typeof secret !== 'string' || secret.length < minimumLength) continue;
     values.add(secret); values.add(secret.trim());
     values.add(JSON.stringify(secret).slice(1, -1));
     values.add(encodeURIComponent(secret));
@@ -17,7 +17,7 @@ export function maskValues(secrets) {
     values.add(Buffer.from(secret).toString('base64'));
     if (secret.includes('\n')) for (const line of secret.split(/\r?\n/)) if (line.trim().length >= MIN_LINE) values.add(line.trim());
   }
-  return [...values].filter(value => value.length >= MIN_LENGTH).sort((a, b) => b.length - a.length);
+  return [...values].filter(value => value.length >= minimumLength).sort((a, b) => b.length - a.length);
 }
 
 function filterValues(values, write) {

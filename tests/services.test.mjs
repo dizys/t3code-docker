@@ -169,6 +169,17 @@ test("logs redact split secrets, remain bounded and separate stdout from stderr"
   const dir = path.join(f.root, "logs/preview");
   for (const file of await fs.readdir(dir)) assert.ok((await fs.stat(path.join(dir, file))).size <= 256 * 1024);
 });
+test("logs hide the encoded forms of a secret, even split across writes", async t => {
+  const f = await fixture(t), secret = "p@ss w0rd/val+ue";
+  const writer = logWriter(f.root, "preview", "run", "stdout", [secret]);
+  const base64 = Buffer.from(secret).toString("base64"), url = encodeURIComponent(secret);
+  const form = new URLSearchParams([["", secret]]).toString().slice(1);
+  writer.write(Buffer.from("a " + base64.slice(0, 10))); writer.write(Buffer.from(base64.slice(10) + " b " + url.slice(0, 8)));
+  writer.write(Buffer.from(url.slice(8) + " c " + form + " d " + secret + "\n")); writer.end();
+  const text = readLogs(f.root, "preview").entries.map(entry => entry.text).join("\n");
+  for (const value of [secret, base64, url, form]) assert.ok(!text.includes(value), value);
+  assert.equal(text.match(/\[redacted\]/g).length, 4);
+});
 test("disabled registrations retain exact tool and Vault dependency references", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "t3-services-refs-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

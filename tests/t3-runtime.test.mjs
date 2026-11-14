@@ -319,8 +319,8 @@ test("starting a retained runtime refreshes only its image-owned Setup bridge", 
   assert.deepEqual(await fs.readFile(path.join(directory,'t3')),binaryBefore);
 });
 
-async function supervisor(t, env, timeout = 2000, authenticationTimeoutMs) {
-  const options = { preparedTimeoutMs: timeout, ...(authenticationTimeoutMs === undefined ? {} : { authenticationTimeoutMs }) };
+async function supervisor(t, env, timeout = 2000, authenticationTimeoutMs, commitHealthMs = 100) {
+  const options = { preparedTimeoutMs: timeout, commitHealthMs, ...(authenticationTimeoutMs === undefined ? {} : { authenticationTimeoutMs }) };
   const driver = `import {runSupervisor} from ${JSON.stringify(new URL('../docker/runtime/supervisor.mjs', import.meta.url).href)}; process.exitCode = await runSupervisor(['serve'], ${JSON.stringify(options)});`;
   const child = spawn(process.execPath, ["--input-type=module", "-e", driver], { env, stdio: "pipe" });
   let log = "";

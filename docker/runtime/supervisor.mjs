@@ -61,7 +61,12 @@ async function removeSnapshots(paths) {
   await syncDirectory(path.dirname(paths.backup));
 }
 
-export async function snapshotDatabase(paths, id) {
+// A committed release must stay up through this window before its upgrade
+// is finalized. An earlier exit restores the previous release instead of
+// re-booting the crashing one on every container restart.
+const COMMIT_HEALTH_MS = 60_000;
+
+export async function snapshotDatabase(paths, id, { fromDatabase, targetDatabase } = {}) {
   await recoverSnapshot(paths);
   const existing = await readJson(path.join(paths.backup, "complete.json"));
   if (existing?.id === id) {
@@ -77,7 +82,12 @@ export async function snapshotDatabase(paths, id) {
   // SQLite's backup API includes committed WAL records in a consistent main
   // database. Sidecars can disappear when a last reader closes, and copying
   // the main file and WAL separately can capture different checkpoints.
-  const files = (await databaseFiles(userdata)).filter((file) => /\.(?:sqlite3?|db)$/.test(file));
+  // Only the stores a release migration may rewrite are snapshotted. Thread
+  // histories stay owned by their release; copying all of userdata would make
+  // every update pay for user data the trial never touches.
+  const migrating = new Set([fromDatabase, targetDatabase, "state.sqlite", "statev2.sqlite"].filter((name) => typeof name === "string"));
+  const present = await databaseFiles(userdata);
+  const files = present.filter((file) => /\.(?:sqlite3?|db)$/.test(file) && migrating.has(file));
   const { DatabaseSync, backup } = await import("node:sqlite");
   const directories = new Set([stage]);
   for (const file of files) {
@@ -88,7 +98,9 @@ export async function snapshotDatabase(paths, id) {
     await syncFile(target);
     for (let dir = path.dirname(target); dir !== stage; dir = path.dirname(dir)) directories.add(dir);
   }
-  await writeJson(path.join(stage, "complete.json"), { id, files });
+  // Record every database observed, not just the copied ones, so a rollback
+  // can tell pre-existing histories apart from files the trial introduced.
+  await writeJson(path.join(stage, "complete.json"), { id, files, present });
   for (const dir of [...directories].sort((a, b) => b.length - a.length)) await syncDirectory(dir);
   // Keep the previous backup until the new one is in place: a crash between
   // rm and rename used to lose both copies.
@@ -114,9 +126,13 @@ export async function snapshotDatabase(paths, id) {
 export async function restoreDatabase(paths, id) {
   await recoverSnapshot(paths);
   const backup = await readJson(path.join(paths.backup, "complete.json"));
-  if (backup?.id !== id || !Array.isArray(backup.files) || backup.files.some((file) => typeof file !== "string" || path.isAbsolute(file) || file.split(path.sep).includes("..") || !sqlite.test(file))) {
+  const names = (value) => Array.isArray(value) && value.every((file) => typeof file === "string" && !path.isAbsolute(file) && !file.split(path.sep).includes("..") && sqlite.test(file));
+  if (backup?.id !== id || !names(backup.files) || (backup.present !== undefined && !names(backup.present))) {
     throw new Error("The upgrade's database snapshot is incomplete. Refusing to start against partially restored data.");
   }
+  // Pre-existing databases stay owned by their release; only files the trial
+  // introduced are removed. Snapshots that predate the observed list fall
+  // back to keeping exactly what they copied.
   const userdata = path.join(paths.home, "userdata");
   await fs.mkdir(userdata, { recursive: true, mode: 0o700 });
   const wanted = new Set(backup.files);
@@ -163,8 +179,9 @@ export async function restoreDatabase(paths, id) {
   }
   // Remove trial-only files after the replacements are durable. Older
   // snapshots can explicitly contain WALs, so retain every wanted file.
+  const keep = new Set([...backup.files, ...(backup.present || [])]);
   for (const file of await databaseFiles(userdata)) {
-    if (!wanted.has(file)) {
+    if (!keep.has(file)) {
       const target = path.join(userdata, file);
       await fs.rm(target, { force: true });
       changed(target);
@@ -283,15 +300,54 @@ export async function pruneRuntimes(paths, request) {
   }
 }
 
+export async function finalizeCommit(paths, request) {
+  await removeSnapshots(paths);
+  await pruneRuntimes(paths, request).catch((error) => console.error(`[t3code] could not trim cached releases: ${error.message}`));
+  await writeJson(paths.operation, { ...request, previous: undefined, phase: "succeeded", finishedAt: Date.now() });
+  // Keep the request as the cross-process mutex until every cleanup and
+  // terminal write finishes. A second operator cannot overwrite it early.
+  await fs.rm(paths.request, { force: true });
+  console.error(`[t3code] upgraded to ${request.version} (${request.channel})`);
+}
+
+export async function rollbackCommit(paths, request, error) {
+  // The committed release exited before proving it can serve. Restore the
+  // previous selection and database instead of re-booting the bad binary.
+  await writeJson(paths.selection, request.previous);
+  await restoreDatabase(paths, request.id);
+  await fs.rm(paths.request, { force: true });
+  await removeSnapshots(paths);
+  await writeJson(paths.operation, { ...request, previous: undefined, phase: "rolled-back", error: `${error} The previous version and database were restored.`, finishedAt: Date.now() });
+  console.error(`[t3code] upgrade rolled back: ${error}`);
+}
+
 export async function recoverUpdate(paths) {
   const pending = await readJson(paths.request);
   if (!pending) return;
   const request = validateRequest(pending);
+  if (request.phase === "committed") {
+    // The selection was committed but the release never survived its health
+    // window; the container restarted first. Restore the previous release
+    // instead of re-booting a version that may crash on every start.
+    await rollbackCommit(paths, request, "The new T3 Code version did not stay up.");
+    return;
+  }
   const selection = await readSelection(paths);
   if (selection.updateId === request.id && selection.version === request.version && selection.patchRevision === request.patchRevision) {
     await writeJson(paths.operation, { ...request, previous: undefined, phase: "succeeded", finishedAt: Date.now() });
   } else {
-    if (selection.version !== request.previous.version || selection.channel !== request.previous.channel || selection.patchRevision !== request.previous.patchRevision) throw new Error("The pending upgrade does not match T3 Code's saved selection.");
+    if (selection.version !== request.previous.version || selection.channel !== request.previous.channel || selection.patchRevision !== request.previous.patchRevision) {
+      // A committed selection naming this request must still match it.
+      if (selection.updateId === request.id) throw new Error("The pending upgrade does not match T3 Code's saved selection.");
+      // Otherwise the selection was never committed for this request: the
+      // image was downgraded or the selection was hand-fixed after the
+      // request was written. Discard the stale request and boot the saved
+      // selection instead of throwing on every restart.
+      await recoverSnapshot(paths);
+      await writeJson(paths.operation, { ...request, previous: undefined, phase: "interrupted", error: "A stale upgrade request did not match T3 Code's saved selection and was discarded.", finishedAt: Date.now() });
+      await fs.rm(paths.request, { force: true });
+      return;
+    }
     if (["starting", "restoring"].includes(request.phase)) {
       await writeJson(paths.request, { ...request, phase: "restoring" });
       await restoreDatabase(paths, request.id);
@@ -302,7 +358,7 @@ export async function recoverUpdate(paths) {
   await removeSnapshots(paths);
 }
 
-export async function runSupervisor(args, { env = process.env, preparedTimeoutMs = 120_000, authenticationTimeoutMs = 120_000, bundledLauncherProtocol } = {}) {
+export async function runSupervisor(args, { env = process.env, preparedTimeoutMs = 120_000, authenticationTimeoutMs = 120_000, bundledLauncherProtocol, commitHealthMs = COMMIT_HEALTH_MS } = {}) {
   const paths = runtimePaths(env);
   await fs.mkdir(paths.run, { recursive: true, mode: 0o700 });
   const pidFile = path.join(paths.run, "t3.pid");
@@ -394,7 +450,7 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
     };
     try {
       await phase("snapshot");
-      await snapshotDatabase(paths, request.id);
+      await snapshotDatabase(paths, request.id, request);
       snapshot = true;
       await phase("starting");
       await syncAuthentication(paths, request);
@@ -417,19 +473,18 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
       child = await launch(runtime, { id: request.id, fromVersion: request.fromVersion, targetVersion: request.version, dbPath: path.join(paths.home, "userdata", request.targetDatabase || "statev2.sqlite"), status: "pending" });
       await child.prepared;
       if (stopping) return;
+      // Persist the committed phase before activation: a crash past this
+      // point must roll back on the next boot instead of re-booting a
+      // release that never proved it can serve.
+      await phase("committed");
       await writeJson(paths.selection, { schema: 1, channel: request.channel, version: request.version, ...(request.patchRevision ? { patchRevision: request.patchRevision } : {}), updateId: request.id });
       committed = true;
       await new Promise((resolve, reject) => child.process.send({ type: "committed", updateId: request.id }, (error) => error ? reject(error) : resolve()));
-      await removeSnapshots(paths);
-      await pruneRuntimes(paths, request).catch((error) => console.error(`[t3code] could not trim cached releases: ${error.message}`));
-      await writeJson(paths.operation, { ...request, previous: undefined, phase: "succeeded", finishedAt: Date.now() });
-      // Keep the request as the cross-process mutex until every cleanup and
-      // terminal write finishes. A second operator cannot overwrite it early.
-      await fs.rm(paths.request, { force: true });
-      console.error(`[t3code] upgraded to ${request.version} (${request.channel})`);
+      // The request and snapshots stay until the serving loop sees the
+      // child survive its health window (or rolls back an early exit).
     } catch (error) {
       if (stopping) return;
-      if (committed) throw error; // After activation, ordinary container crash policy applies.
+      if (committed) throw error; // The committed request rolls back on the next boot.
       await terminate(child);
       child = null;
       if (snapshot) { await phase("restoring"); await restoreDatabase(paths, request.id); }
@@ -442,7 +497,28 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
   try {
     while (!stopping) {
       child ??= await launch(await selectedRuntime(paths));
-      const result = await child.done;
+      let result = null;
+      const pending = !stopping && await readJson(paths.request);
+      if (pending?.phase === "committed") {
+        // The upgrade is committed but unproven. An early exit means the new
+        // release cannot serve: restore the previous one instead of exiting
+        // and re-booting the crashing version. Only a full health window
+        // finalizes the upgrade and its cleanup.
+        validateRequest(pending);
+        const settled = await Promise.race([child.done, new Promise((resolve) => setTimeout(resolve, commitHealthMs)).then(() => null)]);
+        if (settled) {
+          result = settled;
+          child = null;
+          if (!stopping && !await exists(restartFile)) {
+            await rollbackCommit(paths, pending, "The new T3 Code version exited before it stayed up.");
+            continue;
+          }
+          if (!stopping) await finalizeCommit(paths, pending);
+        } else if (!stopping) {
+          await finalizeCommit(paths, pending);
+        }
+      }
+      result ??= await child.done;
       child = null;
       if (stopping) return result.code;
       if (!await exists(restartFile)) return result.code;

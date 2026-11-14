@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { runtimePaths, writeJson, readJson, readSelection, selectedRuntime, releaseDirectory } from "../docker/runtime/state.mjs";
-import { recoverUpdate, restoreDatabase, snapshotDatabase } from "../docker/runtime/supervisor.mjs";
+import { finalizeCommit, rollbackCommit, recoverUpdate, restoreDatabase, snapshotDatabase } from "../docker/runtime/supervisor.mjs";
 
 const NIGHTLY = "0.0.46-nightly.20261011.2980";
 const cleanups = new WeakMap();
@@ -169,4 +169,61 @@ test("snapshots default to the legacy and current stores without histories", asy
   await snapshotDatabase(paths, "defaults");
   const backup = await readJson(path.join(paths.backup, "complete.json"));
   assert.deepEqual([...backup.files].sort(), ["state.sqlite", "statev2.sqlite"]);
+});
+
+test("interrupted successful cleanup never tries to roll back a removed snapshot", async (t) => {
+  const { paths } = await world(t);
+  await seedDatabase(path.join(paths.home, "userdata/statev2.sqlite"), "healthy data");
+  const request = { id: randomUUID(), version: NIGHTLY, channel: "nightly", fromVersion: "0.0.45", phase: "committed", previous: { schema: 1, channel: "stable", version: "0.0.45" } };
+  await snapshotDatabase(paths, request.id);
+  await writeJson(paths.request, request);
+  await writeJson(paths.selection, { schema: 1, channel: request.channel, version: request.version, updateId: request.id });
+  // Simulate a crash after snapshot cleanup but before the terminal receipt.
+  const rename = fs.rename;
+  fs.rename = async (from, to) => {
+    if (to === paths.operation) throw new Error("interrupted terminal write");
+    return rename(from, to);
+  };
+  try { await assert.rejects(finalizeCommit(paths, request), /interrupted terminal write/); }
+  finally { fs.rename = rename; }
+  await recoverUpdate(paths);
+  assert.equal((await readSelection(paths)).version, NIGHTLY);
+  assert.equal((await readJson(paths.operation)).phase, "succeeded");
+  assert.equal(await databaseContent(path.join(paths.home, "userdata/statev2.sqlite")), "healthy data");
+  assert.equal(await readJson(paths.request), null);
+});
+
+test("stopping during the commit window releases its timer promptly", async (t) => {
+  const { paths, env } = await world(t);
+  await seedDatabase(path.join(paths.home, "userdata/statev2.sqlite"), "original data");
+  await fakeRuntime(paths, "0.0.45", "ready", true);
+  await fakeRuntime(paths, NIGHTLY, "crash-after-commit");
+  const sup = await supervisor(t, env, 2000, 8000);
+  await requestTrial(paths, NIGHTLY);
+  await waitFor(async () => (await fs.readFile(path.join(paths.home, "activated"), "utf8").catch(() => "")) === NIGHTLY);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  sup.child.kill("SIGTERM");
+  const exited = await Promise.race([sup.done.then(() => true), new Promise(resolve => { const timer=setTimeout(()=>resolve(false),1500);timer.unref(); })]);
+  assert.equal(exited, true, "the health timer must not hold shutdown open");
+});
+
+test("interrupted rollback cleanup resumes without an already removed snapshot", async (t) => {
+  const { paths } = await world(t);
+  await seedDatabase(path.join(paths.home, "userdata/statev2.sqlite"), "original data");
+  const request = { id: randomUUID(), version: NIGHTLY, channel: "nightly", fromVersion: "0.0.45", phase: "committed", previous: { schema: 1, channel: "stable", version: "0.0.45" } };
+  await snapshotDatabase(paths, request.id);
+  await writeJson(paths.request, request);
+  await writeJson(paths.selection, { schema: 1, channel: request.channel, version: request.version, updateId: request.id });
+  const rm = fs.rm;
+  fs.rm = async (file, options) => {
+    await rm(file, options);
+    if (file === paths.backup) throw new Error("interrupted rollback cleanup");
+  };
+  try { await assert.rejects(rollbackCommit(paths, request, "early exit"), /interrupted rollback cleanup/); }
+  finally { fs.rm = rm; }
+  await recoverUpdate(paths);
+  assert.equal((await readSelection(paths)).version, "0.0.45");
+  assert.equal((await readJson(paths.operation)).phase, "rolled-back");
+  assert.equal(await databaseContent(path.join(paths.home, "userdata/statev2.sqlite")), "original data");
+  assert.equal(await readJson(paths.request), null);
 });

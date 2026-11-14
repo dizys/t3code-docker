@@ -301,6 +301,9 @@ export async function pruneRuntimes(paths, request) {
 }
 
 export async function finalizeCommit(paths, request) {
+  // Persist the healthy decision before deleting its rollback data. Recovery
+  // must finish cleanup, not try to restore a snapshot already removed.
+  await writeJson(paths.request, { ...request, phase: "finalizing" });
   await removeSnapshots(paths);
   await pruneRuntimes(paths, request).catch((error) => console.error(`[t3code] could not trim cached releases: ${error.message}`));
   await writeJson(paths.operation, { ...request, previous: undefined, phase: "succeeded", finishedAt: Date.now() });
@@ -315,9 +318,17 @@ export async function rollbackCommit(paths, request, error) {
   // previous selection and database instead of re-booting the bad binary.
   await writeJson(paths.selection, request.previous);
   await restoreDatabase(paths, request.id);
-  await fs.rm(paths.request, { force: true });
-  await removeSnapshots(paths);
+  await finishRollback(paths, { ...request, phase: "rolled-back", rollbackError: error });
+}
+
+async function finishRollback(paths, request) {
+  // Restoration is durable before its snapshot is discarded. Retain the
+  // request mutex until the terminal receipt and cleanup both finish.
+  await writeJson(paths.request, request);
+  const error = request.rollbackError;
   await writeJson(paths.operation, { ...request, previous: undefined, phase: "rolled-back", error: `${error} The previous version and database were restored.`, finishedAt: Date.now() });
+  await removeSnapshots(paths);
+  await fs.rm(paths.request, { force: true });
   console.error(`[t3code] upgrade rolled back: ${error}`);
 }
 
@@ -325,6 +336,17 @@ export async function recoverUpdate(paths) {
   const pending = await readJson(paths.request);
   if (!pending) return;
   const request = validateRequest(pending);
+  const selection = await readSelection(paths);
+  if (request.phase === "finalizing") {
+    if (selection.updateId !== request.id || selection.version !== request.version || selection.channel !== request.channel || selection.patchRevision !== request.patchRevision) throw new Error("The healthy upgrade no longer matches T3 Code's saved selection.");
+    await finalizeCommit(paths, request);
+    return;
+  }
+  if (request.phase === "rolled-back") {
+    if (selection.version !== request.previous.version || selection.channel !== request.previous.channel || selection.patchRevision !== request.previous.patchRevision) throw new Error("The restored upgrade no longer matches T3 Code's saved selection.");
+    await finishRollback(paths, request);
+    return;
+  }
   if (request.phase === "committed") {
     // The selection was committed but the release never survived its health
     // window; the container restarted first. Restore the previous release
@@ -332,7 +354,6 @@ export async function recoverUpdate(paths) {
     await rollbackCommit(paths, request, "The new T3 Code version did not stay up.");
     return;
   }
-  const selection = await readSelection(paths);
   if (selection.updateId === request.id && selection.version === request.version && selection.patchRevision === request.patchRevision) {
     await writeJson(paths.operation, { ...request, previous: undefined, phase: "succeeded", finishedAt: Date.now() });
   } else {
@@ -505,7 +526,8 @@ export async function runSupervisor(args, { env = process.env, preparedTimeoutMs
         // and re-booting the crashing version. Only a full health window
         // finalizes the upgrade and its cleanup.
         validateRequest(pending);
-        const settled = await Promise.race([child.done, new Promise((resolve) => setTimeout(resolve, commitHealthMs)).then(() => null)]);
+        let healthTimer;
+        const settled = await Promise.race([child.done, new Promise((resolve) => { healthTimer = setTimeout(() => resolve(null), commitHealthMs); })]).finally(() => clearTimeout(healthTimer));
         if (settled) {
           result = settled;
           child = null;

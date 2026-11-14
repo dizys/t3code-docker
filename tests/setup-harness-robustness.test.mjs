@@ -280,8 +280,9 @@ test("auth refresh happens only on TTL expiry or mutation", async () => {
 
 test('fresh local facts retain cached auth without retaining old connection modes or versions',async()=>{
   let calls=0,clock=1_000_000;
+  const cleared=[];
   let row={id:'codex',executable:'/managed/codex/1/bin',version:'1',installed:true,runnable:true,credentialsPresent:true,t3OwnSignIn:false};
-  const cache=createHarnessCache({freshLocal:true,now:()=>clock,refreshIntervalMs:15*60*1000,
+  const cache=createHarnessCache({freshLocal:true,onLocalChange:id=>cleared.push(id),now:()=>clock,refreshIntervalMs:15*60*1000,
     full:async()=>{calls++;return {harnesses:[{...row,signedIn:true}],degraded:[]};},
     cheap:async()=>({harnesses:[{...row,signedIn:null}],degraded:[]})});
   assert.equal((await cache.snapshot()).harnesses[0].signedIn,true);
@@ -291,10 +292,12 @@ test('fresh local facts retain cached auth without retaining old connection mode
   assert.equal(mode.harnesses[0].operation,'external-update');
   assert.equal(mode.harnesses[0].signedIn,true);
   assert.equal(calls,1,'native mode changes need no new authentication probes');
+  assert.deepEqual(cleared,[],'connection mode changes leave the matching CLI verdict cached');
   row={...row,version:'2',executable:'/managed/codex/2/bin'};clock+=15_000;
   const updated=await cache.snapshot();
   assert.equal(updated.harnesses[0].version,'2');
   assert.equal(updated.harnesses[0].signedIn,null,'a new executable cannot inherit the old sign-in verdict');
+  assert.deepEqual(cleared,['codex'],'clear the manager verdict before the next full read can reuse it');
   await cache.snapshot();
   assert.equal(calls,2,'an installation change makes the next authentication refresh due');
 });

@@ -695,6 +695,7 @@ const harnessCache = createHarnessCache({
   // caches each verdict, and every mutation invalidates this cache outright.
   refreshIntervalMs: 15 * 60 * 1000,
   freshLocal: true,
+  onLocalChange: forgetSignInState,
 });
 
 // Who each source control CLI is signed in as, the same way: a check asks the

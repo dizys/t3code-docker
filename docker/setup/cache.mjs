@@ -217,6 +217,7 @@ export function createHarnessCache({
   liveTtlMs = 30_000,
   cheapReserveMs = 1000,
   freshLocal = false,
+  onLocalChange,
   now = Date.now,
 } = {}) {
   let warm = null; // { harnesses, degraded, at, generation }
@@ -349,7 +350,10 @@ export function createHarnessCache({
     let changed = cached.size !== local.harnesses.length;
     const harnesses = local.harnesses.map(row => {
       const prior = cached.get(row.id), same = prior && installation(prior) === installation(row);
-      if (!same) changed = true;
+      if (!same) {
+        changed = true;
+        onLocalChange?.(row.id);
+      }
       return { ...row, signedIn: same ? prior.signedIn : null };
     });
     // A CLI install or credential removal outside Setup must not wait out the

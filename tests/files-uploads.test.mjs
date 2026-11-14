@@ -145,3 +145,18 @@ test('fresh module recovery reserves all unfinished uploads before accepting chu
   assert.ok(results.every(row=>row.status==='rejected'&&row.reason.code==='no-space'));
   const ids=started.uploads.map(row=>row.id);await recovered.cancel({ids});await f.uploads.cancel({ids});
 });
+
+test('start measures the mount the upload lands on, not the destination',async t=>{
+  const f=await filesFixture(t),stick=path.join(f.workspace,'stick');await fs.mkdir(stick);
+  // The destination looks roomy but the stick subdir is nearly full.
+  const statfs=async value=>value.split(path.sep).includes('stick')?{bavail:1024,bsize:1024}:{bavail:1024**3+6*1024**3,bsize:1};
+  const uploads=createUploads({policy:f.policy,guard:f.guard,trash:f.trash,statfs}),big=5*1024**3;
+  await assert.rejects(uploads.start({dest:f.workspace,items:[item('stick/big.bin',big)]}),
+    error=>error.code==='no-space'&&error.fields.availableBytes===1024*1024&&error.fields.requiredBytes===big);
+  // Nothing staged on the stick and nothing left behind in this start.
+  assert.deepEqual(await fs.readdir(stick),[]);assert.equal(uploads.list().length,0);
+  // The failed start reserved nothing: a 2 GiB upload still fits the 6 GiB of
+  // headroom, which a leaked 5 GiB reservation would have denied.
+  const next=await uploads.start({dest:f.workspace,items:[item('after.bin',2*1024**3)]});
+  await uploads.cancel({ids:next.uploads.map(row=>row.id)});
+});

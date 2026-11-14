@@ -161,6 +161,7 @@ const T3CredentialModel = (() => {
         if (!validEnvName(row.name)) errors.vars = (row.name || 'Each variable') + ' needs a name of letters, numbers and underscores.';
         else if (seen.has(row.name)) errors.vars = row.name + ' is listed twice.';
         else if (row.secret && !row.value && !row.saved) errors.vars = 'Enter a value for ' + row.name + '.';
+        else if (row.secret && row.value && row.value.trim().length < 8) errors.vars = 'Use at least 8 characters for ' + row.name + '.';
         seen.add(row.name);
       }
       return errors;
@@ -174,7 +175,9 @@ const T3CredentialModel = (() => {
       if (!applies(entry, draft.fields) || entry.optional) continue;
       const value = secrets[entry.key];
       if (!value && !savedSecrets.includes(entry.key)) errors['secrets.' + entry.key] = 'Enter ' + entry.label.toLowerCase() + '.';
+      else if (value && !entry.multiline && value.replace(/\r?\n$/, '').length < 8) errors['secrets.' + entry.key] = 'Use at least 8 characters for ' + entry.label.toLowerCase() + '.';
       else if (value && !entry.multiline && !text(value.replace(/\r?\n$/, ''), 8192)) errors['secrets.' + entry.key] = 'Use up to 8192 characters, without line breaks.';
+      else if (value && entry.multiline && value.trim().length < 8) errors['secrets.' + entry.key] = 'Use at least 8 characters for ' + entry.label.toLowerCase() + '.';
       else if (value && entry.multiline && value.length > 48 * 1024) errors['secrets.' + entry.key] = 'Use up to 48 KiB.';
     }
     for (const entry of [...type.fields, ...type.secrets]) {

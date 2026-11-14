@@ -178,7 +178,7 @@ test('temporary files exist only during the command, at mode 600 in a 700 folder
 
 test('temporary files go even when the command fails or is killed', async () => {
   for (const ending of ['process.exit(3)', `process.kill(process.pid, 'SIGKILL'); setTimeout(() => {}, 5000);`]) {
-    const { out } = await run([normalize({ id: 'cert', type: 'file', secrets: { content: 'fixture' } })], script(`require('node:fs').writeSync(1, process.env.CERT_FILE); ${ending}`));
+    const { out } = await run([normalize({ id: 'cert', type: 'file', secrets: { content: 'fixture-content' } })], script(`require('node:fs').writeSync(1, process.env.CERT_FILE); ${ending}`));
     await assert.rejects(fs.stat(out), { code: 'ENOENT' });
   }
 });
@@ -208,9 +208,9 @@ test('two credentials claiming one variable is an error, before anything starts'
   });
   assert.equal(started, false);
   // A file variable counts too.
-  const file = id => normalize({ id, type: 'file', env: { content: 'SHARED_FILE' }, secrets: { content: 'fixture' } });
+  const file = id => normalize({ id, type: 'file', env: { content: 'SHARED_FILE' }, secrets: { content: 'fixture-content' } });
   await assert.rejects(run([file('one'), file('two')], ['/bin/true']), /both set SHARED_FILE/);
-  await assert.rejects(run([shared('one'), normalize({ id: 'two', type: 'file', env: { content: 'SHARED_TOKEN' }, secrets: { content: 'fixture' } })], ['/bin/true']), /both set SHARED_TOKEN/);
+  await assert.rejects(run([shared('one'), normalize({ id: 'two', type: 'file', env: { content: 'SHARED_TOKEN' }, secrets: { content: 'fixture-content' } })], ['/bin/true']), /both set SHARED_TOKEN/);
 });
 
 test('NAME=VAR gives the main secret another name, which also settles a clash', async () => {
@@ -219,7 +219,7 @@ test('NAME=VAR gives the main secret another name, which also settles a clash', 
   const shared = (id, value) => credential(id, value, { env: { token: 'SHARED_TOKEN' } });
   const { code, out } = await run([shared('one', token + '-one'), { credential: shared('two', token + '-two'), rename: 'OTHER_TOKEN' }], script(`process.stdout.write(JSON.stringify([process.env.SHARED_TOKEN.endsWith('-one'), process.env.OTHER_TOKEN.endsWith('-two')]))`));
   assert.equal(code, 0); assert.deepEqual(JSON.parse(out), [true, true]);
-  const file = normalize({ id: 'cert', type: 'file', secrets: { content: 'fixture' } });
+  const file = normalize({ id: 'cert', type: 'file', secrets: { content: 'fixture-content' } });
   assert.equal((await run([{ credential: file, rename: 'MY_CERT' }], script(`process.stdout.write(String(require('node:fs').existsSync(process.env.MY_CERT)))`))).out, 'true');
 });
 

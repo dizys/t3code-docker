@@ -91,7 +91,7 @@ async function harness(t, options = {}) {
   const service = createGatewayService({ baseDir: path.join(root, 'state'), home, env: {}, io: options.io ?? fs, t3, vault, processes, lookup: options.lookup, nativeCodexModels: options.nativeCodexModels ?? (async () => nativeModels), wait: options.wait ?? (() => Promise.resolve()), ...(options.now ? { now: options.now } : {}), ...(options.getHarness ? { getHarness: options.getHarness } : {}) });
   return { service, t3, vault, home, root, stopped, processes, gateway: await gatewayServer(t, options.gatewayModels) };
 }
-const add = (h, agents = ['claude', 'codex', 'opencode'], over = {}) => h.service.create({ allowPrivateHost: true, gateway: { name: 'My Proxy', preset: 'cliproxyapi', url: h.gateway.url, agents, ...over }, key: 'sk-one' });
+const add = (h, agents = ['claude', 'codex', 'opencode'], over = {}) => h.service.create({ allowPrivateHost: true, gateway: { name: 'My Proxy', preset: 'cliproxyapi', url: h.gateway.url, agents, ...over }, key: 'sk-first-key' });
 const turn = async (h, id, agent, connected, more = {}) => { const { revision } = await h.service.status(); return h.service.setAgent({ id, agent, connected, revision, ...more }); };
 const settled = async h => {
   if (!h) return new Promise(resolve => setTimeout(resolve, 30));
@@ -148,10 +148,10 @@ test('Pi and Grok lifecycle stays scoped through reapply, rotation, model change
   const dir = path.join(h.root, 'state/setup/gateways/agents'), piFile = path.join(dir, `${id}.pi.mjs`), grokHome = path.join(dir, `${id}.grok`);
   assert.match(h.t3.state.instances[`pi_gw_${id}`].config.launchArgs, /^--offline --extension /);
   assert.equal(h.t3.state.instances[`grok_gw_${id}`].config.binaryPath, '/launchers/grok');
-  assert.equal(h.t3.secrets.get(`pi_gw_${id}/T3_GATEWAY_KEY`), 'sk-one');
-  assert.equal(h.t3.secrets.get(`grok_gw_${id}/XAI_API_KEY`), 'sk-one');
+  assert.equal(h.t3.secrets.get(`pi_gw_${id}/T3_GATEWAY_KEY`), 'sk-first-key');
+  assert.equal(h.t3.secrets.get(`grok_gw_${id}/XAI_API_KEY`), 'sk-first-key');
   for (const file of [piFile, path.join(grokHome, 'config.toml')]) {
-    assert.doesNotMatch(await fs.readFile(file, 'utf8'), /sk-one/);
+    assert.doesNotMatch(await fs.readFile(file, 'utf8'), /sk-first-key/);
     assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
   }
   assert.equal((await fs.stat(grokHome)).mode & 0o777, 0o700);
@@ -160,11 +160,11 @@ test('Pi and Grok lifecycle stays scoped through reapply, rotation, model change
   assert.ok((await h.service.reapply({ id, revision: view.revision })).results.every(row => row.action === 'none'));
   assert.deepEqual(h.t3.writes, []);
   assert.deepEqual(h.stopped, []);
-  await h.vault.replace(`${id}-gateway`, 'sk-two');
+  await h.vault.replace(`${id}-gateway`, 'sk-second-key');
   view = await h.service.status();
   await h.service.reapply({ id, revision: view.revision });
-  assert.equal(h.t3.secrets.get(`pi_gw_${id}/T3_GATEWAY_KEY`), 'sk-two');
-  assert.equal(h.t3.secrets.get(`grok_gw_${id}/XAI_API_KEY`), 'sk-two');
+  assert.equal(h.t3.secrets.get(`pi_gw_${id}/T3_GATEWAY_KEY`), 'sk-second-key');
+  assert.equal(h.t3.secrets.get(`grok_gw_${id}/XAI_API_KEY`), 'sk-second-key');
   assert.deepEqual(h.stopped.sort(), [`grok_gw_${id}`, `pi_gw_${id}`]);
   await settled();
   h.gateway.state.models.push('grok-new');
@@ -272,17 +272,17 @@ test('CLIProxyAPI catalog discovery feeds every supported gateway adapter', asyn
 
 test('a typed key goes to the Vault and each instance’s secret, and to nowhere else', async t => {
   const h = await harness(t), { id } = await add(h);
-  assert.equal(h.vault.rows.get(`${id}-gateway`).key, 'sk-one');
-  assert.equal(h.t3.secrets.get('claudeAgent_gw_my-proxy/ANTHROPIC_AUTH_TOKEN'), 'sk-one');
-  assert.equal(h.t3.secrets.get('codex_gw_my-proxy/T3_GATEWAY_KEY'), 'sk-one');
+  assert.equal(h.vault.rows.get(`${id}-gateway`).key, 'sk-first-key');
+  assert.equal(h.t3.secrets.get('claudeAgent_gw_my-proxy/ANTHROPIC_AUTH_TOKEN'), 'sk-first-key');
+  assert.equal(h.t3.secrets.get('codex_gw_my-proxy/T3_GATEWAY_KEY'), 'sk-first-key');
   const keyFile = path.join(h.root, `state/setup/gateways/agents/${id}.key`);
-  assert.equal(await fs.readFile(keyFile, 'utf8'), 'sk-one');
+  assert.equal(await fs.readFile(keyFile, 'utf8'), 'sk-first-key');
   assert.equal((await fs.stat(keyFile)).mode & 0o777, 0o600);
-  assert.doesNotMatch(await fs.readFile(path.join(h.root, `state/setup/gateways/agents/${id}.json`), 'utf8'), /sk-one/);
+  assert.doesNotMatch(await fs.readFile(path.join(h.root, `state/setup/gateways/agents/${id}.json`), 'utf8'), /sk-first-key/);
   const file = await fs.readFile(path.join(h.root, 'state/setup/gateways/gateways.json'), 'utf8');
-  assert.doesNotMatch(file, /sk-one/);
+  assert.doesNotMatch(file, /sk-first-key/);
   assert.equal((await fs.stat(path.join(h.root, 'state/setup/gateways/gateways.json'))).mode & 0o777, 0o600);
-  assert.doesNotMatch(JSON.stringify(await h.service.status()), /sk-one/);
+  assert.doesNotMatch(JSON.stringify(await h.service.status()), /sk-first-key/);
 });
 
 test('a saved Vault key can be chosen instead of typing one', async t => {
@@ -336,7 +336,7 @@ test('an instance still starting reads as starting, whatever T3’s placeholder 
   h.t3.read = async () => ({ ...await read(), providers: Object.keys(h.t3.state.instances).filter(id => id.includes('_gw_')).map(instanceId => ({ instanceId, status: 'warning', installed: false, checkedAt: '2000-01-01T00:00:00.000Z' })) });
   h.waitFor = new Promise(resolve => { release = resolve; });
   const service = createGatewayService({ baseDir: path.join(h.root, 'state2'), home: h.home, env: {}, io: fs, t3: h.t3, vault: h.vault, processes: h.processes, wait: () => h.waitFor });
-  const { gateways } = await service.create({ allowPrivateHost: true, gateway: { name: 'Slow', url: h.gateway.url, agents: ['claude'] }, key: 'sk-one' });
+  const { gateways } = await service.create({ allowPrivateHost: true, gateway: { name: 'Slow', url: h.gateway.url, agents: ['claude'] }, key: 'sk-first-key' });
   assert.equal(gateways[0].agents[0].state, 'starting');
   assert.equal(gateways[0].settling, true);
   h.t3.read = read;
@@ -347,17 +347,17 @@ test('adding an agent later reads the key from the Vault', async t => {
   const h = await harness(t), { id } = await add(h, ['claude']);
   await settled();
   await turn(h, id, 'codex', true);
-  assert.equal(h.t3.secrets.get('codex_gw_my-proxy/T3_GATEWAY_KEY'), 'sk-one');
+  assert.equal(h.t3.secrets.get('codex_gw_my-proxy/T3_GATEWAY_KEY'), 'sk-first-key');
 });
 
 test('rotating the key here reaches every connected instance', async t => {
   const h = await harness(t), { id } = await add(h);
   await settled();
   const { revision } = await h.service.status();
-  await h.service.save({ allowPrivateHost: true, id, revision, gateway: {}, key: 'sk-two' });
-  assert.equal(h.vault.rows.get(`${id}-gateway`).key, 'sk-two');
-  assert.equal(h.t3.secrets.get('claudeAgent_gw_my-proxy/ANTHROPIC_AUTH_TOKEN'), 'sk-two');
-  assert.equal(await fs.readFile(path.join(h.root, `state/setup/gateways/agents/${id}.key`), 'utf8'), 'sk-two');
+  await h.service.save({ allowPrivateHost: true, id, revision, gateway: {}, key: 'sk-second-key' });
+  assert.equal(h.vault.rows.get(`${id}-gateway`).key, 'sk-second-key');
+  assert.equal(h.t3.secrets.get('claudeAgent_gw_my-proxy/ANTHROPIC_AUTH_TOKEN'), 'sk-second-key');
+  assert.equal(await fs.readFile(path.join(h.root, `state/setup/gateways/agents/${id}.key`), 'utf8'), 'sk-second-key');
 });
 
 test('a process that outlives its instance is retired when it holds something old', async t => {
@@ -366,7 +366,7 @@ test('a process that outlives its instance is retired when it holds something ol
   h.stopped.length = 0;
   const all = ['claudeAgent_gw_my-proxy', 'codex_gw_my-proxy', 'opencode_gw_my-proxy'];
   let view = await h.service.status();
-  await h.service.save({ allowPrivateHost: true, id, revision: view.revision, gateway: {}, key: 'sk-two' });
+  await h.service.save({ allowPrivateHost: true, id, revision: view.revision, gateway: {}, key: 'sk-second-key' });
   assert.deepEqual(h.stopped.sort(), all, 'a new key');
   h.stopped.length = 0;
   view = await h.service.status();
@@ -405,7 +405,7 @@ test('processes are stopped before the write, because T3 checks the new instance
   h.processes.stop = async (...args) => { order.push('stop'); return stop(...args); };
   h.t3.upsert = async (...args) => { order.push('write'); return upsert(...args); };
   const { revision } = await h.service.status();
-  await h.service.save({ allowPrivateHost: true, id, revision, gateway: {}, key: 'sk-two' });
+  await h.service.save({ allowPrivateHost: true, id, revision, gateway: {}, key: 'sk-second-key' });
   assert.deepEqual(order, ['stop', 'write']);
 });
 
@@ -493,7 +493,7 @@ test('an owned setting changed in T3 Code is flagged, and additions are kept whe
   const restored = h.t3.state.instances['claudeAgent_gw_my-proxy'].environment;
   assert.equal(restored.find(row => row.name === 'ANTHROPIC_BASE_URL').value, h.gateway.url);
   assert.equal(restored.find(row => row.name === 'MY_FLAG').value, '1');
-  assert.equal(h.t3.secrets.get('claudeAgent_gw_my-proxy/ANTHROPIC_AUTH_TOKEN'), 'sk-one', 'the saved secret survives');
+  assert.equal(h.t3.secrets.get('claudeAgent_gw_my-proxy/ANTHROPIC_AUTH_TOKEN'), 'sk-first-key', 'the saved secret survives');
 });
 
 test('renaming an instance in T3 Code is not drift, and survives a later apply', async t => {
@@ -800,11 +800,11 @@ test('names become unique ids, and each gateway keeps its own instances', async 
   const h = await harness(t);
   const first = await add(h, ['codex'], { name: 'Proxy!' });
   await settled();
-  const second = await h.service.create({ allowPrivateHost: true, gateway: { name: 'proxy', url: h.gateway.url, agents: ['codex'] }, key: 'sk-two' });
+  const second = await h.service.create({ allowPrivateHost: true, gateway: { name: 'proxy', url: h.gateway.url, agents: ['codex'] }, key: 'sk-second-key' });
   assert.equal(first.id, 'proxy');
   assert.equal(second.id, 'proxy-2');
-  assert.equal(h.t3.secrets.get('codex_gw_proxy/T3_GATEWAY_KEY'), 'sk-one');
-  assert.equal(h.t3.secrets.get('codex_gw_proxy-2/T3_GATEWAY_KEY'), 'sk-two');
+  assert.equal(h.t3.secrets.get('codex_gw_proxy/T3_GATEWAY_KEY'), 'sk-first-key');
+  assert.equal(h.t3.secrets.get('codex_gw_proxy-2/T3_GATEWAY_KEY'), 'sk-second-key');
 });
 
 test('Claude’s settings file is reported with no values, and cleared key by key', async t => {
@@ -841,15 +841,17 @@ test('bad input is refused with a sentence and the field it belongs to', async t
   assert.equal((await failure(h.service.create({ allowPrivateHost: true, gateway: { name: 'a'.repeat(41), url: h.gateway.url, agents: [] } }))).field, 'name');
   assert.equal((await failure(h.service.create({ allowPrivateHost: true, gateway: { name: 'x', url: h.gateway.url, agents: ['nobody'] } }))).field, 'agents');
   assert.equal((await failure(h.service.create({ allowPrivateHost: true, gateway: { name: 'x', url: h.gateway.url, agents: [] }, key: 'has space' }))).field, 'key');
+  assert.equal((await failure(h.service.create({ allowPrivateHost: true, gateway: { name: 'x', url: h.gateway.url, agents: [] }, key: 'short' }))).field, 'key', 'a key too short to mask is refused');
+  assert.equal((await failure(h.service.test({ allowPrivateHost: true, url: h.gateway.url, key: 'sk-try-key', managementKey: 'short' }))).field, 'managementKey');
   assert.equal((await failure(h.service.create({ allowPrivateHost: true, gateway: { name: 'x', url: h.gateway.url, agents: [], manual: ['bad id'] } }))).field, 'manual');
 });
 
 test('testing an unsaved address changes nothing', async t => {
   const h = await harness(t);
-  const { result } = await h.service.test({ allowPrivateHost: true, url: `${h.gateway.url}/v1`, key: 'sk-try' });
+  const { result } = await h.service.test({ allowPrivateHost: true, url: `${h.gateway.url}/v1`, key: 'sk-try-key' });
   assert.equal(result.ok, true);
   assert.equal(h.gateway.state.keys[0], undefined, 'The keyless connectivity check runs first');
-  assert.ok(h.gateway.state.keys.includes('Bearer sk-try'), 'The key goes out only after the host answers');
+  assert.ok(h.gateway.state.keys.includes('Bearer sk-try-key'), 'The key goes out only after the host answers');
   assert.deepEqual(result.offers, { claude: 1, codex: 1, opencode: 2, pi: 2, grok: 0 });
   assert.equal((await h.service.status()).gateways.length, 0);
   assert.equal(h.vault.rows.size, 0);
@@ -858,20 +860,20 @@ test('testing an unsaved address changes nothing', async t => {
 test('a test needs a private-host confirm before any key goes out', async t => {
   const h = await harness(t);
   const before = h.gateway.state.keys.length;
-  const denied = await h.service.test({ url: h.gateway.url, key: 'sk-try' });
+  const denied = await h.service.test({ url: h.gateway.url, key: 'sk-try-key' });
   assert.equal(denied.result.code, 'private-host');
   assert.match(denied.result.message, /Confirm that you trust/);
   assert.equal(denied.result.confirmHost, '127.0.0.1');
   assert.equal(h.gateway.state.keys.length, before, 'Zero requests, keyed or not, without the confirm');
-  const allowed = await h.service.test({ allowPrivateHost: true, url: h.gateway.url, key: 'sk-try' });
+  const allowed = await h.service.test({ allowPrivateHost: true, url: h.gateway.url, key: 'sk-try-key' });
   assert.equal(allowed.result.ok, true);
-  assert.ok(h.gateway.state.keys.slice(before).includes('Bearer sk-try'), 'The key goes out only after the confirm');
+  assert.ok(h.gateway.state.keys.slice(before).includes('Bearer sk-try-key'), 'The key goes out only after the confirm');
   assert.equal(h.gateway.state.keys[before], undefined, 'Even then the keyless check runs first');
 });
 
 test('connecting reuses the test just shown instead of probing again', async t => {
   const h = await harness(t);
-  await h.service.test({ allowPrivateHost: true, url: h.gateway.url, key: 'sk-one' });
+  await h.service.test({ allowPrivateHost: true, url: h.gateway.url, key: 'sk-first-key' });
   const seen = h.gateway.state.keys.length;
   await add(h, ['claude']);
   assert.equal(h.gateway.state.keys.length, seen);
@@ -962,7 +964,7 @@ test('Restore puts back a key row someone deleted in T3 Code', async t => {
   assert.equal(view.gateways[0].agents[0].state, 'drift');
   const { results } = await h.service.reapply({ id, revision: view.revision });
   assert.deepEqual(results.map(result => result.ok), [true]);
-  assert.equal(h.t3.secrets.get('claudeAgent_gw_my-proxy/ANTHROPIC_AUTH_TOKEN'), 'sk-one');
+  assert.equal(h.t3.secrets.get('claudeAgent_gw_my-proxy/ANTHROPIC_AUTH_TOKEN'), 'sk-first-key');
 });
 
 test('an agent can be turned off even when its instance has lost its key row', async t => {
@@ -1048,7 +1050,7 @@ test('ids stay valid for T3 and the Vault, and never collide with the Add sheet'
   assert.notEqual(first.id, 'new');
   const long = 'a'.repeat(27) + ' b ' + 'c'.repeat(8);
   await h.service.create({ allowPrivateHost: true, gateway: { name: long, url: h.gateway.url, agents: [] } });
-  const second = await h.service.create({ allowPrivateHost: true, gateway: { name: long, url: h.gateway.url, agents: [] }, key: 'sk-x' });
+  const second = await h.service.create({ allowPrivateHost: true, gateway: { name: long, url: h.gateway.url, agents: [] }, key: 'sk-extra-key' });
   assert.match(second.id, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 });
 
@@ -1076,7 +1078,7 @@ async function hubServer(t, { accounts = [{ provider: 'claude' }, { provider: 'c
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   return { state, url: `http://127.0.0.1:${server.address().port}` };
 }
-const createInput = (hub, extra = {}) => ({ allowPrivateHost: true, gateway: { name: 'Hub', preset: 'cliproxyapi', url: hub.url, agents: ['claude'] }, key: 'sk-api', ...extra });
+const createInput = (hub, extra = {}) => ({ allowPrivateHost: true, gateway: { name: 'Hub', preset: 'cliproxyapi', url: hub.url, agents: ['claude'] }, key: 'sk-hub-key', ...extra });
 
 test('adding a management key gives T3 a verified hub, and the key stays out of the store', async t => {
   const h = await harness(t), hub = await hubServer(t);
@@ -1095,7 +1097,7 @@ test('adding a management key gives T3 a verified hub, and the key stays out of 
 
 test('a wrong management key adds nothing, costs one attempt, and never reaches T3', async t => {
   const h = await harness(t), hub = await hubServer(t);
-  await assert.rejects(h.service.create(createInput(hub, { managementKey: 'wrong' })), error => error.code === 'limits' && error.extra.field === 'managementKey' && /not the hash/.test(error.extra.hint) && /30 minutes/.test(error.extra.hint));
+  await assert.rejects(h.service.create(createInput(hub, { managementKey: 'wrong-management-key' })), error => error.code === 'limits' && error.extra.field === 'managementKey' && /not the hash/.test(error.extra.hint) && /30 minutes/.test(error.extra.hint));
   assert.equal(hub.state.attempts, 1, 'Five of these lock the server out');
   assert.deepEqual(h.t3.hubWrites, [], 'T3 polls with whatever it holds, so a bad key would spend the rest');
   assert.deepEqual(h.t3.writes, [], 'And the gateway isn’t half added');
@@ -1104,7 +1106,7 @@ test('a wrong management key adds nothing, costs one attempt, and never reaches 
 
 test('a management key is sent only when asked, so a plain test or health check costs nothing', async t => {
   const h = await harness(t), hub = await hubServer(t);
-  await h.service.test({ allowPrivateHost: true, url: hub.url, key: 'sk-api' });
+  await h.service.test({ allowPrivateHost: true, url: hub.url, key: 'sk-hub-key' });
   const { id } = await h.service.create(createInput(hub));
   await h.service.test({ id });
   await h.service.status();
@@ -1115,7 +1117,7 @@ test('a management key is sent only when asked, so a plain test or health check 
 
 test('a key shown as good isn’t spent again when the gateway is added', async t => {
   const h = await harness(t), hub = await hubServer(t);
-  const { result } = await h.service.test({ allowPrivateHost: true, url: hub.url, key: 'sk-api', managementKey: 'the-management-key' });
+  const { result } = await h.service.test({ allowPrivateHost: true, url: hub.url, key: 'sk-hub-key', managementKey: 'the-management-key' });
   assert.deepEqual(result.limits, { ok: true, code: 'ok', accounts: { claude: 1, codex: 1 } }, 'Disabled accounts don’t count, and only what Limits can show does');
   assert.ok(!JSON.stringify(result).includes('never-read'), 'The list can hold credentials, and none of it leaves');
   await h.service.create(createInput(hub, { managementKey: 'the-management-key' }));
@@ -1124,7 +1126,7 @@ test('a key shown as good isn’t spent again when the gateway is added', async 
 
 test('a gateway can’t vouch for a management key when it didn’t answer', async t => {
   const h = await harness(t), hub = await hubServer(t);
-  const { result } = await h.service.test({ allowPrivateHost: true, url: 'http://127.0.0.1:1', key: 'sk-api', managementKey: 'the-management-key' });
+  const { result } = await h.service.test({ allowPrivateHost: true, url: 'http://127.0.0.1:1', key: 'sk-hub-key', managementKey: 'the-management-key' });
   assert.equal(result.ok, false); assert.equal(result.limits, undefined);
   assert.equal(hub.state.attempts, 0);
 });
@@ -1291,7 +1293,7 @@ test('limits report what T3 sees, and only for a gateway that can have them', as
   h.t3.reports = [{ id: sourceId, kind: 'cliproxy', label: 'Hub', checkedAt: '2026-11-06T00:00:00Z', accounts: [], error: 'The hub rejected the key.' }];
   await h.service.setLimits({ id, revision: (await h.service.status()).revision, managementKey: 'the-management-key' });
   assert.equal((await h.service.status()).gateways[0].limits.state, 'error');
-  const litellm = await h.service.create({ allowPrivateHost: true, gateway: { name: 'Other', preset: 'litellm', url: hub.url, agents: [] }, key: 'sk-api' });
+  const litellm = await h.service.create({ allowPrivateHost: true, gateway: { name: 'Other', preset: 'litellm', url: hub.url, agents: [] }, key: 'sk-hub-key' });
   assert.equal(litellm.gateways.find(row => row.id !== id).limits.supported, false);
 });
 

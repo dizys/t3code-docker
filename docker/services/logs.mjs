@@ -2,13 +2,20 @@ import { mkdirSync, statSync, renameSync, writeFileSync, appendFileSync, readFil
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { ServiceError } from './store.mjs';
+import { maskValues } from './redact.mjs';
 const LIMIT = 256 * 1024;
 export function logWriter(root, id, runId, stream, masks = []) {
   const dir = path.join(root, "logs", id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = path.join(dir, stream + ".jsonl"), decoder = new StringDecoder("utf8");
   let buffered = "", pending = '', sequence = 0;
-  const redact = value => masks.filter(Boolean).sort((a, b) => b.length - a.length).reduce((result, mask) => result.split(mask).join("[redacted]"), value);
+  // The same encoded forms the Vault hides in command output: a service that
+  // prints `echo $TOKEN | base64` must not leave the value in its log.
+  // Preserve the old literal masking of short service passwords too. The
+  // external service owns its password policy; saved values must stay usable.
+  const values = maskValues(masks, { minimumLength: 1 });
+  const pattern = values.length ? new RegExp(values.map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g') : null;
+  const redact = value => pattern ? value.replace(pattern, '[redacted]') : value;
   const line = text => {
     const record = JSON.stringify({ at: Date.now(), runId, stream, sequence: ++sequence, text: text.slice(0, 8192) }) + "\n";
     try {
@@ -19,12 +26,12 @@ export function logWriter(root, id, runId, stream, masks = []) {
   const drain = final => {
     // Redact before splitting lines, including multiline values and values
     // split across writes. Keep enough raw suffix for the next chunk.
-    const overlap = Math.max(1, ...masks.map(mask => mask.length));
+    const overlap = Math.max(1, ...values.map(value => value.length));
     let cut = final ? pending.length : Math.max(0, pending.length - overlap + 1);
     let changed;
     do {
       changed = false;
-      for (const mask of masks.filter(Boolean)) {
+      for (const mask of values) {
         const at = pending.lastIndexOf(mask, cut - 1);
         if (at >= 0 && at < cut && at + mask.length > cut) { cut = at; changed = true; }
       }

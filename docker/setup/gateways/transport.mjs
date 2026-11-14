@@ -5,7 +5,7 @@ import { isIP } from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
 import { Readable } from 'node:stream';
-import { isBlockedIp } from './address.mjs';
+import { isBlockedIp, isMetadataIp } from './address.mjs';
 
 export const lookupGateway = hostname => dnsLookup(hostname, { all: true });
 const dnsError = () => Object.assign(new Error('The gateway address could not be resolved.'), { code: 'ENOTFOUND' });
@@ -32,6 +32,8 @@ async function resolved(hostname, lookup, signal) {
 
 export async function gatewayFetch(address, { allowPrivateHost = false, lookup = lookupGateway, signal, fetchImpl = globalThis.fetch } = {}) {
   const addresses = await resolved(address.hostname, lookup, signal);
+  const metadata = addresses.find(row => isMetadataIp(row.address));
+  if (metadata) throw Object.assign(new Error('The gateway resolves to a cloud metadata address.'), { code: 'metadata-host', address: metadata.address });
   const blocked = addresses.find(row => isBlockedIp(row.address));
   if (blocked && allowPrivateHost !== true) throw Object.assign(new Error('The gateway resolves to a private address.'), { code: 'private-host', address: blocked.address });
   // Injected transports are for controlled adapters/tests. Production always

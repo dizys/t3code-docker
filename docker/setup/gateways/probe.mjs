@@ -114,10 +114,12 @@ export async function probeGateway({ url: input, key = '', fetchImpl = globalThi
   const { url, notes, insecure, hostname } = address, headers = headersFor(key), keyless = headersFor(), limit = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
   const finish = (result) => ({ at, url, notes, insecure, ms: Math.max(0, now() - at), models: { listed: false, ids: [], capabilities: {} }, protocols: {}, ...result });
   const privateRefusal = pinned => finish({ ok: false, code: 'private-host', confirmHost: hostname, host: address.host, message: `“${hostname}” looks like a private host${pinned ? ` (${pinned})` : ''}.`, hint: 'Tick “Private host” to confirm this address is yours, then test again.' });
+  const metadataRefusal = pinned => finish({ ok: false, code: 'metadata-host', host: address.host, message: `“${hostname}” is a cloud metadata address${pinned ? ` (${pinned})` : ''}. A gateway can never use it.`, hint: 'Use a gateway address instead.' });
   // DNS is pinned once, before any request: no re-resolve per redirect or per route.
   let fetchPinned;
   try { fetchPinned = await gatewayFetch(address, { allowPrivateHost, lookup, signal: limit(), fetchImpl }); }
   catch (error) {
+    if (error.code === 'metadata-host') return metadataRefusal(error.address);
     if (error.code === 'private-host') return privateRefusal(error.address);
     const code = connectionCode(error); return finish({ ok: false, code, ...connectionProblem(code, address) });
   }

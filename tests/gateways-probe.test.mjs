@@ -260,12 +260,14 @@ test('other gateways and rejected keys never request the CLIProxyAPI catalog', a
 test('a private host needs a confirm before any request goes out', async t => {
   const seen = [];
   const fetchImpl = async () => { seen.push(true); throw new Error('must not fetch'); };
-  for (const url of ['http://localhost:8317', 'http://127.0.0.1:8317', 'http://0.0.0.0:8317', 'http://[::1]:8317', 'http://169.254.169.254', 'http://gateway:8317']) {
+  for (const url of ['http://localhost:8317', 'http://127.0.0.1:8317', 'http://0.0.0.0:8317', 'http://[::1]:8317', 'http://gateway:8317']) {
     const result = await probeGateway({ url, key: 'sk-test', fetchImpl });
     assert.equal(result.code, 'private-host', url);
     assert.match(result.message, /Private host|private host/);
     assert.equal(result.confirmHost, result.confirmHost);
   }
+  const metadata = await probeGateway({ url: 'http://169.254.169.254', key: 'sk-test', fetchImpl, allowPrivateHost: true });
+  assert.equal(metadata.code, 'metadata-host');
   assert.equal(seen.length, 0, 'No request, keyed or not, without a confirm');
   const server = await serve(gateway()); within(t, server);
   const allowed = await probeGateway({ allowPrivateHost: true, url: server.url, key: 'sk-test' });
@@ -276,13 +278,18 @@ test('a private host needs a confirm before any request goes out', async t => {
 test('a name that resolves to a blocked address needs the same confirm', async () => {
   const seen = [];
   const fetchImpl = async () => { seen.push(true); return new Response(JSON.stringify({ data: [] }), { status: 200 }); };
-  const blocked = await probeGateway({ url: 'https://gateway.example.com', key: 'sk-test', fetchImpl, lookup: async () => '169.254.169.254' });
+  const blocked = await probeGateway({ url: 'https://gateway.example.com', key: 'sk-test', fetchImpl, lookup: async () => '127.0.0.1' });
   assert.equal(blocked.code, 'private-host');
   assert.equal(blocked.confirmHost, 'gateway.example.com');
   assert.equal(seen.length, 0);
-  const allowed = await probeGateway({ allowPrivateHost: true, url: 'https://gateway.example.com', key: 'sk-test', fetchImpl, lookup: async () => '169.254.169.254' });
+  const allowed = await probeGateway({ allowPrivateHost: true, url: 'https://gateway.example.com', key: 'sk-test', fetchImpl, lookup: async () => '127.0.0.1' });
   assert.notEqual(allowed.code, 'private-host');
   assert.ok(seen.length > 0, 'DNS is pinned once, then the keyed probe runs');
+  const metaSeen = [];
+  const metaFetch = async () => { metaSeen.push(true); return new Response(JSON.stringify({ data: [] }), { status: 200 }); };
+  const meta = await probeGateway({ allowPrivateHost: true, url: 'https://gateway.example.com', key: 'sk-test', fetchImpl: metaFetch, lookup: async () => '169.254.169.254' });
+  assert.equal(meta.code, 'metadata-host');
+  assert.equal(metaSeen.length, 0, 'No request to metadata, even with consent');
 });
 
 test('an unreachable host sees no key: the keyless check runs first', async t => {

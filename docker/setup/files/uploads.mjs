@@ -95,6 +95,9 @@ export function createUploads({policy,guard,trash,now=Date.now,statfs=value=>fs.
         const previous=[...sessions.values()].find(row=>!row.result&&row.dest===dest&&row.relative===item.path&&row.size===item.size&&row.lastModified===item.lastModified);
         if(previous){const actual=await maybeStat(previous.temp);if(actual?.isFile()&&!actual.isSymbolicLink()&&identity(actual)===previous.identity&&Number(actual.size)<=previous.size){const landed=Number(actual.size);if(landed>previous.received)release(previous,landed-previous.received);previous.received=landed;previous.at=now();results.push({...previous,conflict:await conflict(previous)});continue;}fail('changed','An unfinished upload changed on disk. Cancel it before restarting.');}
         const parent=await parents(dest,item.parts.slice(0,-1),input),target=path.join(parent,item.parts.at(-1)),id='u_'+randomUUID(),temp=path.join(parent,'.t3-upload-'+id+'.part');
+        // parents() may resolve into another filesystem, so measure the one the
+        // staging file will actually land on, the same parent chunks check.
+        await enough(parent,item.size+reservedBytes);
         const row=await guard.run(input,[{path:target,mode:'write',missing:true,inUse:false}],async([target])=>{
           const handle=await fs.open(path.join(target.pin.parent,path.basename(temp)),'wx',0o600);
           try{const stat=await handle.stat({bigint:true});return {id,dest,parent:target.pin.parent,parentIdentity:identity(target.pin.stat),relative:item.path,target:target.path,temp,identity:identity(stat),size:item.size,lastModified:item.lastModified,received:0,at:now(),existingRevision:target.stat?statRevision(target.stat):null};}finally{await handle.close();}

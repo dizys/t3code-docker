@@ -73,6 +73,7 @@ const cleanManagementKey = value => {
 };
 const allowPrivate = input => (input?.allowPrivateHost ?? input?.gateway?.allowPrivateHost) === true;
 const requireHostConsent = result => {
+  if (result?.code === 'metadata-host') throw new GatewayError(result.message, 409, 'metadata-host', { field: 'url', hint: result.hint });
   if (result?.code === 'private-host') throw new GatewayError(result.message, 409, 'private-host', { field: 'url', confirmHost: result.confirmHost, hint: result.hint });
 };
 const cleanAddress = (value, allowPrivateHost = false) => {

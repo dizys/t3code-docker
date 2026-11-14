@@ -192,10 +192,20 @@ try {
     assert.match(await networkingReview.innerText(), /Full container networking/); assert.match(await networkingReview.innerText(), /every program/);
     await networkingReview.getByRole('checkbox', { name: 'I have another way to reach Setup or this container.', exact: true }).check();
     await shot('tailscale-networking-review');
+    const networkingSubmission = page.waitForResponse(response => new URL(response.url()).pathname === '/__setup/services/apply' && response.request().method() === 'POST');
     await networkingReview.getByRole('button', { name: 'Save configuration', exact: true }).click();
+    const networkingResponse = await networkingSubmission;
+    assert.equal(networkingResponse.ok(), true);
+    const networkingOperation = await networkingResponse.json();
+    assert.equal(networkingOperation.domain, 'system');
+    assert.equal(networkingOperation.target, 'tailscale');
+    assert.equal(networkingOperation.action, 'edit');
     await tailnetEditor.waitFor({ state: 'detached' });
     await tailnet.getByRole('button', { name: 'Tailscale', exact: true }).click();
     const tailnetInspector = page.getByRole('dialog', { name: 'Tailscale', exact: true });
+    // Closing the editor acknowledges submission, not completion. Wait for this
+    // exact edit and its refreshed row before planning sign-in at a new revision.
+    await tailnetInspector.locator(`[data-key="svc-op-${networkingOperation.id}"]`).getByText('Completed', { exact: true }).waitFor();
     await tailnetInspector.getByRole('button', { name: 'Sign in…', exact: true }).waitFor();
     assert.match(await tailnetInspector.innerText(), /Sign-in needed/);
     assert.doesNotMatch(await tailnetInspector.innerText(), /MagicDNS verified/);

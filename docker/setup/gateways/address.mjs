@@ -30,6 +30,20 @@ export function isMetadata(hostname) {
   return Boolean(m) && Number(m[1]) === 169 && Number(m[2]) === 254 || ipv6(host) === 'fd00:ec2::254';
 }
 
+/** A resolved address in a metadata range. Never allowed, even with private-host consent. */
+export function isMetadataIp(ip) {
+  const v = stripBrackets(String(ip ?? '').toLowerCase());
+  const m = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(v);
+  if (m) return Number(m[1]) === 169 && Number(m[2]) === 254;
+  const canonical = ipv6(v);
+  const mapped = /^::ffff:([a-f0-9]+):([a-f0-9]+)$/.exec(canonical ?? '');
+  if (mapped) {
+    const high = parseInt(mapped[1], 16), low = parseInt(mapped[2], 16);
+    return isMetadataIp([high >> 8, high & 255, low >> 8, low & 255].join('.'));
+  }
+  return canonical === 'fd00:ec2::254';
+}
+
 /** A Compose service name or LAN host: no dot, no colon, just letters, digits and dashes. */
 export function isSingleLabel(hostname) {
   const host = stripBrackets(String(hostname ?? '').toLowerCase());
@@ -93,6 +107,7 @@ export function parseAddress(input, options = {}) {
   const allowPrivateHost = options?.allowPrivateHost === true;
   const text = String(input ?? '').trim();
   if (!text) return { ok: false, error: 'Enter your gateway’s address.' };
+  if (/["`\\]/.test(text)) return { ok: false, error: 'Remove " and \\ and ` from the address.' };
   if (text.length > MAX_URL || /[\s\0]/.test(text)) return { ok: false, error: 'Enter a single address, without spaces.' };
   let parsed;
   try { parsed = new URL(SCHEME.test(text) ? text : assumedScheme(text) + text); }
@@ -108,6 +123,10 @@ export function parseAddress(input, options = {}) {
     pathname = trimmed;
   }
   const hostname = stripBrackets(parsed.hostname);
+  if (isMetadata(hostname) || isMetadataIp(hostname)) {
+    return { ok: false, code: 'metadata-host', hostname, host: parsed.host,
+      error: `“${hostname}” is a cloud metadata address. A gateway can never use it.` };
+  }
   if (!allowPrivateHost && needsPrivateConfirm(hostname)) {
     return { ok: false, code: 'private-host', hostname, host: parsed.host,
       error: `“${hostname}” looks like a private host. Confirm that you trust this address with your credentials.` };

@@ -2,7 +2,7 @@ import { mkdirSync, statSync, renameSync, writeFileSync, appendFileSync, readFil
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { ServiceError } from './store.mjs';
-import { maskValues } from "../setup/credentials/redact.mjs";
+import { maskValues } from './redact.mjs';
 const LIMIT = 256 * 1024;
 export function logWriter(root, id, runId, stream, masks = []) {
   const dir = path.join(root, "logs", id);
@@ -11,8 +11,11 @@ export function logWriter(root, id, runId, stream, masks = []) {
   let buffered = "", pending = '', sequence = 0;
   // The same encoded forms the Vault hides in command output: a service that
   // prints `echo $TOKEN | base64` must not leave the value in its log.
-  const values = maskValues(masks);
-  const redact = value => values.reduce((result, mask) => result.split(mask).join("[redacted]"), value);
+  // Preserve the old literal masking of short service passwords too. The
+  // external service owns its password policy; saved values must stay usable.
+  const values = maskValues(masks, { minimumLength: 1 });
+  const pattern = values.length ? new RegExp(values.map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g') : null;
+  const redact = value => pattern ? value.replace(pattern, '[redacted]') : value;
   const line = text => {
     const record = JSON.stringify({ at: Date.now(), runId, stream, sequence: ++sequence, text: text.slice(0, 8192) }) + "\n";
     try {

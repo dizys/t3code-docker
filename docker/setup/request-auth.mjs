@@ -37,8 +37,14 @@ export function cookieValue(header, name) {
  * usable. A proxy that rewrites the path is supposed to say so: nginx and
  * Traefik send X-Forwarded-Prefix, and when the path itself no longer
  * carries the prefix, that header is the only thing left that knows it.
+ *
+ * Only believed when `trusted` - from a direct peer the header is the
+ * visitor's own words, and must not become the cookie path or where
+ * redirects point. Callers pass whether the socket peer is loopback
+ * (client-address.mjs); the default keeps existing callers' behavior.
  */
-export function forwardedPrefix(headers) {
+export function forwardedPrefix(headers, { trusted = true } = {}) {
+  if (!trusted) return "";
   const raw = headers?.["x-forwarded-prefix"];
   if (typeof raw !== "string") return "";
   const trimmed = raw.trim().replace(/\/+$/, "");
@@ -47,4 +53,32 @@ export function forwardedPrefix(headers) {
   // would turn the next redirect into an absolute URL for that host.
   if (trimmed.split("/").slice(1).some((segment) => segment === "" || segment === "." || segment === "..")) return "";
   return trimmed;
+}
+
+/**
+ * The scheme a proxy says the visitor used, lowercased, or "" when it said
+ * nothing. Only believed when `trusted`: from a direct peer the header is
+ * the visitor's own words, and must not decide the session cookie's Secure
+ * flag - a forged `https` over plain HTTP would set a cookie the browser
+ * then never sends back, and every login silently "fails".
+ */
+export function forwardedProto(headers, { trusted = true } = {}) {
+  if (!trusted) return "";
+  const raw = headers?.["x-forwarded-proto"];
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  return String(first ?? "").split(",")[0].trim().toLowerCase();
+}
+
+/**
+ * The host to show: what a proxy says the visitor asked for, else the Host
+ * the client sent here. Only believed when `trusted`: from a direct peer
+ * the header is the visitor's own words.
+ */
+export function forwardedHost(headers, { trusted = true } = {}) {
+  const direct = headers?.host;
+  const fallback = Array.isArray(direct) ? direct[0] : direct;
+  if (!trusted) return fallback;
+  const forwarded = headers?.["x-forwarded-host"];
+  const value = forwarded ?? fallback;
+  return Array.isArray(value) ? value[0] : value;
 }

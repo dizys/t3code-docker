@@ -6,6 +6,7 @@
 // running version and an authenticated/not/unknown verdict.
 import path from "node:path";
 import {readEnv} from './mise.mjs';
+import { jsonFromChatter } from './chatter-json.mjs';
 
 /** Run the harness's version flag and extract a concrete version. */
 export async function probeVersion(ctx, entry, executable) {
@@ -143,13 +144,7 @@ async function probeCommand(ctx, executable, args, env = null) {
 }
 
 function parseJson(text) {
-  const start = text.indexOf("{");
-  if (start < 0) return null;
-  try {
-    return JSON.parse(text.slice(start));
-  } catch {
-    return null;
-  }
+  return jsonFromChatter(text);
 }
 
 function firstLine(text) {

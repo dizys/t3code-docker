@@ -72,6 +72,41 @@ const shapes = [
             // OpenCode answers provider.list for a location only once its skill scan has ended.
             client.provider.list({ location }).pipe(Effect.timeout("10 seconds"), Effect.ignore),`,
   },
+  // Reviewed against v0.1.10-nightly.20261113.4616 (59e64eef881632a23f89c4138bcf37f23d92bf93).
+  // Keep its provider environment and configurable probe timeout with native readiness.
+  {
+    directory: "directory",
+    environment: true,
+    comment: "/**\n * Reading a location the server has not loaded boots its scan, and only reads after the scan's\n * `command.updated` plus `skill.updated` are complete; `scanned` must listen before `read`. A\n * loaded location listing no commands is still scanning. A location another caller booted\n * moments earlier lists as loaded with only built-ins, so `settled` waits out its scan first.\n */\n",
+    loader: `  function* <E>(
+    read: Effect.Effect<OpenCode2Workspace, E>,
+    scanned: Effect.Effect<void>,
+    loaded: Effect.Effect<boolean>,
+    settled: Effect.Effect<void> = Effect.void,
+    environment?: NodeJS.ProcessEnv,
+  ) {
+    const wasLoaded = yield* loaded;
+    yield* settled;
+    const first = yield* read;
+    if (wasLoaded && first.commands.length > 0) return first;
+    yield* scanned.pipe(
+      Effect.timeoutOption(resolveProviderProbeTimeoutMs("opencode", 10_000, environment)),
+    );
+    return yield* read;
+  },`,
+    argument: `            Deferred.await(scanned),
+            // Without events no scan can be awaited, so trust the first read as before.
+            stream._tag === "None"
+              ? Effect.succeed(true)
+              : client.debug.location.list().pipe(
+                  Effect.map((loaded) => loaded.some((entry) => entry.directory === directory)),
+                  Effect.timeout("2 seconds"),
+                  Effect.orElseSucceed(() => true),
+                ),
+            // OpenCode answers provider.list for a location only once its skill scan has ended.
+            client.provider.list({ location }).pipe(Effect.timeout("10 seconds"), Effect.ignore),
+            processEnv,`,
+  },
 ];
 
 function mismatch(file) {
@@ -123,13 +158,25 @@ export function patchOpenCodeSkills(source) {
             Effect.asVoid,
           );
 `);
-  change(files[0], shape.argument, "            scanned,");
+  const callEnd = shape.directory === "directory" ? "\n          );" : "";
+  change(files[0], shape.argument + callEnd,
+    "            scanned," + (shape.environment ? "\n            processEnv," : "") + callEnd);
   change(files[1], shape.comment, "/** Wait for the native config plugins before caching an inventory, including warm or empty workspaces. */\n");
+  const parameters = shape.environment
+    ? `
+    read: Effect.Effect<OpenCode2Workspace, E>,
+    scanned: Effect.Effect<void, E2>,
+    environment?: NodeJS.ProcessEnv,
+  `
+    : "read: Effect.Effect<OpenCode2Workspace, E>, scanned: Effect.Effect<void, E2>";
+  const timeout = shape.environment
+    ? 'resolveProviderProbeTimeoutMs("opencode", 10_000, environment)'
+    : '"10 seconds"';
   change(files[1], shape.loader,
-    `  function* <E, E2>(read: Effect.Effect<OpenCode2Workspace, E>, scanned: Effect.Effect<void, E2>) {
+    `  function* <E, E2>(${parameters}) {
     // The first read starts discovery; built-in commands can precede local skills.
     yield* read;
-    yield* scanned.pipe(Effect.timeout("10 seconds"));
+    yield* scanned.pipe(Effect.timeout(${timeout}));
     return yield* read;
   },`);
   return next;

@@ -205,6 +205,8 @@ const SPECS = Object.freeze({
     config: (gateway, models, base, files, capabilities) => {
       const id = providerId(gateway), key = name => `model_providers.${id}.${name}`;
       // Single-quoted for T3's tokenizer, double-quoted inside so Codex reads TOML strings.
+      // Escape for TOML basic strings, so a quote or backslash in the URL cannot break out.
+      const tomlValue = value => String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       const overrides = [['model_provider', id], [key('name'), gateway.id], [key('base_url'), `${gateway.url}/v1`], [key('env_key'), GATEWAY_KEY_ENV], [key('wire_api'), 'responses']];
       if (hasCodexCatalog(gateway, models)) overrides.push(['model_catalog_json', files.config]);
       // Codex needs the key; the shells it opens don't. Without this it also lands
@@ -214,7 +216,7 @@ const SPECS = Object.freeze({
         binaryPath: base.binaryPath,
         homePath: base.homePath,
         shadowHomePath: base.shadowHomePath,
-        launchArgs: [base.launchArgs, ...overrides.map(([name, value]) => `-c '${name}="${value}"'`), keepFromShells].filter(Boolean).join(' '),
+        launchArgs: [base.launchArgs, ...overrides.map(([name, value]) => `-c '${name}="${tomlValue(value)}"'`), keepFromShells].filter(Boolean).join(' '),
         customModels: t3Models('codex', gateway, models, capabilities),
       };
     },

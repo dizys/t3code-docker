@@ -83,14 +83,20 @@ test('a pasted admin address loses its admin path, so a test can’t count as a 
   }
 });
 
-test('loopback, metadata and single-label names need a private-host confirm', () => {
-  for (const input of ['http://localhost:8317', 'http://127.0.0.1:8317', 'http://127.1.2.3:8317', 'http://0.0.0.0:8317', 'http://[::1]:8317', 'http://169.254.169.254', 'http://169.254.10.20:80', 'http://gateway:8317', 'cliproxy:8317', 'localhost:8317']) {
+test('loopback and single-label names need a private-host confirm, metadata stays refused', () => {
+  for (const input of ['http://localhost:8317', 'http://127.0.0.1:8317', 'http://127.1.2.3:8317', 'http://0.0.0.0:8317', 'http://[::1]:8317', 'http://gateway:8317', 'cliproxy:8317', 'localhost:8317']) {
     const rejected = parseAddress(input);
     assert.equal(rejected.ok, false, input);
     assert.equal(rejected.code, 'private-host', input);
     assert.match(rejected.error, /Confirm that you trust/, input);
     const allowed = parseAddress(input, { allowPrivateHost: true });
     assert.equal(allowed.ok, true, input);
+  }
+  for (const input of ['http://169.254.169.254', 'http://169.254.10.20:80']) {
+    assert.equal(parseAddress(input).code, 'metadata-host', input);
+    const refused = parseAddress(input, { allowPrivateHost: true });
+    assert.equal(refused.ok, false, input);
+    assert.equal(refused.code, 'metadata-host', input);
   }
   assert.equal(parseAddress('https://openrouter.ai/api').ok, true);
   assert.equal(parseAddress('http://192.168.1.20:4000').ok, true);

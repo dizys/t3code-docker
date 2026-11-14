@@ -378,12 +378,14 @@ const useCliSignIn = async (id) => {
 // about anyone's credentials, so it must not turn a known "Not signed in"
 // into "not readable".
 const lastKnown = new Map();
-const stableAuth = (id, value) => {
+const stableAuth = (id, value, identity) => {
   // Muse's null is a real state after credentials are saved, rather than a
   // missed probe. Retaining its earlier false would keep it signed out forever.
   if (id === "muse") return value;
-  if (value === null) return lastKnown.has(id) ? lastKnown.get(id) : null;
-  lastKnown.set(id, value);
+  const prior = lastKnown.get(id);
+  if (prior && prior.identity !== identity) lastKnown.delete(id);
+  if (typeof value !== "boolean") return lastKnown.get(id)?.value ?? null;
+  lastKnown.set(id, { identity, value });
   return value;
 };
 
@@ -392,34 +394,39 @@ const stableAuth = (id, value) => {
 // the card actually renders: exact versions, runnable state, the operation in
 // flight, and the failure that stopped the last one. Auth comes from the manager's bounded probe of
 // the managed executable - never from a PATH search.
-const toPublicHarness = (facts) => ({
-  id: facts.id,
-  name: facts.name,
-  installed: facts.installed,
-  runnable: facts.runnable,
-  signedIn: stableAuth(facts.id, facts.authenticated),
-  version: facts.installedVersion ?? facts.recordedVersion ?? null,
-  installedVersion: facts.installedVersion,
-  recordedVersion: facts.recordedVersion,
-  verifiedVersion: facts.verifiedVersion ?? null,
-  configuredVersion: facts.configuredVersion ?? null,
-  executable: facts.executable,
-  configured: facts.configured,
-  minimumVersion: facts.minimumVersion ?? null,
-  minimumSatisfied: facts.minimumSatisfied ?? null,
-  supported: facts.supported,
-  failed: facts.failed,
-  failure: facts.failure,
-  operation: facts.operation,
-  operationState: facts.operationState,
-  inProgress: facts.inProgress,
-  managedVersions: facts.managedVersions ?? [],
-  credentialsPresent: facts.credentials?.present ?? false,
-  canSignIn: Boolean(AGENTS[facts.id]?.signin),
-  canSetKey: Boolean(AGENTS[facts.id]?.apiKey),
-  keyKind: AGENTS[facts.id]?.apiKey?.kind ?? null,
-  authMethod: authMethodOf(facts),
-});
+const toPublicHarness = (facts) => {
+  const authMethod = authMethodOf(facts);
+  const identity = JSON.stringify([facts.installed, facts.executable,
+    facts.installedVersion ?? facts.recordedVersion, facts.credentials?.present, authMethod]);
+  return {
+    id: facts.id,
+    name: facts.name,
+    installed: facts.installed,
+    runnable: facts.runnable,
+    signedIn: stableAuth(facts.id, facts.authenticated, identity),
+    version: facts.installedVersion ?? facts.recordedVersion ?? null,
+    installedVersion: facts.installedVersion,
+    recordedVersion: facts.recordedVersion,
+    verifiedVersion: facts.verifiedVersion ?? null,
+    configuredVersion: facts.configuredVersion ?? null,
+    executable: facts.executable,
+    configured: facts.configured,
+    minimumVersion: facts.minimumVersion ?? null,
+    minimumSatisfied: facts.minimumSatisfied ?? null,
+    supported: facts.supported,
+    failed: facts.failed,
+    failure: facts.failure,
+    operation: facts.operation,
+    operationState: facts.operationState,
+    inProgress: facts.inProgress,
+    managedVersions: facts.managedVersions ?? [],
+    credentialsPresent: facts.credentials?.present ?? false,
+    canSignIn: Boolean(AGENTS[facts.id]?.signin),
+    canSetKey: Boolean(AGENTS[facts.id]?.apiKey),
+    keyKind: AGENTS[facts.id]?.apiKey?.kind ?? null,
+    authMethod,
+  };
+};
 
 // How an agent is signed in, where that can be told without asking it: a key
 // in the environment, or Codex's stored API key against its browser sign-in.
@@ -673,7 +680,8 @@ const harnessCache = createHarnessCache({
     // from `warm` instead of forking (~11 CLI execs per 15s poll, each with
     // a 20s timeout, mostly discarded when the 4s budget loses). Mutations
     // invalidate the cache, so a sign-in, install or uninstall still shows
-    // at once; nothing else needs fresh auth state.
+    // at once. Local settings and installation facts are read separately on
+    // every poll; only authentication verdicts use the longer cache.
     const { harnesses, degraded } = await harness.status({ authenticate: true });
     return { harnesses: await withT3SignIn(harness, harnesses), degraded };
   },
@@ -686,6 +694,7 @@ const harnessCache = createHarnessCache({
   // Auth verdicts refresh here at most every 15 minutes; the manager also
   // caches each verdict, and every mutation invalidates this cache outright.
   refreshIntervalMs: 15 * 60 * 1000,
+  freshLocal: true,
 });
 
 // Who each source control CLI is signed in as, the same way: a check asks the

@@ -201,6 +201,9 @@ export function createProviderCache({
  *
  * `snapshotCheap()` answers the explicit `authenticate=false` polls from a
  * bounded cheap read without starting an auth refresh.
+ * With `freshLocal`, normal snapshots also read current local facts within
+ * the same budget. Only a matching installation's sign-in verdict is reused;
+ * versions, lifecycle state and native connection settings stay current.
  *
  * `full` and `cheap` must already return the public card shape
  * (`{ harnesses, degraded }`); this never throws, so the endpoint always has
@@ -213,6 +216,7 @@ export function createHarnessCache({
   refreshIntervalMs = 15_000,
   liveTtlMs = 30_000,
   cheapReserveMs = 1000,
+  freshLocal = false,
   now = Date.now,
 } = {}) {
   let warm = null; // { harnesses, degraded, at, generation }
@@ -279,7 +283,7 @@ export function createHarnessCache({
   // One poll answers within `budgetMs` overall: the refresh race keeps
   // `cheapReserveMs` back, and the cheap fallback gets only what is left,
   // rather than each stage spending the whole budget in turn.
-  const snapshot = async () => {
+  const cachedSnapshot = async () => {
     const started = now();
     const refreshBudget = Math.max(250, budgetMs - cheapReserveMs);
     const remaining = () => Math.max(250, budgetMs - (now() - started));
@@ -328,6 +332,30 @@ export function createHarnessCache({
       };
     }
     return cheapAnswer(remaining());
+  };
+
+  const installation = row => JSON.stringify([row.id, row.installed, row.runnable,
+    row.executable, row.installedVersion ?? row.version, row.credentialsPresent, row.authMethod]);
+  const snapshot = async () => {
+    const started = now();
+    const answer = await cachedSnapshot();
+    if (!freshLocal || ["cheap", "unavailable"].includes(answer.source)) return answer;
+    const local = await cheapAnswer(Math.max(250, budgetMs - (now() - started)));
+    if (local.source === "unavailable") {
+      const degraded = [...new Map([...answer.degraded, ...local.degraded].map(row => [JSON.stringify(row), row])).values()];
+      return { ...answer, stale: true, degraded };
+    }
+    const cached = new Map(answer.harnesses.map(row => [row.id, row]));
+    let changed = cached.size !== local.harnesses.length;
+    const harnesses = local.harnesses.map(row => {
+      const prior = cached.get(row.id), same = prior && installation(prior) === installation(row);
+      if (!same) changed = true;
+      return { ...row, signedIn: same ? prior.signedIn : null };
+    });
+    // A CLI install or credential removal outside Setup must not wait out the
+    // long auth TTL, nor inherit the previous executable's sign-in verdict.
+    if (changed) lastRefreshStart = 0;
+    return { ...answer, harnesses, degraded: local.degraded };
   };
 
   const snapshotCheap = async () => {

@@ -277,3 +277,51 @@ test("auth refresh happens only on TTL expiry or mutation", async () => {
   await cache.invalidate();
   assert.equal(fullCalls, 2);
 });
+
+test('fresh local facts retain cached auth without retaining old connection modes or versions',async()=>{
+  let calls=0,clock=1_000_000;
+  let row={id:'codex',executable:'/managed/codex/1/bin',version:'1',installed:true,runnable:true,credentialsPresent:true,t3OwnSignIn:false};
+  const cache=createHarnessCache({freshLocal:true,now:()=>clock,refreshIntervalMs:15*60*1000,
+    full:async()=>{calls++;return {harnesses:[{...row,signedIn:true}],degraded:[]};},
+    cheap:async()=>({harnesses:[{...row,signedIn:null}],degraded:[]})});
+  assert.equal((await cache.snapshot()).harnesses[0].signedIn,true);
+  row={...row,t3OwnSignIn:true,operation:'external-update'};clock+=15_000;
+  const mode=await cache.snapshot();
+  assert.equal(mode.harnesses[0].t3OwnSignIn,true);
+  assert.equal(mode.harnesses[0].operation,'external-update');
+  assert.equal(mode.harnesses[0].signedIn,true);
+  assert.equal(calls,1,'native mode changes need no new authentication probes');
+  row={...row,version:'2',executable:'/managed/codex/2/bin'};clock+=15_000;
+  const updated=await cache.snapshot();
+  assert.equal(updated.harnesses[0].version,'2');
+  assert.equal(updated.harnesses[0].signedIn,null,'a new executable cannot inherit the old sign-in verdict');
+  await cache.snapshot();
+  assert.equal(calls,2,'an installation change makes the next authentication refresh due');
+});
+
+test('fresh local inventories remove missing agents and report local read failures honestly',async()=>{
+  let rows=[{id:'codex',installed:true,executable:'/managed/codex',version:'1',runnable:true}],fail=false;
+  const cache=createHarnessCache({freshLocal:true,
+    full:async()=>({harnesses:rows.map(row=>({...row,signedIn:true})),degraded:[]}),
+    cheap:async()=>{if(fail)throw new Error('local inventory unavailable');return {harnesses:rows.map(row=>({...row,signedIn:null})),degraded:[]};}});
+  await cache.snapshot();rows=[];
+  assert.deepEqual((await cache.snapshot()).harnesses,[],'a cached row cannot resurrect an agent removed locally');
+  fail=true;
+  const unavailable=await cache.snapshot();
+  assert.equal(unavailable.stale,true);
+  assert.ok(unavailable.degraded.some(row=>String(row.error).includes('local inventory unavailable')));
+});
+
+test('fresh local reads share the status budget and cannot hang a warm response',async()=>{
+  let stalled=false;
+  const row={id:'codex',installed:true,runnable:true,executable:'/managed/codex',version:'1'};
+  const cache=createHarnessCache({freshLocal:true,budgetMs:400,
+    full:async()=>({harnesses:[{...row,signedIn:true}],degraded:[]}),
+    cheap:async()=>{if(stalled)return new Promise(()=>{});return {harnesses:[{...row,signedIn:null}],degraded:[]};}});
+  await cache.snapshot();stalled=true;
+  const started=Date.now(),answer=await cache.snapshot();
+  assert.ok(Date.now()-started<550,'one local read must not add a second request budget');
+  assert.equal(answer.harnesses[0].signedIn,true);
+  assert.equal(answer.stale,true);
+  assert.ok(answer.degraded.some(row=>row.what==='harness probes'));
+});

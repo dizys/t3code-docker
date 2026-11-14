@@ -53,11 +53,12 @@ const refusal = text => {
  */
 export async function probeHub({ url, key, fetchImpl = globalThis.fetch, timeoutMs = TIMEOUT_MS, signal, allowPrivateHost = false, lookup = lookupGateway } = {}) {
   const parsed = parseAddress(url, { allowPrivateHost });
+  if (!parsed.ok && parsed.code === 'metadata-host') return { ...failure('metadata-host', parsed.error, 'Use a gateway address instead.') };
   if (!parsed.ok && parsed.code === 'private-host') return { ...failure('private-host', parsed.error, 'Confirm that you trust this address with your credentials, then try again.'), confirmHost: parsed.hostname };
   if (!parsed.ok) return REFUSED.unreachable();
   let fetchPinned;
   try { fetchPinned = await gatewayFetch(parsed, { allowPrivateHost, lookup, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs), fetchImpl }); }
-  catch (error) { return error.code === 'private-host' ? { ...failure('private-host', `“${parsed.hostname}” resolves to a private host.`, 'Confirm this host before sending a key.'), confirmHost: parsed.hostname } : REFUSED.unreachable(); }
+  catch (error) { if (error.code === 'metadata-host') return { ...failure('metadata-host', `“${parsed.hostname}” is a cloud metadata address. A gateway can never use it.`, 'Use a gateway address instead.') }; return error.code === 'private-host' ? { ...failure('private-host', `“${parsed.hostname}” resolves to a private host.`, 'Confirm this host before sending a key.'), confirmHost: parsed.hostname } : REFUSED.unreachable(); }
   // Keyless first: a host that can't be reached never sees the management key.
   try {
     const probe = await fetchPinned(`${parsed.url}/`, { redirect: 'manual', headers: { accept: 'application/json', 'user-agent': 't3code-docker-setup' },

@@ -193,7 +193,7 @@ const smokes = {
       assert.deepEqual(found?.keys, ["ANTHROPIC_BASE_URL"]);
       await fs.writeFile(settings, '{}');
       const baseline = JSON.parse(await runClaude(env, '', { model: 'gemini-smoke' }));
-      assert.equal(baseline.modelUsage['gemini-smoke'].contextWindow, 200000);
+      assert.equal(baseline.modelUsage['gemini-smoke'].contextWindow, 1000000);
       const source = new URL(process.env.T3_SETUP_DIR ? 'file:///opt/t3-runtime/patches/gateway-context.ts' : '../docker/runtime/patches/gateway-context.ts', import.meta.url);
       const helper = await import(`data:text/javascript,${encodeURIComponent(stripTypeScriptTypes(await fs.readFile(source, 'utf8')))}`);
       const gw = gatewayFor(gateway.url);

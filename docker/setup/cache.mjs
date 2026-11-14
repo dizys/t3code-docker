@@ -41,7 +41,8 @@ export async function withTimeout(work, ms) {
  * Deduplicate concurrent refresh work. While a promise is in flight every
  * caller shares it; once it settles the next call starts fresh. A rejection
  * clears the slot without poisoning later calls, and an abandoned refresh
- * can never crash the process.
+ * can never crash the process. Read-path only: this coalesces cache fills,
+ * it is not a writer mutex (cache entries are replaced, never mutated).
  */
 export function createCoalescer() {
   let inflight = null;
@@ -383,7 +384,8 @@ export function createHarnessCache({
 }
 
 /** Share pending reads and optionally retain successful answers for a TTL.
- * Clearing detaches old reads: their completion cannot replace a newer answer. */
+ * Clearing detaches old reads: their completion cannot replace a newer answer.
+ * Read-path only, like the coalescer above: never used to serialize writes. */
 export function createTtlCache({ ttlMs, limit = 200, now = Date.now }) {
   const entries = new Map();
   const cached = (key, load) => {

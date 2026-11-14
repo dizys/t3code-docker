@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { unpackRelease, executableVersion } from "./releases.mjs";
+import { unpackRelease, executableVersion, chatterSlice } from "./releases.mjs";
 import { packageRelease, releaseForVersion } from "./distribution.mjs";
 import { PATCH_REVISION } from "./distribution-spec.mjs";
 import { injectSetupBridge } from "./client-shell.mjs";
@@ -28,7 +28,7 @@ export async function discoverRuntime(binary, paths, { run = execute, env = proc
   const probe = await fs.mkdtemp(path.join(paths.root, ".database-probe-"));
   try {
     const issued = await run(binary, ["auth", "session", "issue", "--ttl", "1m", "--subject", "t3-container-probe", "--json"], { env: { ...env, T3CODE_HOME: probe }, timeout: 30_000 });
-    const session = JSON.parse(issued.stdout.slice(issued.stdout.indexOf("{")));
+    const session = JSON.parse(chatterSlice(issued.stdout) ?? "");
     const scopes = session.permissions ?? session.scopes;
     if (!validScopes(scopes) || !scopes.length) throw new Error("Could not identify this release's supported device permissions safely.");
     const names = (await fs.readdir(path.join(probe, "userdata"))).filter(databaseName);

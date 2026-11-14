@@ -4,6 +4,8 @@
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { agentResourcePaths } from "./agent-resources.mjs";
+import { writeFileAtomic } from "./atomic-write.mjs";
+import { readCappedFile } from "./bounded-read.mjs";
 
 export function contextDirFor(baseDir) {
   return path.join(baseDir, "setup", "context");
@@ -77,47 +79,14 @@ async function readInstructionFile(fs, file) {
   const key = path.resolve(file);
   if (cache?.has(key)) return cache.get(key);
   const read = (async () => {
-    const check = (stat) => {
-      if (!stat.isFile()) throw Object.assign(new Error("Instructions must be a regular file"), { code: "invalid" });
-      if (stat.size > MAX_INSTRUCTION_BYTES) throw tooLarge(stat.size);
-    };
-    // Reject oversized targets before opening them, including through symlinks.
-    check(await fs.stat(file));
-    const handle = await fs.open(file, "r");
-    try {
-      const stat = await handle.stat();
-      check(stat);
-      // A file may grow after stat. Read at most the limit plus one byte,
-      // including across short reads, so status polling can never load it all.
-      const buffer = Buffer.alloc(MAX_INSTRUCTION_BYTES + 1);
-      let bytes = 0;
-      while (bytes < buffer.length) {
-        const result = await handle.read(buffer, bytes, buffer.length - bytes, bytes);
-        if (!result.bytesRead) break;
-        bytes += result.bytesRead;
-      }
-      if (bytes > MAX_INSTRUCTION_BYTES) throw tooLarge(bytes);
-      return { content: buffer.toString("utf8", 0, bytes), bytes, mode: stat.mode & 0o777, modifiedAt: stat.mtimeMs };
-    } finally {
-      await handle.close();
-    }
+    const invalid = () => Object.assign(new Error("Instructions must be a regular file"), { code: "invalid" });
+    // The shared file keeps its plain "r" open so a manually symlinked
+    // AGENTS.md still reads; providers resolve their links before reading.
+    const { content, bytes, mode, stat } = await readCappedFile(fs, file, MAX_INSTRUCTION_BYTES, { tooLarge, invalid, flags: "r" });
+    return { content, bytes, mode, modifiedAt: stat.mtimeMs };
   })();
   cache?.set(key, read);
   return read;
-}
-
-async function writeFileAtomic(fs, file, text, mode = 0o600) {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
-  let created = false;
-  try {
-    const handle = await fs.open(tmp, 'wx', mode);
-    created = true;
-    try { await handle.writeFile(text, 'utf8'); await handle.chmod(mode); } finally { await handle.close(); }
-    await fs.rename(tmp, file);
-  } finally {
-    if (created) await fs.rm(tmp, { force: true });
-  }
 }
 
 const revisionFor = (file, content) => content === null ? null
@@ -126,6 +95,15 @@ const changedInstructions = () => ({ ok: false, code: "conflict", error: "Instru
 
 // Shared and provider editors can point at the same file. Keep their revision
 // checks and atomic writes in one queue per resolved target.
+//
+// Single-writer contract, same as the MCP store: the setup server is the only
+// in-repo writer of these files, so this queue serializes its concurrent
+// requests. Hand edits and provider CLIs write outside it, which is why every
+// save re-checks its revision inside the queue, re-checks immediately before
+// committing, and verifies afterwards instead of assuming the write won. No
+// cross-process lock is taken: the harness lock guards mise state, not these
+// files, and an advisory lock no external writer honors would only add
+// blocking without adding safety.
 const instructionWrites = new Map();
 const instructionModeWrites = new Map();
 async function withInstructionWrite(file, work, queues = instructionWrites) {

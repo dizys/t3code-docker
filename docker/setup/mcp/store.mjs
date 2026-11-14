@@ -2,7 +2,8 @@
 // files are only touched by explicit link/unlink saves.
 import path from "node:path";
 import { AGENT_NAMES } from "../agent-resources.mjs";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
+import { writeFileAtomic as atomicWriteFile } from "../atomic-write.mjs";
 
 export const MCP_PROVIDERS = AGENT_NAMES;
 export const SUPPORTED_MCP_PROVIDERS = Object.freeze(Object.keys(MCP_PROVIDERS));
@@ -98,19 +99,19 @@ async function readStoreFile(fs, file) {
   return { present: true, servers, bytes: Buffer.byteLength(raw, "utf8") };
 }
 
+// Size-guarded atomic replace through the shared tmp+rename writer.
 async function writeFileAtomic(fs, file, text) {
   if (Buffer.byteLength(text, "utf8") > MAX_STORE_BYTES) throw problem("too_large", "The shared MCP store would exceed the 256 KiB limit. Reduce the server definition.");
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
-  try {
-    await fs.writeFile(tmp, text, { encoding: "utf8", mode: 0o600 });
-    await fs.chmod(tmp, 0o600);
-    await fs.rename(tmp, file);
-  } finally {
-    await fs.rm(tmp, { force: true });
-  }
+  await atomicWriteFile(fs, file, text);
 }
 
+// Single-writer contract: the setup server is the only in-repo writer of the
+// shared store; this queue serializes its concurrent requests. Writers outside
+// this process (hand edits on disk) cannot take the queue, so every mutation
+// still re-checks the revision inside it and commits atomically; a mismatch
+// fails instead of silently winning. No cross-process lock is taken on purpose:
+// the harness lock guards mise state, not this file, and an advisory lock no
+// external writer honors would only add blocking without adding safety.
 const storeQueues = new Map();
 export async function withStore(file, work) {
   const key = path.resolve(file);

@@ -6,14 +6,12 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CHANNELS, channelOf, exactVersion, readJson, writeJson } from "./state.mjs";
 import { PATCH_REVISION, distributionBlob } from "./distribution-spec.mjs";
+import { ARCHIVE_LIMIT as LIMIT, UNPACKED_LIMIT, RELEASE_HEADROOM as HEADROOM, SUMS_LIMIT, DOCUMENT_LIMIT } from "./release-bounds.mjs";
 import { registryRequest } from "./registry.mjs";
 
 const execute = promisify(execFile);
 const API = "https://api.github.com/repos/pingdotgg/t3code/releases";
 const DOWNLOAD = "https://github.com/pingdotgg/t3code/releases/download";
-const LIMIT = 300 * 1024 * 1024;
-const UNPACKED_LIMIT = 1024 * 1024 * 1024;
-const HEADROOM = 64 * 1024 * 1024;
 const SPACE_CHECK_BYTES = 8 * 1024 * 1024;
 const PAGE_SIZE = 20;
 const downloadHosts = new Set(["github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com", "ghcr.io", "pkg-containers.githubusercontent.com"]);
@@ -51,6 +49,13 @@ async function get(url, { fetcher, api = false, token, timeout = 15_000 }) {
 }
 export { get as fetchRelease };
 
+/** Start of the first JSON document in CLI chatter. Null when no document opens. */
+export function chatterSlice(text) {
+  const output = String(text ?? "");
+  const start = output.indexOf("{");
+  return start < 0 ? null : output.slice(start);
+}
+
 async function boundedText(response, limit) {
   const chunks = [];
   let bytes = 0;
@@ -73,7 +78,7 @@ export async function releaseForVersion(version, { fetcher = fetch, arch = proce
   const root = archiveStem(version, arch);
   const name = `${root}.tar.gz`;
   const base = `${DOWNLOAD}/v${version}`;
-  const sums = await boundedText(await get(`${base}/SHA256SUMS`, { fetcher }), 1024 * 1024);
+  const sums = await boundedText(await get(`${base}/SHA256SUMS`, { fetcher }), SUMS_LIMIT);
   return { version, name: "t3-runtime", root, url: `${base}/${name}`, integrity: `sha256-${archiveChecksum(sums, name)}` };
 }
 
@@ -83,7 +88,7 @@ export async function packageRelease(channel, { fetcher = fetch, arch = process.
   archiveStem("0.0.0", arch);
   for (let page = 1; page <= 5; page += 1) {
     const url = channel === "stable" ? `${API}/latest` : `${API}?per_page=${PAGE_SIZE}&page=${page}`;
-    const data = JSON.parse(await boundedText(await get(url, { fetcher, api: true, token }), 4 * 1024 * 1024));
+    const data = JSON.parse(await boundedText(await get(url, { fetcher, api: true, token }), DOCUMENT_LIMIT));
     const entries = channel === "stable" ? [data] : data;
     if (!Array.isArray(entries)) throw new Error("GitHub did not return a release list.");
     const release = entries.find((entry) => {

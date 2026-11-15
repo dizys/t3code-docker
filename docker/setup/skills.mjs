@@ -1,8 +1,8 @@
 // Global skill inventory and explicit local file management. No skill execution.
 import path from "node:path";
 import * as fs from "node:fs/promises";
-import { constants } from "node:fs";
 import { createHash } from "node:crypto";
+import { readCappedFile } from "./bounded-read.mjs";
 import { parseDocument, isMap, isScalar } from "./vendor/yaml.mjs";
 import { listCodexSkills, writeCodexSkillConfig } from "./skills/codex.mjs";
 import { codexConfigPath, configSnapshot, stateRevision, serializeState } from "./skills/state.mjs";
@@ -51,24 +51,11 @@ export function skillRoots(provider, { home, env = {} }) {
 // Stat before opening, stat the opened descriptor, then read at most limit + 1.
 // Nonblocking open prevents a raced-in FIFO from hanging the setup service.
 export async function readSkillFile(file, maxBytes = DEFAULT_LIMITS.fileBytes, io = fs) {
-  const check = (stat) => {
-    if (!stat.isFile()) throw problem("invalid", "The skill must be a regular Markdown file.");
-    if (stat.size > maxBytes) throw problem("too_large", "This skill exceeds the 64 KiB viewer limit.");
-  };
-  check(await io.stat(file));
-  const handle = await io.open(file, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
-  try {
-    const stat = await handle.stat(); check(stat);
-    const buffer = Buffer.alloc(maxBytes + 1);
-    let bytes = 0;
-    while (bytes < buffer.length) {
-      const read = await handle.read(buffer, bytes, buffer.length - bytes, bytes);
-      if (!read.bytesRead) break;
-      bytes += read.bytesRead;
-    }
-    if (bytes > maxBytes) throw problem("too_large", "This skill exceeds the 64 KiB viewer limit.");
-    return { content: buffer.toString("utf8", 0, bytes), bytes, mode: stat.mode & 0o777, stamp: [stat.dev, stat.ino, stat.mtimeMs, stat.size].join(":") };
-  } finally { await handle.close(); }
+  // Messages stay skill-specific; the flags and the short-read loop are shared.
+  const invalid = () => problem("invalid", "The skill must be a regular Markdown file.");
+  const tooLarge = () => problem("too_large", "This skill exceeds the 64 KiB viewer limit.");
+  const { content, bytes, mode, stat } = await readCappedFile(io, file, maxBytes, { invalid, tooLarge });
+  return { content, bytes, mode, stamp: [stat.dev, stat.ino, stat.mtimeMs, stat.size].join(":") };
 }
 
 export function skillMetadata(content, fallback) {

@@ -10,6 +10,7 @@
 //   t3 connect status --json     what is saved
 //   t3 connect unlink            off again, keeping the sign-in
 //
+import { jsonFromChatter } from "./chatter-json.mjs";
 // The setup service runs those processes. This module parses their output
 // and reads or saves live preferences through T3 Code's native server API.
 
@@ -89,14 +90,7 @@ export function connectState(json) {
 
 /** The JSON object in a CLI's stdout, which may follow lines of chatter. */
 export function jsonFrom(stdout) {
-  const text = String(stdout ?? "");
-  const start = text.indexOf("{");
-  if (start < 0) return null;
-  try {
-    return JSON.parse(text.slice(start));
-  } catch {
-    return null;
-  }
+  return jsonFromChatter(stdout);
 }
 
 /** Read and update native preferences without overwriting the other switch. */

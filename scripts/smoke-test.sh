@@ -549,20 +549,41 @@ NODE
 check "Files browses with t3 permissions, preserves managed link guards, and sandboxes downloads" files_browse_works
 
 files_changes_work() {
-  docker exec -i -u t3 -e FILES_SMOKE_KEY="$SETUP_KEY" "$NAME" node --input-type=module <<'NODE'
+  # check() discards command output. Retain this transfer's assertion and HTTP
+  # diagnostics so a failure identifies the stage without rerunning it blind.
+  printf '\nFiles transfer smoke (20 MiB upload, download, Trash, restore)\n' >> "$UI_AUDIT_LOG"
+  docker exec -i -u t3 -e FILES_SMOKE_KEY="$SETUP_KEY" "$NAME" node --input-type=module <<'NODE' >> "$UI_AUDIT_LOG" 2>&1
 import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import { randomUUID,createHash } from 'node:crypto';
 import path from 'node:path';
 const root=path.join(process.env.T3_WORKSPACE||'/workspace','.t3-files-smoke-'+randomUUID());
 await fs.mkdir(root);
-const request=async(route,body)=>{const response=await fetch('http://127.0.0.1:3774'+route,{method:body===undefined?'GET':'POST',headers:{'x-t3-setup-key':process.env.FILES_SMOKE_KEY,...(body===undefined?{}:{'content-type':Buffer.isBuffer(body)?'application/octet-stream':'application/json'})},body:body===undefined?undefined:Buffer.isBuffer(body)?body:JSON.stringify(body)});if(!response.ok)throw new Error(route+': '+await response.text());return response;};
+const request=async(route,body)=>{const response=await fetch('http://127.0.0.1:3774'+route,{method:body===undefined?'GET':'POST',headers:{'x-t3-setup-key':process.env.FILES_SMOKE_KEY,...(body===undefined?{}:{'content-type':Buffer.isBuffer(body)?'application/octet-stream':'application/json'})},body:body===undefined?undefined:Buffer.isBuffer(body)?body:JSON.stringify(body)});if(!response.ok)throw new Error(route+': HTTP '+response.status+' '+await response.text());return response;};
+let stage='starting upload';
 try {
  const bytes=Buffer.alloc(20*1024*1024,0x61),start=await (await request('/files/upload/start',{dest:root,items:[{path:'fixture.bin',size:bytes.length,lastModified:1700000000000}]})).json(),id=start.uploads[0].id;
+ stage='sending chunks';
  for(let offset=0;offset<bytes.length;offset+=start.chunkBytes)await request('/files/upload/chunk?'+new URLSearchParams({id,offset}),bytes.subarray(offset,offset+start.chunkBytes));
- assert.equal(await fs.stat(path.join(root,'fixture.bin')).then(()=>true,()=>false),false);
- const finished=await (await request('/files/upload/finish',{id})).json(),download=Buffer.from(await (await request('/files/raw?'+new URLSearchParams({path:finished.path}))).arrayBuffer());assert.equal(createHash('sha256').update(download).digest('hex'),createHash('sha256').update(bytes).digest('hex'));
- const trashed=await (await request('/files/to-trash',{paths:[finished.path]})).json();assert.equal(await fs.stat(finished.path).then(()=>true,()=>false),false);await request('/files/trash/restore',{ids:trashed.ids});assert.equal((await fs.stat(finished.path)).size,bytes.length);
+ stage='checking atomic visibility';
+ assert.equal(await fs.stat(path.join(root,'fixture.bin')).then(()=>true,()=>false),false,'The upload must remain unpublished until finish.');
+ stage='finishing upload';
+ const finished=await (await request('/files/upload/finish',{id})).json();
+ stage='downloading published bytes';
+ const download=Buffer.from(await (await request('/files/raw?'+new URLSearchParams({path:finished.path}))).arrayBuffer());
+ stage='verifying download checksum';
+ assert.equal(createHash('sha256').update(download).digest('hex'),createHash('sha256').update(bytes).digest('hex'),'Downloaded bytes must match the uploaded fixture.');
+ stage='moving to Trash';
+ const trashed=await (await request('/files/to-trash',{paths:[finished.path]})).json();
+ stage='checking Trash move';
+ assert.equal(await fs.stat(finished.path).then(()=>true,()=>false),false,'The trashed fixture must leave its original path.');
+ stage='restoring from Trash';
+ await request('/files/trash/restore',{ids:trashed.ids});
+ stage='checking restored size';
+ assert.equal((await fs.stat(finished.path)).size,bytes.length,'The restored fixture must retain its size.');
+} catch(error) {
+ console.error('Files transfer failed while '+stage+'.');
+ throw error;
 } finally { await fs.rm(root,{recursive:true,force:true}); }
 NODE
 }

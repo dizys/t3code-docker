@@ -18,6 +18,39 @@ const codexFacts = (f, authenticated) => ({ codex: {
 } });
 const codexRow = async (f) => (await (await f.request('/harnesses')).json()).harnesses.find((row) => row.id === 'codex');
 
+test('native connection changes are visible on a warm Setup cache without probing every agent', { timeout: 30000 }, async t => {
+  const f=await authFixture();t.after(f.close);
+  await fs.mkdir(path.dirname(settingsFile(f)),{recursive:true});
+  const existing=structuredClone(managed);existing.providerInstances.codex.config.setupMode='existing';
+  await fs.writeFile(settingsFile(f),JSON.stringify(existing));
+  await f.facts(codexFacts(f,true));
+  const warm=await f.request('/auth/use-cli',{agent:'codex'});
+  assert.equal(warm.status,200);
+  assert.equal((await warm.json()).changed,false);
+  assert.equal((await codexRow(f)).t3OwnSignIn,false,'warm the cache while T3 uses the CLI');
+  // T3 Code or a terminal can change this file without calling Setup's APIs.
+  await fs.writeFile(settingsFile(f),JSON.stringify(managed));
+  assert.equal((await codexRow(f)).t3OwnSignIn,true,'the next poll must see T3 managing its own connection');
+  const switched=await f.request('/auth/use-cli',{agent:'codex'});
+  assert.equal(switched.status,200);
+  assert.equal((await switched.json()).changed,true);
+  assert.equal((await codexRow(f)).t3OwnSignIn,false);
+});
+
+test('an unreadable sign-in for a new executable cannot reuse the old executable verdict', { timeout: 30000 }, async t => {
+  const f=await authFixture();t.after(f.close);
+  await fs.mkdir(path.dirname(settingsFile(f)),{recursive:true});
+  const existing=structuredClone(managed);existing.providerInstances.codex.config.setupMode='existing';
+  await fs.writeFile(settingsFile(f),JSON.stringify(existing));
+  await f.facts(codexFacts(f,true));
+  assert.equal((await f.request('/auth/use-cli',{agent:'codex'})).status,200);
+  assert.equal((await codexRow(f)).signedIn,true);
+  const changed=codexFacts(f,null);changed.codex.installedVersion='0.167.0';changed.codex.executable=f.executable+'.new';
+  await f.facts(changed);
+  assert.equal((await codexRow(f)).signedIn,null,'the changed installation has no verdict yet');
+  assert.equal((await codexRow(f)).signedIn,null,'an inconclusive refresh cannot carry a verdict across executables');
+});
+
 test('Setup points T3 Code at the CLI sign-in only when asked, and only with one to use', { timeout: 30000 }, async (t) => {
   const f = await authFixture(); t.after(f.close);
   await fs.mkdir(path.dirname(settingsFile(f)), { recursive: true });

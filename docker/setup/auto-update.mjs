@@ -10,6 +10,7 @@
 // first-start install running. Agent turns already running inside T3 Code
 // are not directly visible to this service, so idle is a client-activity
 // signal, not proof that no turn is running.
+import { randomBytes } from "node:crypto";
 export const POLICY_VERSION = 2;
 
 export const DEFAULT_POLICY = Object.freeze({
@@ -91,6 +92,29 @@ export function normalizePolicy(input) {
 export const policyPath = (stateDir) => `${stateDir}/setup/auto-update.json`;
 export const statePath = (stateDir) => `${stateDir}/setup/auto-update-state.json`;
 
+/**
+ * Replace durably: a power loss or a concurrent POST from another tab must
+ * never leave a torn file behind. The readers treat any unreadable file as
+ * defaults (everything disabled), so a half-written policy would silently
+ * turn schedules off. Write to a unique temp file and rename over the
+ * target, so the path holds either the old or the new document, never a
+ * mix. `fs` is the injected subset the server passes in; older callers
+ * without `rename` keep the direct write.
+ */
+async function writeFileAtomic(fs, file, text) {
+  if (typeof fs.rename !== "function") {
+    await fs.writeFile(file, text);
+    return;
+  }
+  const tmp = `${file}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
+  try {
+    await fs.writeFile(tmp, text, { encoding: "utf8", flag: "wx" });
+    await fs.rename(tmp, file);
+  } finally {
+    try { await fs.rm?.(tmp, { force: true }); } catch { /* renamed, or best effort */ }
+  }
+}
+
 export async function readPolicy(fs, stateDir) {
   try {
     const raw = JSON.parse(await fs.readFile(policyPath(stateDir), "utf8"));
@@ -103,7 +127,7 @@ export async function readPolicy(fs, stateDir) {
 export async function writePolicy(fs, stateDir, input) {
   const policy = normalizePolicy(input);
   await fs.mkdir(`${stateDir}/setup`, { recursive: true });
-  await fs.writeFile(policyPath(stateDir), `${JSON.stringify(policy, null, 2)}\n`);
+  await writeFileAtomic(fs, policyPath(stateDir), `${JSON.stringify(policy, null, 2)}\n`);
   return policy;
 }
 
@@ -139,7 +163,7 @@ export async function writeUpdateState(fs, stateDir, patch) {
   const current = await readUpdateState(fs, stateDir);
   const next = { ...current, ...patch };
   await fs.mkdir(`${stateDir}/setup`, { recursive: true });
-  await fs.writeFile(statePath(stateDir), `${JSON.stringify(next, null, 2)}\n`);
+  await writeFileAtomic(fs, statePath(stateDir), `${JSON.stringify(next, null, 2)}\n`);
   return next;
 }
 

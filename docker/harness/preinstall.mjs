@@ -28,6 +28,7 @@
 // server talks to cannot be guessed, so not even `all` includes them.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { randomBytes } from "node:crypto";
 
 import { CATALOGUE, SOURCE_CONTROL, TOOLCHAINS } from "./catalogue.mjs";
 import { createFs, processAlive, processStartTime } from "./io.mjs";
@@ -100,9 +101,18 @@ async function readRecord(fs, file) {
 
 async function writeRecord(fs, file, record) {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp.${process.pid}`;
-  await fs.writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  await fs.rename(tmp, file);
+  // Unique per write, never pid-only: two overlapping writers (a rerun
+  // while a previous run still sleep-retries in its busy loop, or pid
+  // reuse after a restart) must not share one temp path and interleave
+  // JSON into a torn record. `wx` refuses a surprising collision instead
+  // of silently mixing, and the temp is removed either way.
+  const tmp = `${file}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
+  try {
+    await fs.writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    await fs.rename(tmp, file);
+  } finally {
+    try { await fs.rm?.(tmp, { force: true }); } catch { /* renamed, or best effort */ }
+  }
 }
 
 /**

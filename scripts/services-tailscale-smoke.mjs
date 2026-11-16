@@ -68,7 +68,8 @@ const exercise = async () => {
   const peer = JSON.parse(await fs.readFile('/tmp/tailscale-fixture-peer.json', 'utf8')), name = peer.dnsName.replace(/\.$/, ''), address = peer.ips.find(ip => net.isIP(ip) === 4);
   assert.equal((await lookup(name, { family: 4 })).address, address);
   assert.equal((await lookup(name.split('.')[0], { family: 4 })).address, address);
-  assert.equal(await tcp(name, 9088), 'tcp-roundtrip'); assert.equal(await tcp(address, 9088), 'tcp-roundtrip');
+  await until('tailnet peer TCP connectivity', async () => await tcp(name, 9088) === 'tcp-roundtrip');
+  assert.equal(await tcp(address, 9088), 'tcp-roundtrip');
   assert.equal(await udp(name), 'udp-roundtrip'); assert.equal(await udp(address), 'udp-roundtrip');
   assert.equal(await httpGet('http://' + name + ':8088'), 'tailnet-http');
   assert.equal(await httpGet('https://' + name + ':8089', { ca: await fs.readFile('/tmp/tailscale-fixture-peer.crt') }), 'tailnet-https');

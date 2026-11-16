@@ -191,6 +191,7 @@
     storageUI.isBusy()
     ||
     s.updates?.refreshing
+    || s.harnessCache?.refreshing
     || M.runtimeView(s)?.busy
     || ui.runtimeChecking
     || (s.setup && s.setup.state === 'running')

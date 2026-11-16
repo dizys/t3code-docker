@@ -16,6 +16,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { CATALOGUE } from "../docker/harness/catalogue.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVER = path.join(ROOT, "docker/setup/server.mjs");
@@ -161,9 +162,9 @@ if (baseUrl && setupKey) {
     const harnesses = await get("/harnesses");
     check("live GET /harnesses is 200", harnesses.status === 200, `got ${harnesses.status}`);
     const list = harnesses.body?.harnesses ?? [];
-    check("live lifecycle lists six harnesses", list.length === 6, `got ${list.length}`);
+    check("live lifecycle matches the managed catalogue", list.length === CATALOGUE.length, `got ${list.length}, expected ${CATALOGUE.length}`);
     const required = ["id", "runnable", "installedVersion", "failed", "inProgress", "executable"];
-    for (const id of ["claude", "codex", "opencode", "grok", "cursor", "muse"]) {
+    for (const { id } of CATALOGUE) {
       const one = list.find((h) => h.id === id);
       check(`live ${id} is present`, Boolean(one), "missing from /harnesses");
       if (one) {

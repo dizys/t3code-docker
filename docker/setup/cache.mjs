@@ -254,7 +254,10 @@ export function createHarnessCache({
 
   const due = () => !coalescer.pending && now() - lastRefreshStart >= refreshIntervalMs;
 
-  const withFailure = (degraded) => (lastFailure ? [...degraded, lastFailure] : degraded);
+  // A local answer may already contain this exact background refresh failure.
+  const withFailure = (degraded) => (
+    lastFailure && !degraded.includes(lastFailure) ? [...degraded, lastFailure] : degraded
+  );
 
   const cheapAnswer = async (ms = budgetMs) => {
     const raced = await withTimeout(Promise.resolve().then(cheap), ms);

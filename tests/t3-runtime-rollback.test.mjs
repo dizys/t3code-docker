@@ -111,10 +111,12 @@ test("a release that crashes after commit is rolled back instead of rebooted", a
   assert.match((await readJson(paths.operation)).error, /exited before it stayed up/);
   assert.equal((await selectedRuntime(paths)).version, "0.0.45");
   assert.equal(await databaseContent(path.join(paths.home, "userdata/statev2.sqlite")), "original data");
-  assert.equal(await readJson(paths.request), null);
   // The supervisor relaunches the previous release instead of exiting, so a
   // container restart would boot the good binary rather than crash-loop.
   await waitFor(async () => (await starts()).split("\n").filter((line) => line.startsWith("0.0.45 ")).length === 2, 10_000);
+  // The terminal receipt precedes cleanup. Relaunch proves the supervisor has
+  // also finished removing the request mutex before this assertion reads it.
+  assert.equal(await readJson(paths.request), null);
   assert.doesNotThrow(() => process.kill(sup.child.pid, 0));
 });
 

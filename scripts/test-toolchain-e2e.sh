@@ -11,11 +11,10 @@
 #   - the noninteractive CLI installs all five harnesses and T3's own provider
 #     probes (SDK init, app-server, serve, ACP) run the exact managed
 #     executables, from T3's cached snapshots;
-#   - mise-owned Claude, Codex and OpenCode paths resolve manual-only in T3,
-#     so discovery and polling cannot update them. Grok and Cursor carry their
-#     own updaters, which T3 offers wherever they live; T3's must target the
-#     managed executable, and a self-updated Cursor is recorded as drift, not a
-#     failure;
+#   - provider launchers route T3's supported updates through the manager;
+#     Claude wrappers are manual-only in T3 0.1.10 and still update from Setup.
+#     Discovery and polling cannot update anything. A self-updated Cursor is
+#     recorded as drift, not a failure;
 #   - exact versions, credentials and the project Node selection survive a
 #     container recreate, including one with no network;
 #   - T3 and setup keep running on the image Node while the project selects
@@ -134,7 +133,7 @@ droot() { docker exec "$NAME" "$@"; }
 field() { printf '%s' "$2" | jq -r "$1" 2>/dev/null || printf ''; }
 
 driver_kind() { case "$1" in claude) echo claudeAgent ;; *) echo "$1" ;; esac; }
-# Where T3's binaryPath points for each agent, and the word T3 runs it with to
+# Where T3's binaryPath points for each agent, and the arguments T3 runs it with to
 # update it (docker/provider-integration/launchers.mjs).
 launcher_path() {
   local dir=/home/t3/.local/share/t3-harness/launchers
@@ -146,7 +145,7 @@ launcher_path() {
     cursor) echo "$dir/cursor/cursor-agent" ;;
   esac
 }
-update_word() { case "$1" in opencode) echo upgrade ;; *) echo update ;; esac; }
+update_args_for() { case "$1" in opencode) echo 'upgrade --method curl' ;; *) echo update ;; esac; }
 mise_tool()   { case "$1" in cursor) echo cursor-agent ;; *) echo "$1" ;; esac; }
 
 mise_ls()     { dex mise ls --json 2>/dev/null || printf '{}'; }
@@ -428,8 +427,8 @@ for id in $IDS; do
   body="$(cache_body "$d")"
   is "$id T3 snapshot reports installed" "true" "$(field '.installed // false' "$body")"
   T3_VERSION[$id]="$(field '.version // empty' "$body")"
-  # T3 runs each agent through its launcher, where T3 knows how to update it,
-  # and its own Update runs the launcher's update word: the manager's update.
+  # T3 runs each agent through its launcher. When T3 offers an Update,
+  # the exact native command must route through the manager.
   is "$id T3 runs it through its launcher" "$(launcher_path "$id")" \
     "$(field ".providerInstances.${d}.config.binaryPath // .providers.${d}.binaryPath // empty" "$settings_now")"
   if [ "$id" = "cursor" ]; then
@@ -437,9 +436,16 @@ for id in $IDS; do
     # was null before launchers too). Its launcher is ready for when it does.
     info "cursor T3 version: ${T3_VERSION[$id]} (recorded ${VERSION[$id]}); updater: $(field '.versionAdvisory.updateCommand // "null"' "$body")"
   else
-    is "$id T3 offers its own Update" "true" "$(field '.versionAdvisory.canUpdate // false' "$body")"
-    is "$id T3's Update goes through the launcher" "$(launcher_path "$id") $(update_word "$id")" \
-      "$(field '.versionAdvisory.updateCommand // ""' "$body")"
+    if [ "$id" = "claude" ]; then
+      # T3 0.1.10's ClaudeMaintenance explicitly rejects plain wrapper scripts.
+      # Setup still updates Claude via the manager, exercised below.
+      is "$id T3 leaves wrapper updates to Setup" "false" "$(field '.versionAdvisory.canUpdate' "$body")"
+      is "$id T3 offers no unmanaged update command" "null" "$(field '.versionAdvisory.updateCommand' "$body")"
+    else
+      is "$id T3 offers its own Update" "true" "$(field '.versionAdvisory.canUpdate // false' "$body")"
+      is "$id T3's Update goes through the launcher" "$(launcher_path "$id") $(update_args_for "$id")" \
+        "$(field '.versionAdvisory.updateCommand // ""' "$body")"
+    fi
     has "$id T3 snapshot reports the managed version" "${VERSION[$id]}" "${T3_VERSION[$id]}"
     if [ "$id" = "claude" ]; then
       # The saved Claude credential is deliberately empty. T3 0.1.0 reports
@@ -528,28 +534,36 @@ if [ "$VARIANT" = "browser" ]; then
   rm -f /tmp/e2e-browser-cd-$$.log
 fi
 
-section "T3's own Update runs the manager's update"
+section "Provider launcher updates run the manager's update"
 # Updates take newly published stable releases too, whereas initial installs
 # respect mise's release age. An update may advance the version on a release
 # day, but it must never go backwards or change the old executable in place.
-claude_launcher="$(launcher_path claude)"
-claude_before="${VERSION[claude]}"
-launcher_update="$(dex "$claude_launcher" update 2>&1)" && code=0 || code=$?
-is "claude's update through its launcher succeeds" "0" "$code"
-has "and is the manager's update" "update claude:" "$launcher_update"
-is "claude's old executable is untouched" "${HASH_BEFORE[claude]}" "$(exe_hash claude)"
-claude_after="$(dex t3-harness status claude --json)"
-VERSION[claude]="$(field '.harness.installedVersion' "$claude_after")"
-EXE[claude]="$(field '.harness.executable' "$claude_after")"
-is "the update never downgrades" "true" \
-  "$(dex /usr/local/bin/node --input-type=module -e 'import { compareVersions } from "/opt/t3-harness/version.mjs"; console.log(compareVersions(process.argv[1], process.argv[2]) >= 0)' "${VERSION[claude]}" "$claude_before")"
-if [ "$claude_before" = "${VERSION[claude]}" ]; then
-  has "it reports an unchanged version" "already up to date" "$launcher_update"
-fi
-HASH_BEFORE[claude]="$(exe_hash claude)"
-has "the launcher still runs the recorded version" "${VERSION[claude]}" "$(dex "$claude_launcher" --version 2>&1 | head -1)"
-is "T3 still runs it through the launcher" "$claude_launcher" \
-  "$(field '.providerInstances.claudeAgent.config.binaryPath // .providers.claudeAgent.binaryPath // empty' "$(settings_body)")"
+for id in claude opencode; do
+  managed_launcher="$(launcher_path "$id")"
+  version_before="${VERSION[$id]}"
+  read -r -a launcher_update_args <<< "$(update_args_for "$id")"
+  update_home=/home/t3
+  # Match the HOME supplied by T3 0.1.10's OpenCode native maintenance action.
+  if [ "$id" = "opencode" ]; then update_home="${managed_launcher%/.opencode/bin/opencode}"; fi
+  launcher_update="$(docker exec -u t3 -e "HOME=$update_home" -w /home/t3 "$NAME" \
+    "$managed_launcher" "${launcher_update_args[@]}" 2>&1)" && code=0 || code=$?
+  is "$id's update through its launcher succeeds" "0" "$code"
+  has "$id uses the manager's update" "update $id:" "$launcher_update"
+  is "$id's old executable is untouched" "${HASH_BEFORE[$id]}" "$(exe_hash "$id")"
+  managed_after="$(dex t3-harness status "$id" --json)"
+  VERSION[$id]="$(field '.harness.installedVersion' "$managed_after")"
+  EXE[$id]="$(field '.harness.executable' "$managed_after")"
+  is "$id's update never downgrades" "true" \
+    "$(dex /usr/local/bin/node --input-type=module -e 'import { compareVersions } from "/opt/t3-harness/version.mjs"; console.log(compareVersions(process.argv[1], process.argv[2]) >= 0)' "${VERSION[$id]}" "$version_before")"
+  if [ "$version_before" = "${VERSION[$id]}" ]; then
+    has "$id reports an unchanged version" "already up to date" "$launcher_update"
+  fi
+  HASH_BEFORE[$id]="$(exe_hash "$id")"
+  has "$id's launcher still runs the recorded version" "${VERSION[$id]}" "$(dex "$managed_launcher" --version 2>&1 | head -1)"
+  d="$(driver_kind "$id")"
+  is "T3 still runs $id through the launcher" "$managed_launcher" \
+    "$(field ".providerInstances.${d}.config.binaryPath // .providers.${d}.binaryPath // empty" "$(settings_body)")"
+done
 
 section "OpenCode v2 in an isolated home (the default install stays on v1)"
 docker cp "${ROOT}/scripts/opencode-auth-smoke.mjs" "$NAME:/tmp/opencode-auth-smoke.mjs" >/dev/null

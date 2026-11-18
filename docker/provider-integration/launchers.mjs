@@ -15,13 +15,16 @@
 // A launcher is a small script at a path of the shape T3 recognises. It
 // runs the exact executable the harness manager installed, with whatever
 // arguments it was given, except the exact call T3 makes to update it (`update`,
-// OpenCode's `upgrade`, or Pi's `update --self`), which it hands to
+// OpenCode's `upgrade --method curl` or legacy `upgrade`, or Pi's `update --self`), which it hands to
 // `t3-harness update <id>`:
 // the same managed update as the setup page's: newest stable immediately,
 // never implicitly older, under its lock, with its exact
 // version record and rollback. That update syncs the provider settings, which
 // writes the launcher again for the new release, so T3's check after the
 // update finds the version it moved to.
+//
+// T3 0.1.10 leaves Claude wrappers manual-only. Setup > Agents still updates
+// Claude through the same manager; older T3 versions' launcher calls stay managed.
 //
 // Only T3's `binaryPath` points here. `claude` in a terminal is still the mise
 // shim, and its own `claude update` is untouched.
@@ -30,12 +33,13 @@ import path from "node:path";
 /**
  * Where each agent's launcher goes, under the launcher directory: a path T3's
  * check for that provider accepts, ending in the agent's own command name.
- * `update` is the arguments T3 runs it with to update it.
+ * `update` is the arguments T3 runs it with to update it; `legacyUpdates`
+ * retains exact calls from older T3 versions sharing the persistent home.
  */
 export const LAUNCHERS = Object.freeze({
   claude: { path: ["claude", ".local", "bin", "claude"], update: ["update"] },
   codex: { path: ["codex", "packages", "standalone", "codex"], update: ["update"] },
-  opencode: { path: ["opencode", ".opencode", "bin", "opencode"], update: ["upgrade"] },
+  opencode: { path: ["opencode", ".opencode", "bin", "opencode"], update: ["upgrade", "--method", "curl"], legacyUpdates: [["upgrade"]] },
   grok: { path: ["grok", "grok"], update: ["update"] },
   cursor: { path: ["cursor", "cursor-agent"], update: ["update"] },
   // T3 only offers Muse updates for its official auto-updating launcher.
@@ -67,7 +71,7 @@ const isolateIpc = "unset NODE_CHANNEL_FD NODE_CHANNEL_SERIALIZATION_MODE";
  * The launcher for one agent: run `executable`, except T3's update call,
  * which goes to `harnessCli update <id>`.
  */
-export function launcherScript({ id, name, executable, harnessCli, nodeRuntimeDir = id === 'pi' ? '/usr/local/lib/t3-node-runtime' : null }) {
+export function launcherScript({ id, name, executable, harnessCli, home, nodeRuntimeDir = id === 'pi' ? '/usr/local/lib/t3-node-runtime' : null }) {
   const launcher = LAUNCHERS[id];
   if (!launcher) throw new Error(`no launcher for ${id}`);
   // A login shell can move unselected Mise shims ahead of the image's Node
@@ -85,7 +89,13 @@ export function launcherScript({ id, name, executable, harnessCli, nodeRuntimeDi
     execute,
     "",
   ].join("\n");
-  const isUpdate = [`[ "$#" -eq ${update.length} ]`, ...update.map((arg, index) => `[ "$${index + 1}" = ${quote(arg)} ]`)].join(" && ");
+  // OpenCode's native curl updater overrides HOME with the apparent install
+  // root. Our manager and provider sync must use the home that owns the tools.
+  const managedUpdate = `${home ? `HOME=${quote(home)} ` : ""}exec ${quote(harnessCli)} update ${quote(id)}`;
+  const updates = [update, ...(launcher.legacyUpdates ?? [])].map((args) => {
+    const isUpdate = [`[ "$#" -eq ${args.length} ]`, ...args.map((arg, index) => `[ "$${index + 1}" = ${quote(arg)} ]`)].join(" && ");
+    return `if ${isUpdate}; then ${managedUpdate}; fi`;
+  });
   return [
     "#!/bin/sh",
     `# ${name} for T3 Code, written by the setup service: runs the release the`,
@@ -94,7 +104,7 @@ export function launcherScript({ id, name, executable, harnessCli, nodeRuntimeDi
     "# install and update; edits here do not last.",
     isolateIpc,
     ...nodeRuntime,
-    `if ${isUpdate}; then exec ${quote(harnessCli)} update ${quote(id)}; fi`,
+    ...updates,
     execute,
     "",
   ].join("\n");

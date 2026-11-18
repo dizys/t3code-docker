@@ -127,8 +127,9 @@ For providers with an in-app updater, T3 Code's own **Update** in
 Settings → Providers goes through that launcher to `t3-harness update`, with
 the same lock, version record and rollback as the setup page. Muse uses a
 standalone managed binary; update it from **Setup → Agents**. T3 Code only
-offers in-app Muse updates for its official auto-updating launcher. Run
-the agent's own updater over a managed install instead, and this page and T3
+offers in-app Muse updates for its official auto-updating launcher.
+With T3 Code 0.1.10, update Claude Code from **Setup → Agents** as well.
+Run the agent's own updater over a managed install instead, and this page and T3
 Code would disagree about what is installed.
 
 Pressing **Update** for an agent installs the newest stable release immediately,

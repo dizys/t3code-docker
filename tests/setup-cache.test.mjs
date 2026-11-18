@@ -277,7 +277,8 @@ test("the refresh interval gates background work", async () => {
   world.clock.advance(60_000);
   const third = await cache.snapshot();
   assert.equal(world.fullCalls, 2);
-  assert.equal(third.source, "live");
+  assert.equal(third.source, "cache");
+  assert.equal(third.refreshing, true);
 });
 
 test("a failed refresh degrades honestly instead of throwing", async () => {
@@ -499,4 +500,34 @@ test("metadata cache retains successful results until expiry and retries failure
   clock.advance(1);
   await assert.rejects(cache("tool", async () => { throw new Error("offline"); }), /offline/);
   assert.equal(await cache("tool", async () => "recovered"), "recovered");
+});
+
+
+test("warm status never waits for a stalled authentication refresh", async () => {
+  const { world, deps } = harnessWorld();
+  const cache = createHarnessCache(deps);
+  const first = await cache.snapshot();
+  let release;
+  world.fullGate = new Promise(resolve => { release = resolve; });
+  world.clock.advance(16000);
+  try {
+    const result = await Promise.race([cache.snapshot(), sleep(50).then(() => null)]);
+    assert.ok(result, "cached facts should arrive before the auth probe settles");
+    assert.deepEqual(result.harnesses, first.harnesses);
+    assert.equal(result.refreshing, true);
+    const concurrent = await cache.snapshot();
+    assert.deepEqual(concurrent.harnesses, first.harnesses);
+    assert.equal(world.fullCalls, 2);
+  } finally { release(); }
+});
+
+test("cold status starts local facts alongside authentication", async () => {
+  const cache = createHarnessCache({
+    full: () => new Promise(() => {}),
+    cheap: async () => ({ harnesses: [{ id: 'codex' }], degraded: [] }),
+  });
+  const result = await Promise.race([cache.snapshot(), sleep(300).then(() => null)]);
+  assert.ok(result, "local inventory must not wait for the auth budget");
+  assert.equal(result.source, 'cheap');
+  assert.equal(result.refreshing, true);
 });

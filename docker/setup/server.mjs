@@ -916,7 +916,7 @@ const status = async () => {
     { toolchains: [], sourceControl: [], degraded: [] });
   authLists.pairing.snapshot();
   authLists.session.snapshot();
-  const [server, harnessSnap, toolchainSnap, setup, scmSnap] = await Promise.all([
+  const [server, harnessSnap, toolchainSnap, setup, scmSnap, disk, connect, credentialSummary, gatewaySummary] = await Promise.all([
     attempt("server health", health, { ok: false, detail: "health check failed" }),
     attempt("agent probes", () => harnessLifecycleStatus(true), {
       harnesses: [], degraded: [],
@@ -932,6 +932,10 @@ const status = async () => {
       if (rows?.length) sourceControlRows = rows;
       return sourceControlCache.snapshot();
     }, { harnesses: [], degraded: [] }),
+    loadStorage().then((storage) => storage.status()).catch(() => ({ error: "Storage is not available. Try refreshing." })),
+    connectFacts(),
+    attemptTimed('credentials', () => credentials.summary(), 1200, { count: null, attention: [], error: 'Saved credentials could not be read.' }),
+    attemptTimed('gateways', () => gateways.summary(), 1200, { count: null, attention: [] }),
   ]);
   const antigravityRow = await antigravityRead;
   // Include any CLI results that finished beside the other status reads.
@@ -957,7 +961,6 @@ const status = async () => {
   const sourceControl = (toolchainSnap?.sourceControl ?? []).map((row) => ({ ...row, auth: verdicts.get(row.id) ?? null }));
   knownSourceControl.clear();
   for (const row of sourceControl) if (row.installed && !row.inImage) knownSourceControl.add(row.id);
-  const disk = await loadStorage().then((storage) => storage.status()).catch(() => ({ error: "Storage is not available. Try refreshing." }));
   for (const entry of harnessSnap?.degraded ?? []) {
     degraded.push({ what: `harness ${entry.what}`, error: String(entry.error ?? "").slice(0, 200) });
   }
@@ -986,7 +989,7 @@ const status = async () => {
       // restart it; the pid changing is how it sees the restart land.
       pid: t3Pid(),
     },
-    connect: await connectFacts(),
+    connect,
     setupPort: PORT,
     // T3_SINGLE_PORT: both services behind one listener, this page under
     // `prefix` there. The page shows it beside the two ports it fronts.
@@ -1043,9 +1046,9 @@ const status = async () => {
     // Every other tool in the global mise config, added here or with `mise use -g`.
     packages: withLatest("package", packageRows),
     // Local credential attention only. This never scans skills or connects.
-    credentials: await attemptTimed('credentials', () => credentials.summary(), 1200, { count: null, attention: [], error: 'Saved credentials could not be read.' }),
+    credentials: credentialSummary,
     // What the last health checks found. Asks neither the gateways nor T3.
-    gateways: await attemptTimed('gateways', () => gateways.summary(), 1200, { count: null, attention: [] }),
+    gateways: gatewaySummary,
     // Global instruction metadata; the editor fetches contents on demand.
     // Shared MCP metadata rides alongside; server entries stay server-side.
     context: await attempt("context", async () => {

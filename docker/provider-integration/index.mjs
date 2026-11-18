@@ -72,7 +72,7 @@ export function createProviderIntegration(options = {}) {
   /** Write one agent's launcher for `executable`, unless it already says exactly that. */
   async function writeLauncher(provider, executable) {
     const file = launcherPathFor(launcherDir, provider.id);
-    const script = launcherScript({ id: provider.id, name: provider.name, executable, harnessCli });
+    const script = launcherScript({ id: provider.id, name: provider.name, executable, harnessCli, home });
     const current = await fs.readFile(file, "utf8").catch(() => null);
     if (current !== script) await writeFileAtomic(fs, file, script, 0o755);
     return file;

@@ -193,12 +193,10 @@ export function createProviderCache({
  * still stall offline on remote API checks); `cheap` is the local-only read
  * (`authenticate: false`: one `mise ls` plus filesystem checks).
  *
- * `snapshot()` starts one coalesced `full` refresh (at most one every
- * `refreshIntervalMs`) and races it against `budgetMs`. When the budget wins
- * it answers from local state — warm authenticated facts when they exist and
- * are fresh enough, else a bounded cheap read — with `stale: true`, while the
- * refresh keeps running so the next poll is warm. Only a refresh that
- * actually completed on this request is reported as `live`.
+ * `snapshot()` returns warm authenticated facts immediately while one coalesced
+ * refresh runs in the background. Cold reads start local inventory alongside
+ * authentication, allowing fast probes 100ms before using the local answer.
+ * Cache age and pending probes remain explicit in the response.
  *
  * `snapshotCheap()` answers the explicit `authenticate=false` polls from a
  * bounded cheap read without starting an auth refresh.
@@ -256,7 +254,10 @@ export function createHarnessCache({
 
   const due = () => !coalescer.pending && now() - lastRefreshStart >= refreshIntervalMs;
 
-  const withFailure = (degraded) => (lastFailure ? [...degraded, lastFailure] : degraded);
+  // A local answer may already contain this exact background refresh failure.
+  const withFailure = (degraded) => (
+    lastFailure && !degraded.includes(lastFailure) ? [...degraded, lastFailure] : degraded
+  );
 
   const cheapAnswer = async (ms = budgetMs) => {
     const raced = await withTimeout(Promise.resolve().then(cheap), ms);
@@ -282,15 +283,24 @@ export function createHarnessCache({
     };
   };
 
-  // One poll answers within `budgetMs` overall: the refresh race keeps
-  // `cheapReserveMs` back, and the cheap fallback gets only what is left,
-  // rather than each stage spending the whole budget in turn.
+  // Local inventory runs beside auth probes; warm facts never wait for them.
   const cachedSnapshot = async () => {
-    const started = now();
     const refreshBudget = Math.max(250, budgetMs - cheapReserveMs);
-    const remaining = () => Math.max(250, budgetMs - (now() - started));
+    const seen = generation;
+    const local = current(warm) ? null : cheapAnswer();
+    if (current(warm)) {
+      if (due()) void startRefresh();
+      return {
+        harnesses: warm.harnesses,
+        degraded: withFailure(warm.degraded),
+        at: warm.at,
+        stale: isStale(warm.at, now(), liveTtlMs),
+        source: "cache",
+        refreshing: coalescer.pending,
+      };
+    }
     if (due()) {
-      const raced = await withTimeout(startRefresh(), refreshBudget);
+      const raced = await withTimeout(startRefresh(), Math.min(100, refreshBudget));
       if (raced.ok && raced.value && raced.value.at !== null && current(raced.value)) {
         return {
           harnesses: raced.value.harnesses,
@@ -306,7 +316,7 @@ export function createHarnessCache({
       // refresh keeps running and warms the next poll.
       if (raced.ok && raced.value && !current(raced.value)) lastRefreshStart = 0;
     } else if (coalescer.pending) {
-      const raced = await withTimeout(coalescer.run(() => null), refreshBudget);
+      const raced = await withTimeout(coalescer.run(() => null), Math.min(100, refreshBudget));
       if (raced.ok && raced.value && raced.value.at !== null && current(raced.value)) {
         const fresh = !isStale(raced.value.at, now(), liveTtlMs);
         return {
@@ -333,7 +343,9 @@ export function createHarnessCache({
         refreshing: coalescer.pending,
       };
     }
-    return cheapAnswer(remaining());
+    const answer = await local;
+    if (seen !== generation) return cheapAnswer();
+    return { ...answer, degraded: withFailure(answer.degraded), refreshing: coalescer.pending };
   };
 
   const installation = row => JSON.stringify([row.id, row.installed, row.runnable,

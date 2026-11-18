@@ -531,11 +531,11 @@ test("the managed executable itself, as an older image wrote it, is ours to repl
 });
 
 test("launchers keep managed execution and route native T3 updates to the manager", () => {
-  // Native update calls from T3's provider drivers, including Pi in 0.1.6.
+  // Native update calls from T3's provider drivers, including OpenCode in 0.1.10.
   const shape = {
     claude: [(p) => p.endsWith("/.local/bin/claude"), ["update"]],
     codex: [(p) => p.includes("/packages/standalone/"), ["update"]],
-    opencode: [(p) => p.endsWith("/.opencode/bin/opencode"), ["upgrade"]],
+    opencode: [(p) => p.endsWith("/.opencode/bin/opencode"), ["upgrade", "--method", "curl"]],
     grok: [() => true, ["update"]],
     cursor: [() => true, ["update"]],
     muse: [() => true, null],
@@ -562,6 +562,12 @@ test("launchers keep managed execution and route native T3 updates to the manage
       const args = ["--version", "argument with spaces", "$(not a command)"];
       assert.deepEqual(invoke(args), { code: 17, target: "agent", args }, provider.id);
       if (update) assert.deepEqual(invoke(update), { code: 29, target: "manager", args: ["update", provider.id] }, provider.id);
+      if (provider.id === "opencode") {
+        assert.deepEqual(invoke(["upgrade"]), { code: 29, target: "manager", args: ["update", "opencode"] }, "older T3 updates stay managed");
+        for (const args of [["upgrade", "--help"], ["upgrade", "--method"], ["upgrade", "--method", "npm"], ["upgrade", "--method", "curl", "--help"], ["upgrade", "1.2.3"]]) {
+          assert.deepEqual(invoke(args), { code: 17, target: "agent", args }, "other OpenCode calls stay native");
+        }
+      }
       if (provider.id === "muse") assert.deepEqual(invoke(["update"]), { code: 17, target: "agent", args: ["update"] });
       if (provider.id === "pi") {
         for (const args of [["update"], ["update", "extension-package"], ["update", "--self", "--help"]]) {
@@ -584,6 +590,38 @@ test("launchers keep managed execution and route native T3 updates to the manage
   const odd = launcherScript({ id: "claude", name: "Claude Code", executable: "/odd dir/it's/claude", harnessCli: "/usr/local/bin/t3-harness" });
   assert.match(odd, /^exec '\/odd dir\/it'\\''s\/claude' "\$@"$/m);
   assert.throws(() => launcherScript({ id: "nope", name: "x", executable: "/x", harnessCli: "/y" }));
+});
+
+test("OpenCode native updates keep the managed home when T3 overrides HOME for curl", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "provider-opencode-home-"));
+  try {
+    const home = path.join(dir, "owner's home");
+    const executable = path.join(dir, "opencode"), harnessCli = path.join(dir, "updater");
+    for (const [file, target] of [[executable, "agent"], [harnessCli, "manager"]]) {
+      writeFileSync(file, `#!${process.execPath}\nconsole.log(JSON.stringify({ target: '${target}', home: process.env.HOME, args: process.argv.slice(2) }));\n`, { mode: 0o700 });
+    }
+    const integration = createProviderIntegration({
+      home, env: {}, baseDir: path.join(home, ".t3"),
+      harness: fakeHarness([fact("opencode", { runnable: true, executable })]), harnessCli,
+    });
+    assert.equal((await integration.sync()).ok, true);
+    const settings = JSON.parse(readFileSync(path.join(home, ".t3", "userdata", "settings.json"), "utf8"));
+    const file = settings.providerInstances.opencode.config.binaryPath;
+    // T3 0.1.10 points curl's HOME at the apparent native install's root.
+    const nativeHome = file.slice(0, -"/.opencode/bin/opencode".length);
+    const invoke = (args) => {
+      const result = spawnSync(file, args, { encoding: "utf8", env: { ...process.env, HOME: nativeHome } });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stderr);
+      return JSON.parse(result.stdout);
+    };
+    for (const args of [["upgrade", "--method", "curl"], ["upgrade"]]) {
+      assert.deepEqual(invoke(args), { target: "manager", home, args: ["update", "opencode"] });
+    }
+    assert.deepEqual(invoke(["--version"]), { target: "agent", home: nativeHome, args: ["--version"] }, "normal agent calls keep their environment");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("agent and updater processes cannot inherit the supervisor's Node IPC descriptor", () => {

@@ -232,6 +232,9 @@ export function createAntigravity({ api, now = Date.now, maxAgeMs = 15_000 }) {
     }
   };
   const completeSignIn = (flowId, callbackUrl) => api.call("provider.auth.complete", { instanceId: INSTANCE, flowId, callbackUrl });
+  const submitSignInCode = (flowId, interactionId, code) => api.call("provider.auth.respond", {
+    instanceId: INSTANCE, flowId, interactionId, response: { type: "credentials", values: { authorizationCode: code } },
+  });
   const cancelSignIn = (flowId) => api.call("provider.auth.cancel", { instanceId: INSTANCE, flowId });
   /** After a sign-in: have T3 check access again, then read it. */
   const recheck = async () => {
@@ -239,5 +242,5 @@ export function createAntigravity({ api, now = Date.now, maxAgeMs = 15_000 }) {
     await refresh();
   };
 
-  return { status, refresh, install, uninstall, enable, signIn, completeSignIn, cancelSignIn, recheck };
+  return { status, refresh, install, uninstall, enable, signIn, completeSignIn, submitSignInCode, cancelSignIn, recheck };
 }

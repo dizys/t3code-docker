@@ -1681,23 +1681,23 @@ const startSignin = async (agentId) => {
 };
 
 /**
- * Antigravity's sign-in is T3's own Google flow, shown in the same sheet as the
- * CLIs': T3 hands out a Google link, the browser lands on a 127.0.0.1 address
- * it cannot load, and the address pasted back (`/auth/code`) goes to T3,
- * which checks it. The session object reads like a CLI's to the page.
+ * T3 owns Antigravity's Google sign-in and chooses whether the browser returns
+ * a loopback address or an authorization code. The console relays that response.
  */
 const startAntigravitySignin = async () => {
   const id = randomBytes(9).toString("hex");
   const session = {
     id, agentId: "antigravity", state: "starting", url: null, code: null,
     needsCode: true, output: "", error: null, child: null, t3: true,
-    flow: null, flowId: null, expiresAt: null, startedAt: Date.now(),
+    flow: null, flowId: null, codeInteractionId: null, expiresAt: null, startedAt: Date.now(),
   };
   sessions.set(id, session);
   const end = (state, error = null) => {
     if (TERMINAL_STATES.has(session.state)) return;
     session.state = state;
     session.error = error;
+    session.url = null;
+    session.codeInteractionId = null;
     session.flow?.close();
     sessionStore.settle(session);
   };
@@ -1708,6 +1708,8 @@ const startAntigravitySignin = async () => {
       if (Number.isFinite(expires)) session.expiresAt = expires;
       if (state.phase === "waiting" && state.authorizationUrl) {
         session.url = state.authorizationUrl;
+        session.codeInteractionId = state.interaction?.type === "credentials" &&
+          state.interaction.fields?.some((field) => field.name === "authorizationCode") ? state.interaction.id : null;
         if (session.state === "starting") session.state = "awaiting-code";
       } else if (state.phase === "verifying") {
         session.state = "submitted";
@@ -1722,6 +1724,7 @@ const startAntigravitySignin = async () => {
       }
     });
     session.flowId = session.flow.flowId;
+    if (TERMINAL_STATES.has(session.state)) session.flow.close();
   } catch (error) {
     end("failed", String(error?.message ?? error).slice(0, 300));
   }
@@ -1737,6 +1740,7 @@ const startAntigravitySignin = async () => {
 const publicSession = (s) => ({
   id: s.id, agent: s.agentId, state: s.state, url: s.url, code: s.code, qr: s.qr ?? null,
   needsCode: s.needsCode, error: s.error, identity: s.identity ?? null, warning: s.warning ?? null,
+  googleAuthorizationCode: Boolean(s.codeInteractionId),
   // When the wait for the browser step gives up, for the device code's countdown.
   startedAt: s.startedAt, expiresAt: s.expiresAt ?? s.startedAt + SESSION_TTL_MS,
   tail: s.output.trim().split("\n").slice(-4).join("\n"),
@@ -3275,14 +3279,18 @@ const server = createServer(async (req, res) => {
       const session = sessions.get(input.id);
       if (!session) return sendJson(res, 404, { error: "no such session" });
       if (session.t3) {
-        // The address Google sent the browser to: T3 checks it belongs to
-        // this flow and finishes the sign-in.
-        const callbackUrl = String(input.code ?? "").trim();
-        if (!/^https?:\/\//i.test(callbackUrl) || callbackUrl.length > 16384) {
+        if (session.state !== "awaiting-code") return sendJson(res, 409, { error: "This sign-in is no longer waiting for a response." });
+        const code = String(input.code ?? "").trim();
+        const expectsCode = Boolean(session.codeInteractionId);
+        if (expectsCode && (!/^[!-~]{1,4096}$/u.test(code) || /^https?:\/\//i.test(code))) {
+          return sendJson(res, 400, { error: "Paste the authorization code shown by Google." });
+        }
+        if (!expectsCode && (!/^https?:\/\//i.test(code) || code.length > 16384)) {
           return sendJson(res, 400, { error: "Paste the whole address from the browser's address bar, starting with http://127.0.0.1." });
         }
         try {
-          await antigravity.completeSignIn(session.flowId, callbackUrl);
+          if (session.codeInteractionId) await antigravity.submitSignInCode(session.flowId, session.codeInteractionId, code);
+          else await antigravity.completeSignIn(session.flowId, code);
           if (!TERMINAL_STATES.has(session.state)) session.state = "submitted";
           session.submittedAt = Date.now();
           return sendJson(res, 200, publicSession(session));
@@ -3321,6 +3329,8 @@ const server = createServer(async (req, res) => {
       if (session?.t3) {
         if (session.flowId && !TERMINAL_STATES.has(session.state)) void antigravity.cancelSignIn(session.flowId).catch(() => {});
         session.state = "cancelled";
+        session.url = null;
+        session.codeInteractionId = null;
         session.flow?.close();
       } else if (session) {
         session.state = "cancelled";

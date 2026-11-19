@@ -2202,17 +2202,20 @@
           </form>`)}
         ${submitted ? step(3, 'Signed in', 'active', waiting('Waiting for ' + meta.name + ' to accept the code…')) : step(3, 'Signed in', '', '')}`;
     } else if (meta.flow === 'redirect') {
-      // T3's Google sign-in: Google sends the browser to a 127.0.0.1 address
-      // only the container could answer; that address, pasted here, finishes it.
       const submitted = st.state === 'submitted' || signin.phase === 'submitting';
       const left = st.expiresAt ? M.countdown(st.expiresAt - now()) : null;
+      const googleCode = st.googleAuthorizationCode;
+      const prompt = googleCode ? 'Paste the authorization code' : 'Paste the address Google sends you to';
+      const hint = googleCode
+        ? html`<span class="tc-hint">After you approve, copy the authorization code from the Antigravity page and paste it here.</span>`
+        : html`<span class="tc-hint">After you approve, the tab goes to an address starting with <code>http://127.0.0.1</code> that does not load. That is expected: copy the whole address from the address bar and paste it here.</span>`;
       body = html`
         ${step(1, 'Sign in with Google', 'done', html`<div class="tc-stack tc-signin-fields">${openPage('Open Google sign-in')}<span class="tc-hint">Opens in a new tab. Choose the Google account ${meta.name} should use.</span></div>`)}
-        ${step(2, 'Paste the address Google sends you to', submitted ? 'done' : 'active', html`
-          <span class="tc-hint">After you approve, the tab goes to an address starting with <code>http://127.0.0.1</code> that does not load. That is expected: copy the whole address from the address bar and paste it here.</span>
+        ${step(2, prompt, submitted ? 'done' : 'active', html`
+          ${hint}
           <form class="tc-signin-code" data-sheet-form="code" novalidate>
-            <label class="tc-sr" for="signin-code">The address Google sent you to</label>
-            <input id="signin-code" name="code" type="url" class="tc-input tc-input--mono" placeholder="http://127.0.0.1:…/?code=…" autocomplete="off" autocapitalize="off" spellcheck="false"${submitted ? raw(' disabled') : ''}>
+            <label class="tc-sr" for="signin-code">${googleCode ? 'Google authorization code' : 'The address Google sent you to'}</label>
+            <input id="signin-code" name="code" type="${googleCode ? 'password' : 'url'}" class="tc-input tc-input--mono" placeholder="${googleCode ? 'Paste the code' : 'http://127.0.0.1:…/?code=…'}" maxlength="${googleCode ? 4096 : 16384}" autocomplete="off" autocapitalize="off" spellcheck="false"${submitted ? raw(' disabled') : ''}>
             <button class="tc-btn tc-btn--primary" type="submit"${submitted ? raw(' disabled') : ''}>${submitted ? html`<span class="tc-spinner" aria-hidden="true"></span>Checking` : 'Submit'}</button>
           </form>
           ${signin.pasteError && !submitted ? html`<span class="tc-hint tc-hint--err" role="alert">${signin.pasteError}</span>` : ''}
@@ -2348,8 +2351,7 @@
       signin.layer.render();
       const res = await api('/auth/code', { body: { id: signin.session.id, code } });
       if (!res.ok && signinMeta(signin.agent).flow === 'redirect') {
-        // T3 keeps the sign-in waiting after a wrong address: say why, and
-        // let the right one be pasted.
+        // Allow another paste when T3 rejects the sign-in response.
         signin.phase = 'awaiting';
         signin.pasteError = res.error;
       } else if (!res.ok) {

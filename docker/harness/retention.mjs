@@ -16,6 +16,14 @@ const sections = ["harnesses", "toolchains", "packages"];
 const recordsOf = (saved) => sections.flatMap((section) => Object.entries(saved[section] || {}).map(([id, record]) => ({ section, id, record })));
 const versionsOf = (record) => [...new Set((record.managedVersions || []).filter((v) => typeof v === "string" && exact.test(v)))];
 
+/** The version automatic retention keeps as the rollback fallback: the recorded
+ * previous version while that one is actually installed, else the newest other
+ * version. A record interrupted mid-upgrade can name a version that is gone;
+ * trusting it would leave no installed version protected. */
+const previousVersionOf = (record, versions) => versions.includes(record.previousVersion)
+  ? record.previousVersion
+  : versions.filter((version) => version !== record.version).at(-1);
+
 function providerPaths(value, result = []) {
   if (!value || typeof value !== "object") return result;
   for (const [key, child] of Object.entries(value)) {
@@ -74,7 +82,7 @@ export async function planRetention(ctx, { saved, only, includePrevious = false 
   const records = only ? [only] : recordsOf(saved);
   const needsReferences = records.some(({ record }) => {
     const versions = versionsOf(record);
-    const previous = record.previousVersion || versions.filter((version) => version !== record.version).at(-1);
+    const previous = previousVersionOf(record, versions);
     return versions.some((version) => version !== record.version && (includePrevious || version !== previous));
   });
   let refs = null, warning = preferences.error;
@@ -84,7 +92,7 @@ export async function planRetention(ctx, { saved, only, includePrevious = false 
   const items = [];
   for (const { section, id, record } of records) {
     const versions = versionsOf(record);
-    const previous = record.previousVersion || versions.filter((v) => v !== record.version).at(-1);
+    const previous = previousVersionOf(record, versions);
     for (const version of versions) {
       const entry = section === "packages" ? { name: id, miseTool: id } : section === "harnesses" ? getHarness(id) : getManagedTool(id);
       if (!entry) continue;

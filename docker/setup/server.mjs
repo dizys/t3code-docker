@@ -1635,7 +1635,7 @@ const startSignin = async (agentId) => {
 
   sessions.set(id, session);
   setTimeout(() => {
-    if (sessions.get(id)?.state?.startsWith("awaiting")) {
+    if (!TERMINAL_STATES.has(session.state)) {
       try { session.child.kill(); } catch {}
       sessionStore.settle(session, "failed", "Timed out waiting for the browser step.");
     }

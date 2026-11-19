@@ -57,6 +57,19 @@ test("retention protects current, previous, project pins, provider binaries, and
   assert.equal((await readState(f.ctx)).toolchains.go.managedVersions.includes("1.23.0"), false);
 });
 
+test("a previousVersion naming an uninstalled version keeps the newest installed fallback", async (t) => {
+  const f = await fixture(t);
+  // An upgrade interrupted before its state write can leave the recorded
+  // previous version gone: the fallback must move to what is installed.
+  await writeState(f.ctx, { ...emptyState(), toolchains: { go: { version: "1.25.0", previousVersion: "1.26.0", managedVersions: ["1.24.0", "1.25.0"] } } });
+  f.setPrunable(f.installs.filter((item) => ["1.24.0", "1.25.0"].includes(item.version)));
+  const plan = await planRetention(f.ctx);
+  const byVersion = Object.fromEntries(plan.items.map((item) => [item.version, item]));
+  assert.equal(byVersion["1.24.0"].reason, "Previous version");
+  assert.equal(byVersion["1.25.0"].reason, "Current version");
+  assert.equal(plan.removableCount, 0);
+});
+
 test("provider PATH, process cwd, and flag paths veto removal", async (t) => {
   const f = await fixture(t);
   await writeStorageJson(f.settings, { providerInstances: { custom: { config: { env: { PATH: `${f.installs[0].install_path}/bin:/usr/bin` } } } } });

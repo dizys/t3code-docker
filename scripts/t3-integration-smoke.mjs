@@ -8,6 +8,7 @@ import net from "node:net";
 import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { createGatewayT3 } from "../docker/setup/gateways/t3.mjs";
 import { createT3Api } from "../docker/setup/t3-api.mjs";
 import { createRuntimeManager } from "../docker/runtime/manager.mjs";
@@ -133,20 +134,44 @@ exec "$T3_INFRA_NODE" "$@"
   const after = await until(() => api.call("server.getConfig", {}));
   await verifyGatewayQuota({ api, gatewayT3, until });
   assert.equal(after.newProjectsRoot, workspace);
-  // A fake Antigravity process records the environment after the real native
-  // browser preflight succeeds. It exits without making a Google auth request.
+  // Exercise the real native preflight and both CLI phases without a Google account.
   const antigravity = path.join(root, "agy");
   const antigravityInstance = "antigravity-browser-smoke";
-  await fs.writeFile(antigravity, `#!/bin/sh
-printf '%s\\n' "$BROWSER" "\${NODE_CHANNEL_FD-unset}" "\${NODE_CHANNEL_SERIALIZATION_MODE-unset}" > "$T3_SMOKE_BROWSER_RECEIPT"
-exit 1
-`, { mode: 0o755 });
+  const fixture = fileURLToPath(new URL("./fixtures/antigravity-acp.mjs", import.meta.url));
+  await fs.writeFile(antigravity, `#!/bin/sh\nexec "$T3_INFRA_NODE" '${fixture.replaceAll("'", "'\"'\"'")}' "$@"\n`, { mode: 0o755 });
   await gatewayT3.upsert(antigravityInstance, { driver: "antigravity", enabled: true, config: { binaryPath: antigravity }, environment: [
     { name: "NODE_CHANNEL_FD", value: "9", sensitive: false },
     { name: "NODE_CHANNEL_SERIALIZATION_MODE", value: "json", sensitive: false },
   ] });
   await until(() => api.first("provider.auth.subscribe", { instanceId: antigravityInstance }));
-  await api.call("provider.auth.start", { instanceId: antigravityInstance });
+  const authInput = { instanceId: antigravityInstance };
+  const first = await api.call("provider.auth.start", authInput);
+  const waitForCode = async (flowId) => {
+    const state = await until(async () => {
+      const current = await api.first("provider.auth.subscribe", authInput);
+      return current.flowId === flowId && ["waiting", "failed"].includes(current.phase) && current;
+    });
+    assert.equal(state.phase, "waiting", state.message ?? "");
+    return state;
+  };
+  await waitForCode(first.flowId);
+  const cancelled = await api.call("provider.auth.cancel", { ...authInput, flowId: first.flowId });
+  assert.equal(cancelled.phase, "cancelled");
+  assert.equal(cancelled.interaction, null);
+  const { flowId } = await api.call("provider.auth.start", authInput);
+  const challenge = await waitForCode(flowId);
+  assert.equal(new URL(challenge.authorizationUrl).searchParams.get("redirect_uri"), "https://antigravity.google/oauth-callback");
+  assert.deepEqual(challenge.interaction.fields, [{ name: "authorizationCode", label: "Google authorization code", secret: true }]);
+  const respond = (authorizationCode) => api.call("provider.auth.respond", { ...authInput, flowId,
+    interactionId: challenge.interaction.id, response: { type: "credentials", values: { authorizationCode } } });
+  await assert.rejects(respond("wrong\nline"), /authorization code shown by Google/);
+  await respond("fixture-authorization-code");
+  const signedIn = await until(async () => {
+    const state = await api.first("provider.auth.subscribe", authInput);
+    return ["succeeded", "failed"].includes(state.phase) && state;
+  });
+  assert.equal(signedIn.phase, "succeeded", signedIn.message ?? "");
+  assert.equal(signedIn.interaction, null);
   const [browserCommand, fd, serializationMode] = (await until(() => fs.readFile(browserReceipt, "utf8"))).trimEnd().split("\n");
   assert.ok(browserCommand.startsWith(`'${process.execPath}' '-e' `), "Antigravity uses the image Node even when PATH prefers a broken shim");
   assert.deepEqual([fd, serializationMode], ["unset", "unset"], "The Antigravity subprocess receives no launcher IPC metadata");
@@ -167,7 +192,7 @@ exit 1
   assert.equal(identityAfter.serverVersion, identityBefore.serverVersion);
   assert.equal(identityAfter.serverVersion, version);
   assert.deepEqual(await connectFacts((await selectedRuntime(paths)).binary), connectBefore, "The integration must retain upstream's public Connect capability and relay discovery");
-  console.log(JSON.stringify({ sameVersionIntegration: version, patchRevision: PATCH_REVISION, identityPreserved: true, originalSessionPreserved: true, existingProjectsPreserved: true, newProjectInWorkspace: true, connectPreserved: true, antigravityBrowserPreflight: true }));
+  console.log(JSON.stringify({ sameVersionIntegration: version, patchRevision: PATCH_REVISION, identityPreserved: true, originalSessionPreserved: true, existingProjectsPreserved: true, newProjectInWorkspace: true, connectPreserved: true, antigravityBrowserPreflight: true, antigravityTerminalSignIn: true }));
 } finally {
   api?.close();
   if (supervisor && supervisor.exitCode === null) {

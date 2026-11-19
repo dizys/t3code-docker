@@ -1,5 +1,6 @@
 import * as agentResources from "./agent-resources.mjs";
 import * as antigravityRuntime from "./antigravity-runtime.mjs";
+import * as antigravitySignIn from "./antigravity-sign-in.mjs";
 import * as opencodeSkills from "./opencode-skills.mjs";
 import * as projectDirectory from "./project-directory.mjs";
 import * as setupPalette from "./setup-palette.mjs";
@@ -11,6 +12,7 @@ import * as gatewayQuota from "./gateway-quota.mjs";
 export const BUILD_REVISION = 5;
 export const patches = [{ name: "agent-resources", module: new URL("./agent-resources.mjs", import.meta.url), files: agentResources.files, creates: agentResources.creates, assets: agentResources.assets, apply: agentResources.patchAgentResources },
   { name: "antigravity-runtime", module: new URL("./antigravity-runtime.mjs", import.meta.url), files: antigravityRuntime.files, apply: antigravityRuntime.patchAntigravityRuntime },
+  { name: "antigravity-sign-in", module: new URL("./antigravity-sign-in.mjs", import.meta.url), files: antigravitySignIn.files, creates: antigravitySignIn.creates, assets: antigravitySignIn.assets, apply: antigravitySignIn.patchAntigravitySignIn },
   { name: "project-directory", module: new URL("./project-directory.mjs", import.meta.url), files: projectDirectory.files, apply: projectDirectory.patchProjectDirectory },
   { name: "gateway-capabilities", module: new URL("./gateway-capabilities.mjs", import.meta.url), files: gatewayCapabilities.files, apply: gatewayCapabilities.patchGatewayCapabilities },
   { name: "gateway-context", module: new URL("./gateway-context.mjs", import.meta.url), files: gatewayContext.files, creates: gatewayContext.creates, assets: gatewayContext.assets, apply: gatewayContext.patchGatewayContext },

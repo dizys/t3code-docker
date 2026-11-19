@@ -231,6 +231,13 @@ function fakeT3({ tokens = new Set(["good"]), protocolVersion = 1, settingsForma
         if (message.payload.flowId !== t3.auth.flowId) return answer(fail("This sign-in is no longer active in this client.", "complete"));
         t3.setAuth({ phase: "verifying" });
         return ok(t3.auth);
+      case "provider.auth.respond":
+        if (message.payload.flowId !== t3.auth.flowId || message.payload.interactionId !== t3.auth.interaction?.id) {
+          return answer(fail("This sign-in is no longer active in this client.", "respond"));
+        }
+        t3.authResponse = message.payload.response;
+        t3.setAuth({ phase: "verifying", interaction: null, authorizationUrl: null });
+        return ok(t3.auth);
       case "provider.auth.cancel":
         t3.setAuth({ phase: "cancelled", flowId: message.payload.flowId, message: "Google sign-in was cancelled." });
         return ok(t3.auth);
@@ -494,4 +501,19 @@ test("sign-in follows T3's flow: a Google link, the pasted address, T3's verdict
   await assert.rejects(ag.completeSignIn("other", "http://127.0.0.1:1/"), /no longer active/);
   flow.close();
   api.close();
+});
+
+test("headless Antigravity sign-in sends the code to the current native credential prompt", async (t) => {
+  const t3 = fakeT3();
+  const { api } = apiFor(t3);
+  t.after(() => api.close());
+  const ag = createAntigravity({ api });
+  const flow = await ag.signIn(() => {});
+  t.after(() => flow.close());
+  t3.setAuth({ phase: "waiting", interaction: { type: "credentials", id: "code-prompt" } });
+  await assert.rejects(ag.submitSignInCode(flow.flowId, "old-prompt", "fixture-code"), /no longer active/);
+  const sent = await ag.submitSignInCode(flow.flowId, "code-prompt", "fixture-code");
+  assert.equal(sent.phase, "verifying");
+  assert.deepEqual(t3.authResponse, { type: "credentials", values: { authorizationCode: "fixture-code" } });
+  assert.equal(t3.requests.includes("provider.auth.complete"), false);
 });

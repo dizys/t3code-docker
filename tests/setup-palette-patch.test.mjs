@@ -15,6 +15,16 @@ const original = [
   '  return rootGroups;',
   '}',
 ].join('\n');
+const localizedRootGroups = '  const rootGroups = buildRootGroups({ actionItems, recentThreadItems }, messages);';
+
+test('Setup actions join the localized palette without changing its message resolver', () => {
+  const stableRootGroups = '  const rootGroups = buildRootGroups({ actionItems, recentThreadItems });';
+  const localized = original.replace(stableRootGroups, localizedRootGroups);
+  const result = patchSetupPalette({ [files[0]]: localized });
+  assert.ok(result[files[0]].includes(`  actionItems.push(...setupActions);\n${localizedRootGroups}`));
+  const mixed = original.replace(stableRootGroups, `${stableRootGroups}\n${localizedRootGroups}`);
+  assert.throws(() => patchSetupPalette({ [files[0]]: mixed }), /no longer matches/);
+});
 
 test('Setup joins native actions before ranking without replacing native result rendering', () => {
   const input = { [files[0]]: original }, before = structuredClone(input);

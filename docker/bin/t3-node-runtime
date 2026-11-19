@@ -6,6 +6,13 @@ set -euo pipefail
 command="${0##*/}"
 case "$command" in node|npm|npx) ;; *) echo 't3-node-runtime: invoke as node, npm or npx' >&2; exit 2 ;; esac
 
+# A T3 server child can inherit the supervisor's IPC variables with no socket.
+# Node on Linux uses a Unix socket for IPC. Preserve one the caller passed to
+# this program, and discard stale metadata before any subprocess can reuse it.
+if [[ ! ${NODE_CHANNEL_FD:-} =~ ^[0-9]+$ || ! -S "/proc/self/fd/$NODE_CHANNEL_FD" ]]; then
+  unset NODE_CHANNEL_FD NODE_CHANNEL_SERIALIZATION_MODE
+fi
+
 : "${T3_INFRA_NODE:=/usr/local/bin/node}"
 : "${T3_NODE_RUNTIME_CLI:=/opt/t3-harness/node-runtime.mjs}"
 : "${T3_MISE_BIN:=/usr/local/bin/mise}"
@@ -18,14 +25,22 @@ if [ "$EUID" -eq 0 ]; then
   exec "$system_bin" "$@"
 fi
 
-mode="$("$T3_INFRA_NODE" "$T3_NODE_RUNTIME_CLI" "$command")"
+# An explicit IPC socket belongs to the final tool. Runtime discovery is a
+# separate subprocess and must not try to attach to it.
+mode="$(
+  unset NODE_CHANNEL_FD NODE_CHANNEL_SERIALIZATION_MODE
+  "$T3_INFRA_NODE" "$T3_NODE_RUNTIME_CLI" "$command"
+)"
 case "$mode" in
   system) exec "$system_bin" "$@" ;;
   mise)
     # Resolve inside mise's execution environment, then use that exact path.
     # `mise exec -- node` can find this dispatcher again when auto-install is
     # disabled and a declared version is missing. `which` fails in that case.
-    executable="$("$T3_MISE_BIN" exec -- "$T3_MISE_BIN" which "$command")"
+    executable="$(
+      unset NODE_CHANNEL_FD NODE_CHANNEL_SERIALIZATION_MODE
+      "$T3_MISE_BIN" exec -- "$T3_MISE_BIN" which "$command"
+    )"
     exec "$executable" "$@"
     ;;
   *) echo 't3-node-runtime: invalid runtime selection' >&2; exit 1 ;;

@@ -1,11 +1,12 @@
-// Native regression for persistent, unselected Node shims. No downloads or
-// changes to the real home, selections, credentials or running agents.
+// Native regression for unselected Node shims and child process environments.
+// No downloads or changes to the real home, selections, credentials or agents.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {spawnSync} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
+import {once} from 'node:events';
 
 assert.notEqual(process.getuid?.(),0,'Run the runtime regression as the unprivileged container user');
 const home=await fs.mkdtemp(path.join(os.tmpdir(),'t3-node-runtime-'));
@@ -31,6 +32,36 @@ try {
   assert.notEqual(raw.status,0,'The fixture must reproduce a broken ambient Node shim');
   env.PATH=prefix+path.delimiter+rawEnv.PATH;
   const run=(command,args,cwd=home)=>spawnSync(command,args,{cwd,env,encoding:'utf8',timeout:20_000});
+
+  // Antigravity runs a Node browser helper and expects only its marker on
+  // stderr. The T3 server can pass down IPC variables without the IPC socket.
+  const browserMarker = '__T3_BROWSER_HELPER_READY__\n';
+  const browserHelper = spawnSync('node', [
+    '-e', 'setImmediate(() => process.stderr.write(process.argv[1]))', '--', browserMarker,
+  ], {
+    cwd: home,
+    env: { ...env, NODE_CHANNEL_FD: '3', NODE_CHANNEL_SERIALIZATION_MODE: 'json' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+    timeout: 20_000,
+  });
+  assert.ifError(browserHelper.error);
+  assert.equal(browserHelper.status, 0, browserHelper.stderr);
+  assert.equal(browserHelper.stdout, '');
+  assert.equal(browserHelper.stderr, browserMarker);
+
+  // A process that actually supplies an IPC socket can still send messages.
+  const ipcChild = spawn('node', [
+    '-e', 'process.send("ready", () => process.disconnect())',
+  ], {
+    cwd: home, env, stdio: ['ignore', 'ignore', 'inherit', 'ipc'], timeout: 20_000,
+  });
+  const messages = [];
+  ipcChild.on('message', message => messages.push(message));
+  const [ipcExitCode] = await once(ipcChild, 'close');
+  assert.equal(ipcExitCode, 0);
+  assert.deepEqual(messages, ['ready']);
+
   const node=run('node',['--version']);assert.equal(node.status,0,node.stderr);assert.equal(node.stdout.trim(),process.version);
   for(const command of ['npm','npx']){const result=run(command,['--version']);assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/^\d+\.\d+\.\d+/);}
 
@@ -60,5 +91,5 @@ try {
   await fs.writeFile(path.join(project,'mise.toml'),'[tools]\nnode = "99.99.99"\n');
   const missingProject=run('node',['--version'],project);assert.equal(missingProject.error,undefined);assert.notEqual(missingProject.status,null);assert.notEqual(missingProject.status,0,'A missing project Node must not fall back');
   assert.equal((await fs.readFile(path.join(project,'mise.toml'),'utf8')),'[tools]\nnode = "99.99.99"\n');
-  console.log(JSON.stringify({architecture:process.arch,staleShimsReproduced:true,imageNodeNpmNpxWork:true,piProbeAndLauncherWork:true,selectedGlobalAndProjectPinsHonored:true,explicitSystemWorks:true,missingGlobalAndProjectPinsPreserved:true}));
+  console.log(JSON.stringify({architecture:process.arch,staleShimsReproduced:true,imageNodeNpmNpxWork:true,browserHelperWorksWithStaleIpc:true,explicitIpcWorks:true,piProbeAndLauncherWork:true,selectedGlobalAndProjectPinsHonored:true,explicitSystemWorks:true,missingGlobalAndProjectPinsPreserved:true}));
 } finally { await fs.rm(home,{recursive:true,force:true}); }

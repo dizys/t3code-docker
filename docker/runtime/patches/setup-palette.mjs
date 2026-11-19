@@ -5,10 +5,11 @@ export const clientFile = "apps/web/src/components/SetupPaletteActions.ts";
 export const creates = [clientFile];
 export const assets = [new URL("./setup-palette-client.ts", import.meta.url)];
 export const clientSource = readFileSync(assets[0], "utf8");
+const noMatch = "The setup-palette patch no longer matches CommandPalette.tsx. Review the upstream source before publishing this runtime.";
 
 function replaceOnce(text, before, after) {
   if (typeof text !== "string" || text.split(before).length !== 2) {
-    throw new Error("The setup-palette patch no longer matches CommandPalette.tsx. Review the upstream source before publishing this runtime.");
+    throw new Error(noMatch);
   }
   return text.replace(before, after);
 }
@@ -20,7 +21,9 @@ export function patchSetupPalette(source) {
     'import { useSetupPaletteActions } from "./SetupPaletteActions";\nimport { useAvailableSettingsSearchItems }');
   text = replaceOnce(text, '  const isActionsOnly = deferredQuery.startsWith(">");',
     '  const isActionsOnly = deferredQuery.startsWith(">");\n  const setupActions = useSetupPaletteActions(deferredQuery, async () => {\n    await navigate({ to: "/settings" });\n  });');
-  text = replaceOnce(text, '  const rootGroups = buildRootGroups({ actionItems, recentThreadItems });',
-    '  actionItems.push(...setupActions);\n  const rootGroups = buildRootGroups({ actionItems, recentThreadItems });');
+  const rootGroups = text.match(/^  const rootGroups = buildRootGroups\(\{ actionItems, recentThreadItems \}(?:, messages)?\);$/gm);
+  if (rootGroups?.length !== 1) throw new Error(noMatch);
+  const [buildGroups] = rootGroups;
+  text = replaceOnce(text, buildGroups, `  actionItems.push(...setupActions);\n${buildGroups}`);
   return { ...source, [files[0]]: text, [clientFile]: clientSource };
 }

@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import { stripTypeScriptTypes } from './lib/strip-types.mjs';
 import test from 'node:test';
 import { files, quotaFile, quotaSource, patchGatewayQuota } from '../docker/runtime/patches/gateway-quota.mjs';
-import { patches, createdFiles } from '../docker/runtime/patches/index.mjs';
+import { patches, createdFiles, optionalFiles } from '../docker/runtime/patches/index.mjs';
 import { source } from './fixtures/gateway-quota-source.mjs';
 import { source as providerTableSource } from './fixtures/gateway-quota-provider-table-source.mjs';
 import { source as setNoticesSource } from './fixtures/gateway-quota-set-notices-source.mjs';
+import { source as localizedNoticesSource } from './fixtures/gateway-quota-localized-notices-source.mjs';
+
+const localizedNoticesFile = 'packages/shared/src/usageLimitsCopy.ts';
 
 // Run the production parsers directly, with erased type-only imports. The
 // runtime integration smoke covers their real Effect transport and contracts.
@@ -110,7 +113,7 @@ test('provider-table patch preserves native readers, transport, diagnostics and 
   assert.match(patched[files[2]], /OpenCode Go/);
 });
 
-test('account warnings preserve native array and deduplicating Set notice collectors', () => {
+test('account warnings preserve native notice ordering, deduplication and localization', () => {
   const warning = notice => ({windows: [], notice});
   const presentations = new Map([
     ['one', {entry: {target: {label: 'First'}}, serverConfig: {
@@ -131,18 +134,29 @@ test('account warnings preserve native array and deduplicating Set notice collec
   const before = structuredClone(presentations);
   const expected = ['First · Native: Native warning', 'First · Gateway · account: No quota',
     'First · Empty: No accounts reported.', 'First · Offline: Could not connect', 'Second · Gateway · named@example.test: Read failed'];
-  for (const fixture of [source, setNoticesSource]) {
-    const patched = patchGatewayQuota(fixture)[files[1]];
-    const collect = new Function('providersWithLimits', 'limitsNotice', 'hubAccountName',
-      stripTypeScriptTypes(patched.replace('export ', ''), {mode: 'transform'}) + '\nreturn collectLimitNotices;')(
-      providers => providers, limits => limits.notice ?? null, account => account.id.replace(/\.json$/i, ''));
+  const msg = (template, values) => template.replace(/\{(\w+)\}/g, (_, key) => values[key]);
+  for (const fixture of [source, setNoticesSource, localizedNoticesSource]) {
+    const patched = patchGatewayQuota(fixture);
+    const localized = fixture === localizedNoticesSource;
+    const collector = patched[localized ? localizedNoticesFile : files[1]];
+    const functionSource = collector.slice(collector.indexOf('export function collectLimitNotices'));
+    const collect = new Function('providersWithLimits', 'limitsNotice', 'hubAccountName', 'msg', 'mFallback',
+      stripTypeScriptTypes(functionSource.replace('export ', ''), {mode: 'transform'}) + '\nreturn collectLimitNotices;')(
+      providers => providers, limits => limits.notice ?? null, account => account.id.replace(/\.json$/i, ''), msg, value => value);
     const result = collect(presentations);
-    if (fixture === setNoticesSource) {
+    if (fixture !== source) {
       assert.deepEqual(result, expected, 'Nightly retains native deduplication for repeated account warnings');
-      assert.match(patched, /const notices = new Set<string>\(\)/);
-      assert.match(patched, /return \[\.\.\.notices\]/);
+      assert.match(collector, /const notices = new Set<string>\(\)/);
+      assert.match(collector, /return \[\.\.\.notices\]/);
     } else {
       assert.deepEqual(result, [expected[0], expected[1], ...expected.slice(1)], 'Stable retains native array ordering and duplicate behavior');
+    }
+    if (localized) {
+      assert.ok(optionalFiles.includes(localizedNoticesFile));
+      assert.match(collector, /  hubAccountName,/);
+      assert.match(patched[files[1]], /export const hubAccountName/);
+      assert.deepEqual(collect(presentations, value => `[translated] ${value}`),
+        [expected[0], `[translated] ${expected[1]}`, `[translated] ${expected[2]}`, expected[3], `[translated] ${expected[4]}`]);
     }
     assert.deepEqual(presentations, before, 'notice collection does not alter account snapshots');
   }
@@ -153,6 +167,11 @@ test('notice patches reject unknown, duplicated and mixed collector layouts', ()
   for (const collector of [set.replaceAll('notices.add(', 'notices.append('), set + set, array + set]) {
     assert.throws(() => patchGatewayQuota({...setNoticesSource, [files[1]]: collector}), /no longer matches/);
   }
+  const localized = localizedNoticesSource[localizedNoticesFile];
+  for (const collector of ['', localized + localized, localized.replace('No accounts reported.', 'No accounts.')]) {
+    assert.throws(() => patchGatewayQuota({...localizedNoticesSource, [localizedNoticesFile]: collector}), /no longer matches/);
+  }
+  assert.throws(() => patchGatewayQuota({...localizedNoticesSource, [files[1]]: set}), /no longer matches/);
 });
 
 test('provider-table patch fails closed on missing, duplicate, mixed and changed upstream anchors', () => {

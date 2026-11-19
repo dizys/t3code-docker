@@ -9,7 +9,7 @@ import { releaseForVersion, unpackRelease, executableVersion } from "../docker/r
 import { releaseForVersion as patchedReleaseForVersion } from "../docker/runtime/distribution.mjs";
 import { exactVersion } from "../docker/runtime/state.mjs";
 import { PATCH_REVISION } from "../docker/runtime/distribution-spec.mjs";
-import { files, createdFiles, applySourcePatches } from "../docker/runtime/patches/index.mjs";
+import { files, optionalFiles, createdFiles, applySourcePatches } from "../docker/runtime/patches/index.mjs";
 
 const execute = promisify(execFile);
 
@@ -115,6 +115,10 @@ export async function buildRuntime(version, arch, destination, { run = execute, 
       throw new Error(`The source patch would overwrite ${file}. Review the upstream source before publishing this runtime.`);
     }
     const original = Object.fromEntries(await Promise.all(files.map(async (file) => [file, await fs.readFile(path.join(checkout, file), "utf8")])));
+    await Promise.all(optionalFiles.map(async (file) => {
+      try { original[file] = await fs.readFile(path.join(checkout, file), "utf8"); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+    }));
     const patched = applySourcePatches(original);
     for (const [file, text] of Object.entries(patched)) await fs.writeFile(path.join(checkout, file), text);
     console.error("[t3-runtime] installing locked build dependencies");

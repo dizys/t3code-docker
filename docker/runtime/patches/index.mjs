@@ -12,9 +12,10 @@ export const patches = [{ name: "agent-resources", module: new URL("./agent-reso
   { name: "project-directory", module: new URL("./project-directory.mjs", import.meta.url), files: projectDirectory.files, apply: projectDirectory.patchProjectDirectory },
   { name: "gateway-capabilities", module: new URL("./gateway-capabilities.mjs", import.meta.url), files: gatewayCapabilities.files, apply: gatewayCapabilities.patchGatewayCapabilities },
   { name: "gateway-context", module: new URL("./gateway-context.mjs", import.meta.url), files: gatewayContext.files, creates: gatewayContext.creates, assets: gatewayContext.assets, apply: gatewayContext.patchGatewayContext },
-  { name: "gateway-quota", module: new URL("./gateway-quota.mjs", import.meta.url), files: gatewayQuota.files, creates: gatewayQuota.creates, assets: gatewayQuota.assets, apply: gatewayQuota.patchGatewayQuota },
+  { name: "gateway-quota", module: new URL("./gateway-quota.mjs", import.meta.url), files: gatewayQuota.files, optionalFiles: gatewayQuota.optionalFiles, creates: gatewayQuota.creates, assets: gatewayQuota.assets, apply: gatewayQuota.patchGatewayQuota },
   { name: "opencode-skills", module: new URL("./opencode-skills.mjs", import.meta.url), files: opencodeSkills.files, apply: opencodeSkills.patchOpenCodeSkills },
   { name: "setup-palette", module: new URL("./setup-palette.mjs", import.meta.url), files: setupPalette.files, creates: setupPalette.creates, assets: setupPalette.assets, apply: setupPalette.patchSetupPalette }];
 export const files = [...new Set(patches.flatMap((patch) => patch.files))];
+export const optionalFiles = [...new Set(patches.flatMap((patch) => patch.optionalFiles ?? []))];
 export const createdFiles = [...new Set(patches.flatMap((patch) => patch.creates ?? []))];
 export const applySourcePatches = (source) => patches.reduce((current, patch) => patch.apply(current), source);

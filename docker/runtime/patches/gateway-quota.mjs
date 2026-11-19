@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 
-export const files = ["apps/server/src/usage/cliproxyApi.ts", "packages/shared/src/usageLimits.ts", "apps/web/src/components/usage/UsageLimitsPooled.tsx"];
+const sharedNoticesFile = "packages/shared/src/usageLimits.ts";
+const localizedNoticesFile = "packages/shared/src/usageLimitsCopy.ts";
+export const files = ["apps/server/src/usage/cliproxyApi.ts", sharedNoticesFile, "apps/web/src/components/usage/UsageLimitsPooled.tsx"];
+export const optionalFiles = [localizedNoticesFile];
 export const quotaFile = "apps/server/src/usage/cliproxyQuota.ts";
 export const creates = [quotaFile];
 export const assets = [new URL("./cliproxy-quota.ts", import.meta.url)];
@@ -98,19 +101,51 @@ export function patchGatewayQuota(source) {
     const read = Effect.gen(function* () {`);
     change(files[0], '!account.disabled && (account.provider === "codex" || account.provider === "claude"),', '!account.disabled,');
   }
-  // Stable uses an array; current Nightly deduplicates notices in a Set.
-  // Keep that collector and require exactly one known insertion site.
+  // Older releases collect notices in usageLimits.ts. The localized
+  // collector moved to usageLimitsCopy.ts and takes the caller's resolver.
   const noticeAnchor = method => `      } else if (source.accounts.length === 0) {
         notices.${method}(\x60${'${label(environmentLabel, source.label)}'}: No accounts reported.\x60);
       }`;
-  const noticeMethods = ['push', 'add'].filter(method => typeof next[files[1]] === 'string' && next[files[1]].includes(noticeAnchor(method)));
-  if (noticeMethods.length !== 1) throw new Error(`The gateway-quota patch no longer matches ${files[1]}. Review the upstream source before publishing this runtime.`);
-  const [noticeMethod] = noticeMethods;
-  change(files[1], noticeAnchor(noticeMethod), `${noticeAnchor(noticeMethod)}
+  const sharedNotices = next[sharedNoticesFile];
+  const noticeMethods = ['push', 'add'].filter(method => typeof sharedNotices === 'string' && sharedNotices.includes(noticeAnchor(method)));
+  const localized = Object.hasOwn(next, localizedNoticesFile);
+  if (noticeMethods.length !== (localized ? 0 : 1)) throw new Error(`The gateway-quota patch no longer matches ${sharedNoticesFile}. Review the upstream source before publishing this runtime.`);
+  if (localized) {
+    const accountName = String.raw`const hubAccountName = (account: { readonly id: string }) => account.id.replace(/\.json$/i, "");`;
+    change(sharedNoticesFile, `\n${accountName}\n`, `\nexport ${accountName}\n`);
+    change(localizedNoticesFile, '  providersWithLimits,', '  hubAccountName,\n  providersWithLimits,');
+    const anchor = `      } else if (source.accounts.length === 0) {
+        notices.add(
+          resolve(
+            msg("{source}: No accounts reported.", {
+              source: label(environmentLabel, source.label),
+            }),
+          ),
+        );
+      }`;
+    change(localizedNoticesFile, anchor, `${anchor}
+      for (const account of source.accounts) {
+        const notice = limitsNotice(account.usageLimits, resolve);
+        if (!notice) continue;
+        notices.add(
+          resolve(
+            msg("{source} · {account}: {notice}", {
+              source: label(environmentLabel, source.label),
+              account: account.email ?? hubAccountName(account),
+              notice,
+            }),
+          ),
+        );
+      }`);
+  } else {
+    const [noticeMethod] = noticeMethods;
+    const anchor = noticeAnchor(noticeMethod);
+    change(sharedNoticesFile, anchor, `${anchor}
       for (const account of source.accounts) {
         const notice = limitsNotice(account.usageLimits);
         if (notice) notices.${noticeMethod}(\x60${'${label(environmentLabel, source.label)}'} · ${'${account.email ?? hubAccountName(account)}'}: ${'${notice}'}\x60);
       }`);
+  }
   // Unknown gateway providers are valid contract drivers. Give their pool a
   // human-readable label without assigning it to a different native driver.
   change(files[2], '  const label = providerClients.get(pool.driver)?.label ?? String(pool.driver);', '  const label = providerClients.get(pool.driver)?.label ?? (pool.driver === "opencode-go" ? "OpenCode Go" : String(pool.driver));');

@@ -17,7 +17,7 @@
 # See README.md for the runtime contract.
 
 ARG NODE_IMAGE=node:24-trixie-slim
-ARG T3_BUILD_NODE_IMAGE=node:26.12.1-trixie-slim
+ARG T3_BUILD_NODE_IMAGE=node:26.13.1-trixie-slim
 
 FROM ${T3_BUILD_NODE_IMAGE} AS t3-build-node
 

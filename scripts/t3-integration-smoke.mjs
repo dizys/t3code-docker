@@ -26,8 +26,19 @@ try {
   const original = path.join(root, "upstream"); await fs.mkdir(original);
   const upstream = await unpackRelease(original, await releaseForVersion(version));
   const home = path.join(root, "home"), workspace = path.join(root, "Work spaces 世界");
-  await fs.mkdir(home); await fs.mkdir(workspace);
-  const env = { PATH: process.env.PATH, LANG: "C.UTF-8", HOME: home, T3CODE_HOME: path.join(home, ".t3"), T3_WORKSPACE: workspace,
+  const shims = path.join(root, "shims"), shell = path.join(root, "bash"), browserReceipt = path.join(root, "browser-helper");
+  await fs.mkdir(home); await fs.mkdir(workspace); await fs.mkdir(shims);
+  // Reproduce the shadowing that happens during the native server's login-shell probe.
+  await fs.writeFile(shell, '#!/bin/sh\nexport PATH="$T3_SMOKE_SHIMS:$PATH"\nexec /bin/bash --noprofile --norc "$@"\n', { mode: 0o755 });
+  await fs.writeFile(path.join(shims, "node"), `#!/bin/sh
+if [ "\${4:-}" = "https://example.invalid/t3-antigravity-browser-preflight" ]; then
+  echo 'No Node version is selected' >&2
+  exit 1
+fi
+exec "$T3_INFRA_NODE" "$@"
+`, { mode: 0o755 });
+  const env = { PATH: process.env.PATH, SHELL: shell, LANG: "C.UTF-8", HOME: home, T3CODE_HOME: path.join(home, ".t3"), T3_WORKSPACE: workspace,
+    T3_INFRA_NODE: process.execPath, T3_SMOKE_SHIMS: shims, T3_SMOKE_BROWSER_RECEIPT: browserReceipt,
     T3_INFRA_BINARY: path.join(upstream, "t3"), T3_RUN_DIR: path.join(root, "run"), XDG_CONFIG_HOME: path.join(home, ".config"),
     CODEX_HOME: path.join(home, ".codex"), CLAUDE_CONFIG_DIR: path.join(home, ".claude"), GIT_CONFIG_GLOBAL: path.join(root, "gitconfig"), GIT_CONFIG_NOSYSTEM: "1" };
   await fs.writeFile(env.GIT_CONFIG_GLOBAL, "[user]\n name = Integration smoke\n email = smoke@example.test\n");
@@ -122,6 +133,23 @@ try {
   const after = await until(() => api.call("server.getConfig", {}));
   await verifyGatewayQuota({ api, gatewayT3, until });
   assert.equal(after.newProjectsRoot, workspace);
+  // A fake Antigravity process records the environment after the real native
+  // browser preflight succeeds. It exits without making a Google auth request.
+  const antigravity = path.join(root, "agy");
+  const antigravityInstance = "antigravity-browser-smoke";
+  await fs.writeFile(antigravity, `#!/bin/sh
+printf '%s\\n' "$BROWSER" "\${NODE_CHANNEL_FD-unset}" "\${NODE_CHANNEL_SERIALIZATION_MODE-unset}" > "$T3_SMOKE_BROWSER_RECEIPT"
+exit 1
+`, { mode: 0o755 });
+  await gatewayT3.upsert(antigravityInstance, { driver: "antigravity", enabled: true, config: { binaryPath: antigravity }, environment: [
+    { name: "NODE_CHANNEL_FD", value: "9", sensitive: false },
+    { name: "NODE_CHANNEL_SERIALIZATION_MODE", value: "json", sensitive: false },
+  ] });
+  await until(() => api.first("provider.auth.subscribe", { instanceId: antigravityInstance }));
+  await api.call("provider.auth.start", { instanceId: antigravityInstance });
+  const [browserCommand, fd, serializationMode] = (await until(() => fs.readFile(browserReceipt, "utf8"))).trimEnd().split("\n");
+  assert.ok(browserCommand.startsWith(`'${process.execPath}' '-e' `), "Antigravity uses the image Node even when PATH prefers a broken shim");
+  assert.deepEqual([fd, serializationMode], ["unset", "unset"], "The Antigravity subprocess receives no launcher IPC metadata");
   // The new capability contract belongs to the patched server, not upstream.
   assert.equal((await gatewayT3.read()).customModelCapabilityOverrides, true, "the selected patched runtime advertises capability overrides");
   assert.equal((await gatewayT3.read()).gatewayModelLimits, true, "the upgraded runtime advertises gateway context-limit support");
@@ -139,7 +167,7 @@ try {
   assert.equal(identityAfter.serverVersion, identityBefore.serverVersion);
   assert.equal(identityAfter.serverVersion, version);
   assert.deepEqual(await connectFacts((await selectedRuntime(paths)).binary), connectBefore, "The integration must retain upstream's public Connect capability and relay discovery");
-  console.log(JSON.stringify({ sameVersionIntegration: version, patchRevision: PATCH_REVISION, identityPreserved: true, originalSessionPreserved: true, existingProjectsPreserved: true, newProjectInWorkspace: true, connectPreserved: true }));
+  console.log(JSON.stringify({ sameVersionIntegration: version, patchRevision: PATCH_REVISION, identityPreserved: true, originalSessionPreserved: true, existingProjectsPreserved: true, newProjectInWorkspace: true, connectPreserved: true, antigravityBrowserPreflight: true }));
 } finally {
   api?.close();
   if (supervisor && supervisor.exitCode === null) {

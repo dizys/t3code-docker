@@ -80,6 +80,7 @@ export async function inspectZip(value,{signal}={}) {
       budget();if((linkBytes+=entry.bytes)>16*1024*1024)fail('too-large','This ZIP has too much link metadata. Extract a smaller archive.');
       if(entry.bytes>4096){entry.skip='link target is too long';skipped.push({entry:entry.name,reason:entry.skip});continue;}
       try{entry.target=utf8.decode(await entryBytes(handle,entry,{signal,maxBytes:4096,deadline}));}catch(error){if(error.code||error.name==='AbortError')throw error;entry.skip='invalid link target';skipped.push({entry:entry.name,reason:entry.skip});continue;}
+      if(!entry.target){entry.skip='empty link target';skipped.push({entry:entry.name,reason:entry.skip});continue;}
       if(entry.target.includes('\0')||entry.target.includes('\\')||entry.target.startsWith('/'))entry.skip='link';
       const parts=path.posix.dirname(entry.name)==='.'?[]:path.posix.dirname(entry.name).split('/');
       for(const part of entry.target.split('/'))if(part==='..'){if(!parts.length){entry.skip='link';break;}parts.pop();}else if(part&&part!=='.')parts.push(part);

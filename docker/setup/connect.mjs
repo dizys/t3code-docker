@@ -70,7 +70,7 @@ export function connectState(json) {
   const authenticated = json.authenticated === true;
   const revoked = json.revoked === true;
   const linked = json.linked === true && !revoked;
-  const state = revoked ? "signin" : linked ? "on" : !desired ? "off" : authenticated ? "pending" : "signin";
+  const state = linked ? "on" : !desired ? "off" : revoked || !authenticated ? "signin" : "pending";
   const relayClient = json.relayClient && typeof json.relayClient === "object" ? json.relayClient : {};
   return {
     state,

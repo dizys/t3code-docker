@@ -56,6 +56,12 @@ test('internal link chains stay contained; dangling, cyclic and destination-depe
  const info=await inspectZip(archive);assert.deepEqual(info.entries.map(row=>row.name),['file','good','chain']);assert.equal(info.skipped.length,3);
  await fs.symlink(f.home,path.join(f.workspace,'existing'));await fs.writeFile(path.join(f.workspace,'file'),'existing content');const preview=await f.archives.extractPreview({path:archive});await assert.rejects(f.archives.extract({token:preview.token,into:'here',choices:{file:'keep-both'}}),/new folder/);assert.equal(await fs.readFile(path.join(f.workspace,'file'),'utf8'),'existing content');
 });
+test('a link with an empty target is disclosed and skipped, not a failed extraction',async t=>{
+ const f=await filesFixture(t),archive=path.join(f.workspace,'empty-link.zip'),stage=path.join(f.workspace,'out');await fs.writeFile(archive,zipFixture([{name:'safe',data:'ok'},{name:'l',mode:0o120777,data:''}]));
+ const info=await inspectZip(archive);assert.deepEqual(info.entries.map(row=>row.name),['safe']);assert.equal(info.skipped.find(row=>row.entry==='l').reason,'empty link target');
+ await extractEntries(archive,info,stage);assert.equal(await fs.readFile(path.join(stage,'safe'),'utf8'),'ok');assert.equal(await fs.lstat(path.join(stage,'l')).then(()=>true,()=>false),false);
+});
+
 test('low disk space preserves an informative preview, refuses publication, and can be reviewed again after freeing space',async t=>{
  let available=1024**3+100;const f=await archiveServices(t,{space:async()=>available}),archive=path.join(f.workspace,'capacity.zip');await fs.writeFile(archive,zipFixture([{name:'file',data:Buffer.alloc(200,0x61)}]));
  const preview=await f.archives.extractPreview({path:archive});assert.equal(preview.canExtract,false);assert.equal(preview.uncompressedBytes,200);assert.deepEqual(preview.topLevelEntries,[{name:'file',kind:'file'}]);assert.equal(preview.freeBytes,available);assert.equal(preview.reserveBytes,1024**3);await assert.rejects(f.archives.extract({token:preview.token,name:'out'}),{code:'no-space'});assert.equal(await fs.stat(path.join(f.workspace,'out')).then(()=>true,()=>false),false);

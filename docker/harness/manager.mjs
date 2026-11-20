@@ -390,9 +390,13 @@ export function createHarnessManager(options = {}) {
       // it was, without an error to explain.
       const cancelled = error?.code === "cancelled" || Boolean(signal?.aborted);
       const message = cancelled ? "cancelled" : String(error?.message ?? error);
-      await state.updateEntry(ctx, section, id, {
-        operation: { kind, state: cancelled ? "cancelled" : "failed", startedAt: null, finishedAt: ctx.now(), error: cancelled ? null : message },
-      });
+      // The failure record itself is best effort: a state volume that just
+      // filled up must not replace the operation's own error.
+      try {
+        await state.updateEntry(ctx, section, id, {
+          operation: { kind, state: cancelled ? "cancelled" : "failed", startedAt: null, finishedAt: ctx.now(), error: cancelled ? null : message },
+        });
+      } catch { /* the row keeps its in-progress record; the next start treats that as interrupted */ }
       outcome = { ok: false, code: cancelled ? "cancelled" : error?.code ?? "failed", error: message };
     } finally {
       try { await held.release(); }

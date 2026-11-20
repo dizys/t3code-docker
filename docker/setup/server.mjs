@@ -1259,7 +1259,9 @@ const refreshConnect = () => {
     .then(async ({ stdout }) => {
       const value = connectState(jsonFrom(stdout));
       if (value) value.preferences = value.linked ? await connectPreferences.read().catch(() => null) : null;
-      if (value?.preferences?.revoked) Object.assign(value, { linked: false, revoked: true, state: "signin" });
+      if (value?.preferences?.revoked) {
+        Object.assign(value, { linked: false, revoked: true, state: value.desired ? "signin" : "off" });
+      }
       if (revision !== connectRevision) return;
       connectCache = { at: Date.now(), value, refreshing: null };
     })
@@ -1635,7 +1637,7 @@ const startSignin = async (agentId) => {
 
   sessions.set(id, session);
   setTimeout(() => {
-    if (sessions.get(id)?.state?.startsWith("awaiting")) {
+    if (!TERMINAL_STATES.has(session.state)) {
       try { session.child.kill(); } catch {}
       sessionStore.settle(session, "failed", "Timed out waiting for the browser step.");
     }

@@ -39,7 +39,8 @@ const root = ${JSON.stringify(root)};
 const args = process.argv.slice(2);
 if (args[0] === 'connect' && args[1] === 'status') {
   try { await fs.access(root + '/fail-status'); process.exit(1); } catch {}
-  console.log(JSON.stringify({ desired: true, authenticated: true, linked: true }));
+  const desired = await fs.access(root + '/disabled-status').then(() => false, () => true);
+  console.log(JSON.stringify({ desired, authenticated: true, linked: true }));
 } else if (args[0] === 'connect' && args[1] === 'link') {
   // The parent waits for this file to appear. Publish only complete JSON.
   await fs.writeFile(root + '/link-args.tmp', JSON.stringify(args));
@@ -60,11 +61,13 @@ else process.exit(1);
     T3_STEP_DOWN_LIB: fileURLToPath(new URL('../docker/lib', import.meta.url)),
     MISE_DATA_DIR: path.join(root, 'mise-data'), MISE_STATE_DIR: path.join(root, 'mise-state'), MISE_CONFIG_DIR: path.join(root, 'mise-config') };
   const child = spawn(process.execPath, [fileURLToPath(new URL('../docker/setup/server.mjs', import.meta.url))], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const closed = once(child, 'close');
   let logs = ''; child.stdout.on('data', x => { logs += x; }); child.stderr.on('data', x => { logs += x; });
   t.after(async () => {
-    if (child.exitCode === null) { const ended = once(child, 'exit'); child.kill(); await ended; }
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await closed;
     native.closeAllConnections(); await new Promise(resolve => native.close(resolve));
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
   const request = (route, body, headers = { 'x-t3-setup-key': 'fixture' }) => fetch(`http://127.0.0.1:${port}${route}`, {
     method: body === undefined ? 'GET' : 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
@@ -102,10 +105,23 @@ else process.exit(1);
 
   nativeState.linkRevoked = true;
   assert.equal((await request('/connect/preferences', { publishAgentActivity: false })).status, 409);
-  const revoked = (await (await request('/status')).json()).connect;
+  // Status can serve the cache while a fresh CLI status read is in flight.
+  const readRevoked = async (desired) => {
+    for (let i = 0; i < 30; i++) {
+      const { connect } = await (await request('/status')).json();
+      if (connect?.revoked && connect.desired === desired) return connect;
+      await pause(25);
+    }
+    assert.fail('Setup did not report the refreshed Connect state');
+  };
+  const revoked = await readRevoked(true);
   assert.equal(revoked.state, 'signin', 'live revocation wins over an older CLI link');
-  assert.equal(revoked.revoked, true);
   assert.equal(revoked.linked, false);
+  await fs.writeFile(path.join(root, 'disabled-status'), 'yes');
+  assert.equal((await request('/connect/preferences', { publishAgentActivity: false })).status, 409);
+  const disabled = await readRevoked(false);
+  assert.equal(disabled.state, 'off', 'a live revocation respects a disabled Connect setting');
+  assert.equal(disabled.linked, false);
 
   for (const mode of ['publish_only', 'managed']) {
     const start = await request('/auth/signin', { agent: 'connect', mode });

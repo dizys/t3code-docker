@@ -140,7 +140,7 @@ for _ in $(seq 1 40); do
   # a blip, not a verdict, so keep polling instead of dying under `set -e`.
   line="$(api GET /ports 2>/dev/null | jq -r --argjson p "$port" '
     (.tunnels // []) | map(select(.port == $p)) | first
-    | if . == null then "|" else "\(.state)|\(.url // "")|\(.error // "")" end' || true)"
+    | if . == null then "|" else "\(.state)|\(.url // "")|\(.error // "")" end' 2>/dev/null)" || continue
   case "$line" in
     open\|*)   url="$(printf '%s' "$line" | cut -d'|' -f2)"; break ;;
     failed\|*) printf '\n'; echo "t3-expose: $(printf '%s' "$line" | cut -d'|' -f3)" >&2; exit 1 ;;

@@ -19,21 +19,29 @@ no() { printf '  FAIL %s\n' "$1"; fail=$((fail + 1)); }
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# A launcher that always fails, with the migration chatter a real CLI adds.
-printf '#!/usr/bin/env bash\necho "migration chatter" >&2\nexit 1\n' > "$WORK/failing-launcher"
+# A failed launcher can still print a complete JSON response before it exits.
+cat > "$WORK/failing-launcher" <<'SH'
+#!/usr/bin/env bash
+echo "migration chatter" >&2
+if [ -n "$FIXTURE_PAIR_RESPONSE" ]; then printf '%s\n' "$FIXTURE_PAIR_RESPONSE"; fi
+exit 1
+SH
 chmod +x "$WORK/failing-launcher"
 
-output="$(set +e; T3_INFRA_LAUNCHER="$WORK/failing-launcher" \
-  T3_INFRA_NODE="$(command -v node)" T3_PUBLIC_URL_RESOLVER=/nonexistent.mjs \
-  bash "$T3_PAIR" --no-qr 2>&1; echo "exit=$?")"
-status="${output##*exit=}"
+for response in '' '{"pairUrl":"https://example.test/pair/fixture"}'; do
+  status=0
+  # The caller supplies the URL, so the resolver is unnecessary here.
+  output="$(FIXTURE_PAIR_RESPONSE="$response" T3_INFRA_LAUNCHER="$WORK/failing-launcher" \
+    T3_INFRA_NODE=/bin/false \
+    bash "$T3_PAIR" --base-url https://example.test --no-qr 2>&1)" || status=$?
 
-if [ "$status" = 1 ]; then ok "a failed mint exits 1"; else no "a failed mint exits 1 (got $status)"; fi
-if printf '%s' "$output" | grep -q 'failed to mint a pairing token'; then
-  ok "the failure says so"
-else
-  no "the failure says so"
-fi
+  if [ "$status" = 1 ]; then ok "a failed mint exits 1"; else no "a failed mint exits 1 (got $status)"; fi
+  if [[ "$output" == *"failed to mint a pairing token"* && "$output" != *"Pairing URL:"* ]]; then
+    ok "a failed mint reports the error without printing a link"
+  else
+    no "a failed mint reports the error without printing a link"
+  fi
+done
 
 if [ "$fail" -eq 0 ]; then printf 'all %s checks passed\n' "$pass"; exit 0; fi
 printf '%s of %s checks failed\n' "$fail" "$((pass + fail))"

@@ -10,19 +10,21 @@ import * as state from "./state.mjs";
 import { policyPath, readPolicy } from "./storage/policy.mjs";
 import { inside, processSnapshot } from "./storage/system.mjs";
 import { serviceReferences, serviceUsesTool } from "./service-references.mjs";
+import { compareVersions } from "./version.mjs";
 
 const exact = /^\d+\.[0-9A-Za-z._+-]{1,62}$/;
 const sections = ["harnesses", "toolchains", "packages"];
 const recordsOf = (saved) => sections.flatMap((section) => Object.entries(saved[section] || {}).map(([id, record]) => ({ section, id, record })));
 const versionsOf = (record) => [...new Set((record.managedVersions || []).filter((v) => typeof v === "string" && exact.test(v)))];
 
-/** The version automatic retention keeps as the rollback fallback: the recorded
- * previous version while that one is actually installed, else the newest other
- * version. A record interrupted mid-upgrade can name a version that is gone;
- * trusting it would leave no installed version protected. */
-const previousVersionOf = (record, versions) => versions.includes(record.previousVersion)
-  ? record.previousVersion
-  : versions.filter((version) => version !== record.version).at(-1);
+/** Prefer the previous selection while it is installed, then the newest other
+ * managed install. mise's prunable list omits installs pinned by projects. */
+function previousVersionOf(record, versions, installed) {
+  const available = versions.filter(({ version, tool }) => version !== record.version &&
+    installed[tool]?.some((item) => item.installed === true && item.version === version));
+  return available.find(({ version }) => version === record.previousVersion)?.version
+    ?? available.sort((a, b) => compareVersions(b.version, a.version))[0]?.version;
+}
 
 function providerPaths(value, result = []) {
   if (!value || typeof value !== "object") return result;
@@ -79,25 +81,32 @@ export async function planRetention(ctx, { saved, only, includePrevious = false 
   if (typeof includePrevious !== "boolean") throw new TypeError("includePrevious must be a boolean");
   saved ||= await state.readState(ctx);
   const preferences = await readPolicy(policyPath(ctx.env, ctx.home), ctx.fs);
-  const records = only ? [only] : recordsOf(saved);
-  const needsReferences = records.some(({ record }) => {
-    const versions = versionsOf(record);
-    const previous = previousVersionOf(record, versions);
-    return versions.some((version) => version !== record.version && (includePrevious || version !== previous));
+  const records = (only ? [only] : recordsOf(saved)).flatMap(({ section, id, record }) => {
+    const entry = section === "packages" ? { name: id, miseTool: id } : section === "harnesses" ? getHarness(id) : getManagedTool(id);
+    if (!entry) return [];
+    const versions = versionsOf(record).map((version) => {
+      const installation = section === "harnesses" ? harnessInstallationForVersion(entry, version) : entry;
+      return { version, tool: installation.miseTool };
+    });
+    return [{ section, id, record, name: entry.name || id, versions }];
   });
   let refs = null, warning = preferences.error;
-  if (needsReferences && !warning) {
-    try { refs = await references(ctx); } catch (error) { warning = error.message; }
+  const hasOlderVersions = records.some(({ record, versions }) => versions.some(({ version }) => version !== record.version));
+  if (hasOlderVersions && !warning) {
+    try {
+      if (!includePrevious) {
+        const { tools } = await mise.listTools(ctx);
+        if (!tools) throw new Error("Installed versions could not be checked. Older versions were kept.");
+        for (const row of records) row.previous = previousVersionOf(row.record, row.versions, tools);
+      }
+      const needsReferences = records.some(({ record, versions, previous }) =>
+        versions.some(({ version }) => version !== record.version && version !== previous));
+      if (needsReferences) refs = await references(ctx);
+    } catch (error) { warning = error.message; }
   }
   const items = [];
-  for (const { section, id, record } of records) {
-    const versions = versionsOf(record);
-    const previous = previousVersionOf(record, versions);
-    for (const version of versions) {
-      const entry = section === "packages" ? { name: id, miseTool: id } : section === "harnesses" ? getHarness(id) : getManagedTool(id);
-      if (!entry) continue;
-      const installation = section === "harnesses" ? harnessInstallationForVersion(entry, version) : entry;
-      const tool = installation.miseTool;
+  for (const { section, id, record, name, versions, previous } of records) {
+    for (const { version, tool } of versions) {
       const candidate = refs?.prunable?.[tool]?.find((item) => item.version === version && item.installed);
       const target = candidate?.install_path || null;
       let reason = version === record.version ? "Current version" : !includePrevious && version === previous ? "Previous version" : null;
@@ -110,7 +119,7 @@ export async function planRetention(ctx, { saved, only, includePrevious = false 
         return path.isAbsolute(value) && inside(target, path.resolve(value));
       }))) reason = "Used by a running process";
       if (!reason && !(await ordinaryInstall(ctx, target))) reason = "Install location could not be verified";
-      items.push({ id, section, name: entry.name || id, tool, version, path: target, eligible: !reason, reason });
+      items.push({ id, section, name, tool, version, path: target, eligible: !reason, reason });
     }
   }
   // Bind consent to the cleanup mode as well as the exact removable set.

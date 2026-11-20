@@ -170,15 +170,13 @@ const launch = async (t) => {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let logs = "";
+  const closed = once(child, "close");
   child.stdout.on("data", (x) => { logs += x; });
   child.stderr.on("data", (x) => { logs += x; });
   t.after(async () => {
-    if (child.exitCode === null) {
-      const exit = once(child, "exit");
-      child.kill();
-      await exit;
-    }
-    await fs.rm(root, { recursive: true, force: true });
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await closed;
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
   const base = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 200; i++) {

@@ -1241,6 +1241,8 @@ test("a state volume that cannot record the failure still answers with the opera
   assert.equal(failed.ok, false);
   assert.equal(failed.code, "failed");
   assert.equal(failed.error, "registry unavailable");
+  await assert.rejects(fs.stat(manager.paths.lock), { code: "ENOENT" });
+  assert.equal((await fs.readdir(STATE_DIR)).some(name => name.startsWith("harness-state.json.tmp.")), false);
 });
 
 test("status never reports runnable while a previous install is still in progress", async () => {

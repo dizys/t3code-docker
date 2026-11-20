@@ -1259,7 +1259,9 @@ const refreshConnect = () => {
     .then(async ({ stdout }) => {
       const value = connectState(jsonFrom(stdout));
       if (value) value.preferences = value.linked ? await connectPreferences.read().catch(() => null) : null;
-      if (value?.preferences?.revoked) Object.assign(value, { linked: false, revoked: true, state: "signin" });
+      if (value?.preferences?.revoked) {
+        Object.assign(value, { linked: false, revoked: true, state: value.desired ? "signin" : "off" });
+      }
       if (revision !== connectRevision) return;
       connectCache = { at: Date.now(), value, refreshing: null };
     })

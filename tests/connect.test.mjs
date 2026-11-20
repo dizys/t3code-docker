@@ -67,6 +67,7 @@ test("the saved state reads as off, signed out, waiting on a start, or on", () =
   assert.equal(on.relayHost, "relay.t3.codes");
   assert.equal(on.publishAgentActivity, true);
   assert.equal(connectState({ ...base, authenticated: true }).state, "off", "signed in but not asked for is off");
+  assert.equal(connectState({ ...base, linked: true }).state, "on", "an existing live link is shown until it is removed");
   assert.equal(connectState({ ...base, revoked: true, linked: true }).state, "off", "revoked but not asked for stays off");
 });
 

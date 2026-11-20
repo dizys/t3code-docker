@@ -73,11 +73,7 @@ args=(auth pairing create --base-url "$base_url" --ttl "$ttl" --json)
 [ -n "$label" ] && args+=(--label "$label")
 
 # `t3 auth` logs migration chatter on stderr; keep stdout clean for the JSON.
-# `|| true` lets the failed-mint handling below run: under `set -o pipefail`
-# the substitution's exit status would otherwise abort the script first.
-response="$("$T3_INFRA_LAUNCHER" "${args[@]}" 2>/dev/null | sed -n '/^{/,$p' || true)"
-
-if [ -z "$response" ]; then
+if ! response="$("$T3_INFRA_LAUNCHER" "${args[@]}" 2>/dev/null | sed -n '/^{/,$p')" || [ -z "$response" ]; then
   echo "t3-pair: failed to mint a pairing token" >&2
   echo "t3-pair: re-run with: t3 auth pairing create --base-url '$base_url' --json" >&2
   exit 1

@@ -4,7 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-const [output, tailscale = "1.104.5", cloudflared = "2026.5.2"] = process.argv.slice(2);
+const [output, tailscale = "1.104.5", cloudflared = "2026.11.1"] = process.argv.slice(2);
 const arch = execFileSync("/usr/bin/dpkg", ["--print-architecture"], { encoding: "utf8" }).trim();
 if (!["amd64", "arm64"].includes(arch)) throw new Error("Unsupported optional service architecture");
 const entries = [];

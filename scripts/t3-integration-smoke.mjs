@@ -161,10 +161,10 @@ exec "$T3_INFRA_NODE" "$@"
   const { flowId } = await api.call("provider.auth.start", authInput);
   const challenge = await waitForCode(flowId);
   assert.equal(new URL(challenge.authorizationUrl).searchParams.get("redirect_uri"), "https://antigravity.google/oauth-callback");
-  assert.deepEqual(challenge.interaction.fields, [{ name: "authorizationCode", label: "Google authorization code", secret: true }]);
-  const respond = (authorizationCode) => api.call("provider.auth.respond", { ...authInput, flowId,
-    interactionId: challenge.interaction.id, response: { type: "credentials", values: { authorizationCode } } });
-  await assert.rejects(respond("wrong\nline"), /authorization code shown by Google/);
+  assert.deepEqual(challenge.interaction.fields, [{ name: "code", label: "Code from the Antigravity page", secret: false }]);
+  const respond = (code) => api.call("provider.auth.respond", { ...authInput, flowId,
+    interactionId: challenge.interaction.id, response: { type: "credentials", values: { code } } });
+  await assert.rejects(respond("wrong\nline"), /Paste the code from the Antigravity page/);
   await respond("fixture-authorization-code");
   const signedIn = await until(async () => {
     const state = await api.first("provider.auth.subscribe", authInput);
@@ -175,8 +175,9 @@ exec "$T3_INFRA_NODE" "$@"
   const [browserCommand, fd, serializationMode] = (await until(() => fs.readFile(browserReceipt, "utf8"))).trimEnd().split("\n");
   assert.ok(browserCommand.startsWith(`'${process.execPath}' '-e' `), "Antigravity uses the image Node even when PATH prefers a broken shim");
   assert.deepEqual([fd, serializationMode], ["unset", "unset"], "The Antigravity subprocess receives no launcher IPC metadata");
-  // The new capability contract belongs to the patched server, not upstream.
-  assert.equal((await gatewayT3.read()).customModelCapabilityOverrides, true, "the selected patched runtime advertises capability overrides");
+  // Upstream 0.1.11 dropped its capability-override advertisement; the patched
+  // runtime must not resurrect it, and gateway limits remain our own contract.
+  assert.equal((await gatewayT3.read()).customModelCapabilityOverrides, false, "upstream removed the capability-override contract");
   assert.equal((await gatewayT3.read()).gatewayModelLimits, true, "the upgraded runtime advertises gateway context-limit support");
   const richCustomModels = [{ slug: "smoke-model", capabilities: { optionDescriptors: [{ id: "reasoningEffort", label: "Reasoning", type: "select", options: [{ id: "ultra", label: "ultra" }] }] } }, { slug: "smoke-unknown", capabilities: { optionDescriptors: [] } }];
   await gatewayT3.upsert(gatewayInstance, { driver: "codex", displayName: "Codex · Smoke", enabled: false, config: { customModels: richCustomModels } });

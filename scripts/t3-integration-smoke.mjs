@@ -176,9 +176,8 @@ exec "$T3_INFRA_NODE" "$@"
   const [browserCommand, fd, serializationMode] = (await until(() => fs.readFile(browserReceipt, "utf8"))).trimEnd().split("\n");
   assert.ok(browserCommand.startsWith(`'${process.execPath}' '-e' `), "Antigravity uses the image Node even when PATH prefers a broken shim");
   assert.deepEqual([fd, serializationMode], ["unset", "unset"], "The Antigravity subprocess receives no launcher IPC metadata");
-  // Upstream 0.1.11 dropped its capability-override advertisement; the patched
-  // runtime must not resurrect it, and gateway limits remain our own contract.
-  assert.equal((await gatewayT3.read()).customModelCapabilityOverrides, false, "upstream removed the capability-override contract");
+  // The new capability contract belongs to the patched server, not upstream.
+  assert.equal((await gatewayT3.read()).customModelCapabilityOverrides, true, "the selected patched runtime advertises capability overrides");
   assert.equal((await gatewayT3.read()).gatewayModelLimits, true, "the upgraded runtime advertises gateway context-limit support");
   const richCustomModels = [{ slug: "smoke-model", capabilities: { optionDescriptors: [{ id: "reasoningEffort", label: "Reasoning", type: "select", options: [{ id: "ultra", label: "ultra" }] }] } }, { slug: "smoke-unknown", capabilities: { optionDescriptors: [] } }];
   await gatewayT3.upsert(gatewayInstance, { driver: "codex", displayName: "Codex · Smoke", enabled: false, config: { customModels: richCustomModels } });

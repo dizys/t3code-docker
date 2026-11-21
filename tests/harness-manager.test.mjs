@@ -1222,6 +1222,29 @@ test("a failed install leaves the harness not runnable, and a retry recovers", a
   assert.equal(retried.harness.runnable, true);
 });
 
+test("a state volume that cannot record the failure still answers with the operation's own error", async () => {
+  const fs = new MemoryFs();
+  const world = createWorld(fs);
+  const manager = managerFor(world);
+  const stateFile = path.join(STATE_DIR, "harness-state.json");
+  const rename = fs.rename.bind(fs);
+  let writes = 0;
+  // The in-progress record lands; the failure record does not, as with a full
+  // or read-only state volume at the worst moment.
+  fs.rename = async (from, to) => {
+    if (to === stateFile && ++writes === 2) throw Object.assign(new Error("EACCES: read-only"), { code: "EACCES" });
+    return rename(from, to);
+  };
+
+  world.failUse = "registry unavailable";
+  const failed = await manager.install("grok");
+  assert.equal(failed.ok, false);
+  assert.equal(failed.code, "failed");
+  assert.equal(failed.error, "registry unavailable");
+  await assert.rejects(fs.stat(manager.paths.lock), { code: "ENOENT" });
+  assert.equal((await fs.readdir(STATE_DIR)).some(name => name.startsWith("harness-state.json.tmp.")), false);
+});
+
 test("status never reports runnable while a previous install is still in progress", async () => {
   const fs = new MemoryFs();
   const world = createWorld(fs);

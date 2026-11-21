@@ -15,18 +15,19 @@ async function fixture(t) {
   const versions = ["1.20.0", "1.21.0", "1.22.0", "1.23.0", "1.24.0", "1.25.0"];
   const installs = versions.map((version) => ({ version, installed: true, install_path: path.join(dataDir, "installs/go", version) }));
   for (const item of installs) await fs.mkdir(path.join(item.install_path, "bin"), { recursive: true });
-  let prunable = installs, processes = { complete: true, processes: [] }, fail = false;
+  let installed = installs, prunable = installs, processes = { complete: true, processes: [] }, fail = false;
   const removed = [], calls = [];
   const env = { HOME: home, T3CODE_HOME: path.join(home, ".t3"), MISE_DATA_DIR: dataDir, MISE_STATE_DIR: stateDir };
   const ctx = { env, home, dataDir, stateDir, statePath: statePath(stateDir), fs: createFs(), now: Date.now,
     miseBin: "mise", timeouts: { mise: 120000, install: 120000 }, retentionProcesses: async () => processes,
     run: async (args) => {
       calls.push(args);
-      if (args.includes("ls")) return { code: fail ? 1 : 0, stdout: JSON.stringify({ go: prunable }) };
+      if (args.includes("ls")) return { code: fail ? 1 : 0, stdout: JSON.stringify({ go: args.includes("--prunable") ? prunable : installed }) };
       if (args.includes("uninstall")) {
         if (fail) return { code: 1, stderr: "uninstall failed" };
         const version = args.at(-1).split("@").at(-1); removed.push(version);
         await fs.rm(path.join(dataDir, "installs/go", version), { recursive: true });
+        installed = installed.filter((item) => item.version !== version);
         prunable = prunable.filter((item) => item.version !== version);
         return { code: 0 };
       }
@@ -36,12 +37,13 @@ async function fixture(t) {
   await writeState(ctx, saved);
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   return { ctx, env, home, installs, removed, calls, settings: path.join(home, ".t3/userdata/settings.json"),
-    setProcesses: (value) => { processes = value; }, setPrunable: (value) => { prunable = value; }, setFail: (value) => { fail = value; } };
+    setProcesses: (value) => { processes = value; }, setInstalled: (value) => { installed = value; },
+    setPrunable: (value) => { prunable = value; }, setFail: (value) => { fail = value; } };
 }
 
 test("retention protects current, previous, project pins, provider binaries, and running tools", async (t) => {
   const f = await fixture(t);
-  f.setPrunable(f.installs.filter((item) => item.version !== "1.20.0"));
+  f.setPrunable(f.installs.filter((item) => !["1.20.0", "1.24.0"].includes(item.version)));
   await writeStorageJson(f.settings, { providerInstances: { custom: { config: { binaryPath: path.join(f.installs[1].install_path, "bin/go") } } } });
   f.setProcesses({ complete: true, processes: [{ args: ["node", path.join(f.installs[2].install_path, "bin/tool.js")], cwd: "/tmp" }] });
   const plan = await planRetention(f.ctx);
@@ -55,6 +57,25 @@ test("retention protects current, previous, project pins, provider binaries, and
   const result = await applyRetention(f.ctx, plan);
   assert.deepEqual(f.removed, ["1.23.0"]); assert.equal(result.failed.length, 0);
   assert.equal((await readState(f.ctx)).toolchains.go.managedVersions.includes("1.23.0"), false);
+});
+
+test("a previousVersion naming an uninstalled version keeps the newest installed fallback", async (t) => {
+  const f = await fixture(t);
+  const saved = emptyState();
+  saved.toolchains.go = {
+    version: "1.25.0", previousVersion: "1.22.0", managedVersions: ["1.24.0", "1.25.0", "1.23.0", "1.22.0"],
+  };
+  await writeState(f.ctx, saved);
+  const missing = f.installs.find((item) => item.version === "1.22.0");
+  await fs.rm(missing.install_path, { recursive: true });
+  f.setInstalled(f.installs.map((item) => item === missing ? { ...item, installed: false } : item));
+  f.setPrunable(f.installs.filter((item) => item !== missing));
+  const plan = await planRetention(f.ctx);
+  const byVersion = Object.fromEntries(plan.items.map((item) => [item.version, item]));
+  assert.equal(byVersion["1.24.0"].reason, "Previous version");
+  assert.equal(byVersion["1.25.0"].reason, "Current version");
+  assert.equal(byVersion["1.22.0"].eligible, false);
+  assert.deepEqual((await applyRetention(f.ctx, plan)).removed.map((item) => item.version), ["1.23.0"]);
 });
 
 test("provider PATH, process cwd, and flag paths veto removal", async (t) => {

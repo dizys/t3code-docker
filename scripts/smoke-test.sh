@@ -1341,9 +1341,16 @@ check "native cache cleanup preserves shared dependencies and stays inside revie
 # raises it slips through until someone's session fails.
 opencode_floor_matches_t3() {
   local declared catalogue installed
-  declared="$(docker exec "$NAME" sh -c \
-    "grep -a -o 'MINIMUM_OPENCODE_VERSION *= *\"[0-9][0-9.]*\"' $T3_BUNDLE | head -1" 2>/dev/null \
-    | grep -o '[0-9][0-9.]*' | head -1)"
+  # 0.1.11 dropped the compiled MINIMUM_OPENCODE_VERSION constant for a
+  # driver-compat table; the broken-range boundary is the floor it enforces.
+  declared="$(docker exec -i "$NAME" node --input-type=module 2>/dev/null <<NODE
+import { readFileSync } from "node:fs";
+const bundle = readFileSync("$T3_BUNDLE", "latin1");
+const entry = bundle.split('"driver": "opencode",').find(part => part.includes('"t3CodeRange": ">=0.0.46"'));
+const broken = /"range": "<([0-9.]+)",\s*"status": "broken"/.exec(entry ?? "");
+process.stdout.write(broken?.[1] ?? "");
+NODE
+)"
   catalogue="$(docker exec "$NAME" sh -c \
     "grep -o 'MINIMUM_OPENCODE_VERSION = \"[0-9.]*\"' /opt/t3-harness/catalogue.mjs" \
     | grep -o '[0-9][0-9.]*')"
@@ -1780,11 +1787,13 @@ check "T3 Code is pointed at the on-demand adapter" \
 cloudflared_matches_t3() {
   local want have
   # The binary distribution has no greppable server bundle, so the Dockerfile
-  # pin is the compatibility assertion.
+  # pin is the compatibility assertion. T3 Code refuses relay clients older
+  # than 2026.10.3 and falls back to a log-spamming install loop.
   want="$(grep -m1 '^ARG CLOUDFLARED_VERSION=' Dockerfile | cut -d= -f2)"
   have="$(docker exec "$NAME" cloudflared --version 2>/dev/null | awk '{print $3}')"
   CF_WANT="$want"; CF_HAVE="$have"
-  [ "$want" = "$have" ]
+  [ "$want" = "$have" ] && \
+    [ "$(printf '%s\n2026.10.3\n' "$want" | sort -V | head -1)" = "2026.10.3" ]
 }
 if cloudflared_matches_t3; then
   ok "cloudflared ${CF_HAVE:-?} is the release T3 Code asks for"

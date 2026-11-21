@@ -157,14 +157,15 @@ exec "$T3_INFRA_NODE" "$@"
   await waitForCode(first.flowId);
   const cancelled = await api.call("provider.auth.cancel", { ...authInput, flowId: first.flowId });
   assert.equal(cancelled.phase, "cancelled");
-  assert.equal(cancelled.interaction, null);
+  // Upstream's state omits the optional interaction key once none is offered.
+  assert.equal(cancelled.interaction ?? null, null);
   const { flowId } = await api.call("provider.auth.start", authInput);
   const challenge = await waitForCode(flowId);
   assert.equal(new URL(challenge.authorizationUrl).searchParams.get("redirect_uri"), "https://antigravity.google/oauth-callback");
-  assert.deepEqual(challenge.interaction.fields, [{ name: "authorizationCode", label: "Google authorization code", secret: true }]);
-  const respond = (authorizationCode) => api.call("provider.auth.respond", { ...authInput, flowId,
-    interactionId: challenge.interaction.id, response: { type: "credentials", values: { authorizationCode } } });
-  await assert.rejects(respond("wrong\nline"), /authorization code shown by Google/);
+  assert.deepEqual(challenge.interaction.fields, [{ name: "code", label: "Code from the Antigravity page", secret: false }]);
+  const respond = (code) => api.call("provider.auth.respond", { ...authInput, flowId,
+    interactionId: challenge.interaction.id, response: { type: "credentials", values: { code } } });
+  await assert.rejects(respond("wrong\nline"), /Paste the code from the Antigravity page/);
   await respond("fixture-authorization-code");
   const signedIn = await until(async () => {
     const state = await api.first("provider.auth.subscribe", authInput);

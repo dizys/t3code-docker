@@ -105,7 +105,7 @@ RUN set -eux; \
 
 # Optional payload metadata is image-owned. No server or connector payload is
 # installed here. Native T3 tunnels use the compatible lazy cloudflared shim.
-ARG CLOUDFLARED_VERSION=2026.5.2
+ARG CLOUDFLARED_VERSION=2026.11.1
 ARG TAILSCALE_VERSION=1.104.5
 COPY scripts/service-catalogue.mjs /tmp/service-catalogue.mjs
 RUN set -eux; \
@@ -207,7 +207,7 @@ COPY --from=t3-build-node /usr/local/bin/node /usr/local/bin/node
 COPY docker/runtime/ /src/docker/runtime/
 COPY scripts/build-t3-runtime.mjs /src/scripts/build-t3-runtime.mjs
 # The one bundled version pin; scripts/bump-versions.sh refreshes it.
-ARG T3_VERSION=0.1.10
+ARG T3_VERSION=0.1.11
 ARG TARGETARCH
 ENV npm_config_store_dir=/var/cache/pnpm
 RUN --mount=type=cache,target=/var/cache/pnpm set -eux; \

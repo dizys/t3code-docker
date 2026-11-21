@@ -13,8 +13,8 @@ const settingsFixture = readFileSync(new URL('./fixtures/claude-query-settings-n
 const adapter = (settings) => `import * as DocumentText from "../../provider/DocumentText.ts";\n${settings}\n            canApplyClaudeSelectionLive(existing.selection, compiledSelection) &&\n            nextCondition`;
 const claudeSource = {
   [claudeFiles[0]]: adapter(settingsFixture),
-  [claudeFiles[1]]: '  customModelCapabilityOverrides: Schema.optionalKey(Schema.Boolean),',
-  [claudeFiles[2]]: '          customModelCapabilityOverrides: true,',
+  [claudeFiles[1]]: '  threadFind: Schema.optionalKey(Schema.Boolean),',
+  [claudeFiles[2]]: '          threadFind: true,',
 };
 const helper = readFileSync(new URL('../docker/runtime/patches/gateway-context.ts', import.meta.url), 'utf8');
 const apply = new Function(stripTypeScriptTypes(helper.replaceAll('export ', '')) + '\nreturn applyClaudeGatewayContext;')();

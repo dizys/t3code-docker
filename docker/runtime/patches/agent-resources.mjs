@@ -13,7 +13,9 @@ export function patchAgentResources(source) {
     next[file] = next[file].replace(before, after);
   };
   change(files[0], 'import * as NodeFSP from "node:fs/promises";', 'import * as NodeFSP from "node:fs/promises";\nimport { linkAntigravityUserResources } from "./antigravityUserResources.ts";');
-  change(files[0], '  yield* linkAntigravityUserSkills({ profileDirectory: geminiHome, userHome, platform });', `  yield* linkAntigravityUserSkills({ profileDirectory: geminiHome, userHome, platform });
+// Reviewed against v0.1.11 (59651c1761f6c63e9b6056839067066968e6a406) and
+// 0.1.12-nightly.20261121.5038: linkAntigravityUserSkills became linkAntigravityUserConfig.
+  change(files[0], '  yield* linkAntigravityUserConfig({ profileDirectory: geminiHome, userHome, platform });', `  yield* linkAntigravityUserConfig({ profileDirectory: geminiHome, userHome, platform });
   yield* Effect.tryPromise(() => linkAntigravityUserResources(geminiHome, userHome)).pipe(
     Effect.mapError((error) => authSupportError(error instanceof Error ? error.message : "Antigravity global instructions and MCP settings could not be linked into its T3 profile.")),
   );`);

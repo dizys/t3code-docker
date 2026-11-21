@@ -157,7 +157,8 @@ exec "$T3_INFRA_NODE" "$@"
   await waitForCode(first.flowId);
   const cancelled = await api.call("provider.auth.cancel", { ...authInput, flowId: first.flowId });
   assert.equal(cancelled.phase, "cancelled");
-  assert.equal(cancelled.interaction, null);
+  // Upstream's state omits the optional interaction key once none is offered.
+  assert.equal(cancelled.interaction ?? null, null);
   const { flowId } = await api.call("provider.auth.start", authInput);
   const challenge = await waitForCode(flowId);
   assert.equal(new URL(challenge.authorizationUrl).searchParams.get("redirect_uri"), "https://antigravity.google/oauth-callback");

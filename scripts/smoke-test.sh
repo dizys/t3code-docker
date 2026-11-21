@@ -1341,9 +1341,16 @@ check "native cache cleanup preserves shared dependencies and stays inside revie
 # raises it slips through until someone's session fails.
 opencode_floor_matches_t3() {
   local declared catalogue installed
-  declared="$(docker exec "$NAME" sh -c \
-    "grep -a -o 'MINIMUM_OPENCODE_VERSION *= *\"[0-9][0-9.]*\"' $T3_BUNDLE | head -1" 2>/dev/null \
-    | grep -o '[0-9][0-9.]*' | head -1)"
+  # 0.1.11 dropped the compiled MINIMUM_OPENCODE_VERSION constant for a
+  # driver-compat table; the broken-range boundary is the floor it enforces.
+  declared="$(docker exec -i "$NAME" node --input-type=module 2>/dev/null <<NODE
+import { readFileSync } from "node:fs";
+const bundle = readFileSync("$T3_BUNDLE", "latin1");
+const entry = bundle.split('"driver": "opencode",').find(part => part.includes('"t3CodeRange": ">=0.0.46"'));
+const broken = /"range": "<([0-9.]+)",\s*"status": "broken"/.exec(entry ?? "");
+process.stdout.write(broken?.[1] ?? "");
+NODE
+)"
   catalogue="$(docker exec "$NAME" sh -c \
     "grep -o 'MINIMUM_OPENCODE_VERSION = \"[0-9.]*\"' /opt/t3-harness/catalogue.mjs" \
     | grep -o '[0-9][0-9.]*')"

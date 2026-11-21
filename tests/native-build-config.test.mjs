@@ -99,7 +99,10 @@ test('integration smoke checks capability negotiation on the correct side of the
   assert.match(upstream, /gatewayRead\.customModelCapabilityOverrides, false/);
   assert.match(upstream, /const customModels = \["smoke-model"\]/);
   assert.doesNotMatch(upstream, /customModelCapabilityOverrides, true/);
-  assert.match(patched, /gatewayT3\.read\(\)\)\.customModelCapabilityOverrides, true/);
+  // Upstream 0.1.11 dropped the capability-override advertisement; gateway
+  // limits remain the contract the patched runtime adds on top of upstream.
+  assert.match(patched, /gatewayT3\.read\(\)\)\.customModelCapabilityOverrides, false/);
+  assert.match(patched, /gatewayT3\.read\(\)\)\.gatewayModelLimits, true/);
   assert.match(patched, /customModels: richCustomModels/);
   assert.match(patched, /config\.customModels, richCustomModels/);
 });

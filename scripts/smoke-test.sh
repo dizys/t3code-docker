@@ -1517,12 +1517,21 @@ signin_id() {
 # scraping the visible text yields a truncated URL missing the PKCE challenge
 # and state, which would send you to a sign-in page that cannot complete.
 claude_url_complete() {
-  local id
+  local id state
   id="$(signin_id claude)"
   [ -n "$id" ] || return 1
-  sleep 14
-  session_state "$id" | grep -q 'code_challenge' &&
-  session_state "$id" | grep -q '"state":"awaiting-code"'
+  # Rendering the login URL can take well past a fixed wait on a cold or busy
+  # runner, and the session completes shortly after; poll for the captured
+  # URL instead of asserting once and racing it.
+  for _ in $(seq 1 45); do
+    state="$(session_state "$id")"
+    if printf %s "$state" | grep -q 'code_challenge' &&
+       printf %s "$state" | grep -q '"state":"awaiting-code"'; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
 }
 check "Claude sign-in captures a complete OAuth URL" claude_url_complete
 

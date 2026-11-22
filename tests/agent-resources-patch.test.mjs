@@ -105,7 +105,7 @@ test('Cursor keeps its primary project, source layers and tool protocol while ad
 
 test('the resource bridges are registered and reject source drift and repeated application', () => {
   const source = {
-    [files[0]]: 'import * as NodeFSP from "node:fs/promises";\n  yield* linkAntigravityUserSkills({ profileDirectory: geminiHome, userHome, platform });',
+    [files[0]]: 'import * as NodeFSP from "node:fs/promises";\n  yield* linkAntigravityUserConfig({ profileDirectory: geminiHome, userHome, platform });',
     [files[1]]: 'import * as CursorAgentSdk from "./CursorAgentSdk.ts";\n.open({ ...input, options: { ...input.options, apiKey } })',
   };
   const next = patchAgentResources(source);

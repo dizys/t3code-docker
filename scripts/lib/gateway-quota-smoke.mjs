@@ -30,6 +30,9 @@ export async function verifyGatewayQuota({ api, gatewayT3, until }) {
         assert.equal(url.searchParams.get("name"), "muse.json");
         return send({ dca_token: "dca:fixture-only", api_key: "LLM|private-fixture" });
       }
+      // Nightly hubs ask which models an account routes to; empty keeps the
+      // older-hub behavior the smoke asserts (every model of its driver).
+      if (url.pathname.endsWith("/auth-files/models")) return send({ models: [] });
       if (url.pathname.endsWith("/quota/fetch")) {
         assert.equal(body.auth_index, "go"); assert.equal(body.plugin_id, "opencode-plugin");
         return failing ? send({ error: "private-fixture-error" }, 501) : send(grouped);

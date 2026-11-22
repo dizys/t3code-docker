@@ -71,8 +71,8 @@ const source = {
         } as ClaudeSdkSettings);
             canApplyClaudeSelectionLive(existing.selection, compiledSelection) &&
             nextCondition`,
-  [files[1]]: '  customModelCapabilityOverrides: Schema.optionalKey(Schema.Boolean),',
-  [files[2]]: '          customModelCapabilityOverrides: true,',
+  [files[1]]: '  threadFind: Schema.optionalKey(Schema.Boolean),',
+  [files[2]]: '          threadFind: true,',
 };
 test('the runtime contract includes the helper, initial settings, and switch guard and rejects upstream drift', () => {
   const result = patchGatewayContext(source);

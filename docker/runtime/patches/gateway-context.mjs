@@ -73,10 +73,12 @@ export function patchGatewayContext(source) {
     `            canApplyClaudeSelectionLive(existing.selection, compiledSelection) &&
             claudeGatewayContextKey(adapterOptions.environment, existing.selection.apiModelId) ===
               claudeGatewayContextKey(adapterOptions.environment, compiledSelection.apiModelId) &&`);
-  change(files[1], '  customModelCapabilityOverrides: Schema.optionalKey(Schema.Boolean),',
-    '  customModelCapabilityOverrides: Schema.optionalKey(Schema.Boolean),\n  gatewayModelLimits: Schema.optionalKey(Schema.Boolean),');
-  change(files[2], '          customModelCapabilityOverrides: true,',
-    '          customModelCapabilityOverrides: true,\n          gatewayModelLimits: true,');
+  // Reviewed against v0.1.11 (59651c1761f6c63e9b6056839067066968e6a406) and
+  // 0.1.12-nightly.20261121.5038: upstream dropped customModelCapabilityOverrides.
+  change(files[1], '  threadFind: Schema.optionalKey(Schema.Boolean),',
+    '  threadFind: Schema.optionalKey(Schema.Boolean),\n  gatewayModelLimits: Schema.optionalKey(Schema.Boolean),');
+  change(files[2], '          threadFind: true,',
+    '          threadFind: true,\n          gatewayModelLimits: true,');
   next[creates[0]] = readFileSync(assets[0], 'utf8');
   return next;
 }

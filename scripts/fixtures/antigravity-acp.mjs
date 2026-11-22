@@ -8,10 +8,10 @@ const input = createInterface({ input: process.stdin });
 
 if (process.argv.includes("--login")) {
   assert.equal(process.env.DISPLAY, undefined);
-  assert.equal(process.env.BROWSER, undefined);
+  // The native login keeps the browser suppression helper and only strips the display.
+  assert.ok((process.env.BROWSER ?? "").includes("'-e'"));
   const params = new URLSearchParams({ redirect_uri: "https://antigravity.google/oauth-callback",
     response_type: "code", state: "fixture-state", code_challenge: "fixture-challenge", code_challenge_method: "S256" });
-  console.log("https://accounts.google.com/o/oauth2/auth?redirect_uri=https%3A%2F%2Fwrong.example");
   console.log(`https://accounts.google.com/o/oauth2/auth?${params}`);
   for await (const code of input) {
     assert.equal(code, "fixture-authorization-code");

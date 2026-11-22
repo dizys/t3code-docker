@@ -1341,9 +1341,16 @@ check "native cache cleanup preserves shared dependencies and stays inside revie
 # raises it slips through until someone's session fails.
 opencode_floor_matches_t3() {
   local declared catalogue installed
-  declared="$(docker exec "$NAME" sh -c \
-    "grep -a -o 'MINIMUM_OPENCODE_VERSION *= *\"[0-9][0-9.]*\"' $T3_BUNDLE | head -1" 2>/dev/null \
-    | grep -o '[0-9][0-9.]*' | head -1)"
+  # 0.1.11 dropped the compiled MINIMUM_OPENCODE_VERSION constant for a
+  # driver-compat table; the broken-range boundary is the floor it enforces.
+  declared="$(docker exec -i "$NAME" node --input-type=module 2>/dev/null <<NODE
+import { readFileSync } from "node:fs";
+const bundle = readFileSync("$T3_BUNDLE", "latin1");
+const entry = bundle.split('"driver": "opencode",').find(part => part.includes('"t3CodeRange": ">=0.0.46"'));
+const broken = /"range": "<([0-9.]+)",\s*"status": "broken"/.exec(entry ?? "");
+process.stdout.write(broken?.[1] ?? "");
+NODE
+)"
   catalogue="$(docker exec "$NAME" sh -c \
     "grep -o 'MINIMUM_OPENCODE_VERSION = \"[0-9.]*\"' /opt/t3-harness/catalogue.mjs" \
     | grep -o '[0-9][0-9.]*')"
@@ -1507,15 +1514,48 @@ signin_id() {
 }
 
 # Claude renders its URL as an OSC-8 hyperlink wrapped over several lines;
-# scraping the visible text yields a truncated URL missing the PKCE challenge
-# and state, which would send you to a sign-in page that cannot complete.
+# scraping the visible text yields a truncated URL, which would send you to a
+# sign-in page that cannot complete. What "complete" means changed in
+# November 2026: the authorize URL used to carry its PKCE code_challenge and
+# state as query parameters, and now carries one opaque ?z- token instead,
+# with the challenge kept server side. Accept either form whole, reject a
+# truncated legacy URL that lost its tail parameters.
+claude_url_is_complete() {
+  case "$1" in
+    "https://claude.ai/oauth/authorize"?*client_id=*)
+      case "$1" in *code_challenge=*state=*|*state=*code_challenge=*) return 0 ;; *) return 1 ;; esac ;;
+    "https://claude.ai/oauth/authorize?z-"*)
+      [ "${#1}" -ge 60 ] ;;
+    *) return 1 ;;
+  esac
+}
 claude_url_complete() {
-  local id
+  local id state url=""
   id="$(signin_id claude)"
   [ -n "$id" ] || return 1
-  sleep 14
-  session_state "$id" | grep -q 'code_challenge' &&
-  session_state "$id" | grep -q '"state":"awaiting-code"'
+  # Rendering the login URL can take well past a fixed wait on a cold or busy
+  # runner, so poll for the captured URL instead of racing it.
+  for _ in $(seq 1 150); do
+    state="$(session_state "$id")"
+    url="$(printf %s "$state" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')"
+    if printf %s "$state" | grep -q '"state":"awaiting-code"' &&
+       claude_url_is_complete "$url"; then
+      return 0
+    fi
+    sleep 2
+  done
+  # check() discards output; leave a redacted note for the failure summary so
+  # the next timeout says which half of the capture never arrived.
+  local form=none
+  case "$url" in
+    *client_id=*) form=legacy ;;
+    "https://claude.ai/oauth/authorize?z-"*) form=opaque ;;
+    ?*) form=other ;;
+  esac
+  printf 'Claude OAuth capture timed out: session state=%s, url form=%s, url bytes=%s\n' \
+    "$(printf %s "$state" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')" \
+    "$form" "${#url}" >> "$UI_AUDIT_LOG"
+  return 1
 }
 check "Claude sign-in captures a complete OAuth URL" claude_url_complete
 

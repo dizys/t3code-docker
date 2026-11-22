@@ -1514,30 +1514,47 @@ signin_id() {
 }
 
 # Claude renders its URL as an OSC-8 hyperlink wrapped over several lines;
-# scraping the visible text yields a truncated URL missing the PKCE challenge
-# and state, which would send you to a sign-in page that cannot complete.
+# scraping the visible text yields a truncated URL, which would send you to a
+# sign-in page that cannot complete. What "complete" means changed in
+# November 2026: the authorize URL used to carry its PKCE code_challenge and
+# state as query parameters, and now carries one opaque ?z- token instead,
+# with the challenge kept server side. Accept either form whole, reject a
+# truncated legacy URL that lost its tail parameters.
+claude_url_is_complete() {
+  case "$1" in
+    "https://claude.ai/oauth/authorize"?*client_id=*)
+      case "$1" in *code_challenge=*state=*|*state=*code_challenge=*) return 0 ;; *) return 1 ;; esac ;;
+    "https://claude.ai/oauth/authorize?z-"*)
+      [ "${#1}" -ge 60 ] ;;
+    *) return 1 ;;
+  esac
+}
 claude_url_complete() {
-  local id state
+  local id state url=""
   id="$(signin_id claude)"
   [ -n "$id" ] || return 1
   # Rendering the login URL can take well past a fixed wait on a cold or busy
-  # runner (over 90s was seen on 2026-11-22 while the same session then
-  # completed), so poll for the captured URL instead of racing it.
+  # runner, so poll for the captured URL instead of racing it.
   for _ in $(seq 1 150); do
     state="$(session_state "$id")"
-    if printf %s "$state" | grep -q 'code_challenge' &&
-       printf %s "$state" | grep -q '"state":"awaiting-code"'; then
+    url="$(printf %s "$state" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')"
+    if printf %s "$state" | grep -q '"state":"awaiting-code"' &&
+       claude_url_is_complete "$url"; then
       return 0
     fi
     sleep 2
   done
   # check() discards output; leave a redacted note for the failure summary so
   # the next timeout says which half of the capture never arrived.
-  local seen=no
-  printf %s "$state" | grep -q 'code_challenge' && seen=yes
-  printf 'Claude OAuth capture timed out: session state=%s, code_challenge seen=%s, response bytes=%s\n' \
+  local form=none
+  case "$url" in
+    *client_id=*) form=legacy ;;
+    "https://claude.ai/oauth/authorize?z-"*) form=opaque ;;
+    ?*) form=other ;;
+  esac
+  printf 'Claude OAuth capture timed out: session state=%s, url form=%s, url bytes=%s\n' \
     "$(printf %s "$state" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')" \
-    "$seen" "$(printf %s "$state" | wc -c)" >> "$UI_AUDIT_LOG"
+    "$form" "${#url}" >> "$UI_AUDIT_LOG"
   return 1
 }
 check "Claude sign-in captures a complete OAuth URL" claude_url_complete

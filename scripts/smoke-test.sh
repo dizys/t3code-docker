@@ -1521,9 +1521,9 @@ claude_url_complete() {
   id="$(signin_id claude)"
   [ -n "$id" ] || return 1
   # Rendering the login URL can take well past a fixed wait on a cold or busy
-  # runner, and the session completes shortly after; poll for the captured
-  # URL instead of asserting once and racing it.
-  for _ in $(seq 1 45); do
+  # runner (over 90s was seen on 2026-11-22 while the same session then
+  # completed), so poll for the captured URL instead of racing it.
+  for _ in $(seq 1 150); do
     state="$(session_state "$id")"
     if printf %s "$state" | grep -q 'code_challenge' &&
        printf %s "$state" | grep -q '"state":"awaiting-code"'; then
@@ -1531,6 +1531,13 @@ claude_url_complete() {
     fi
     sleep 2
   done
+  # check() discards output; leave a redacted note for the failure summary so
+  # the next timeout says which half of the capture never arrived.
+  local seen=no
+  printf %s "$state" | grep -q 'code_challenge' && seen=yes
+  printf 'Claude OAuth capture timed out: session state=%s, code_challenge seen=%s, response bytes=%s\n' \
+    "$(printf %s "$state" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')" \
+    "$seen" "$(printf %s "$state" | wc -c)" >> "$UI_AUDIT_LOG"
   return 1
 }
 check "Claude sign-in captures a complete OAuth URL" claude_url_complete

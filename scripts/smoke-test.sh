@@ -1780,11 +1780,13 @@ check "T3 Code is pointed at the on-demand adapter" \
 cloudflared_matches_t3() {
   local want have
   # The binary distribution has no greppable server bundle, so the Dockerfile
-  # pin is the compatibility assertion.
+  # pin is the compatibility assertion. T3 Code refuses relay clients older
+  # than 2026.10.3 and falls back to a log-spamming install loop.
   want="$(grep -m1 '^ARG CLOUDFLARED_VERSION=' Dockerfile | cut -d= -f2)"
   have="$(docker exec "$NAME" cloudflared --version 2>/dev/null | awk '{print $3}')"
   CF_WANT="$want"; CF_HAVE="$have"
-  [ "$want" = "$have" ]
+  [ "$want" = "$have" ] && \
+    [ "$(printf '%s\n2026.10.3\n' "$want" | sort -V | head -1)" = "2026.10.3" ]
 }
 if cloudflared_matches_t3; then
   ok "cloudflared ${CF_HAVE:-?} is the release T3 Code asks for"

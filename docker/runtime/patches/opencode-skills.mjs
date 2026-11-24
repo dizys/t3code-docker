@@ -107,7 +107,42 @@ const shapes = [
             client.provider.list({ location }).pipe(Effect.timeout("10 seconds"), Effect.ignore),
             processEnv,`,
   },
+  // Reviewed against v0.1.12-nightly.20261124.5209 (84e4264bb347e36e97f6c3bd95d666eecfa12e07).
+  {
+    directory: "directory",
+    environment: true,
+    tracksScans: true,
+    comment: "/**\n * Until its scan ends a location lists only built-ins, even once the server lists it as loaded,\n * and nothing but the scan's end tells the two apart. Unless the caller saw that scan end, read to\n * boot the location, wait for its scan (`scanned` must listen before `read`), and read again.\n */\n",
+    loader: `  function* <E>(
+    read: Effect.Effect<OpenCode2Workspace, E>,
+    scanned: Effect.Effect<void>,
+    sawScan: boolean,
+    environment?: NodeJS.ProcessEnv,
+  ) {
+    const first = yield* read;
+    if (sawScan) return first;
+    yield* scanned.pipe(
+      Effect.timeoutOption(resolveProviderProbeTimeoutMs("opencode", 10_000, environment)),
+    );
+    return yield* read;
+  },`,
+    argument: `            Deferred.await(scanned),
+            // Without events no scan can be awaited, so trust the first read as before.
+            stream._tag === "None" || seen.has(directory),
+            processEnv,`,
+  },
 ];
+
+const nativeReadiness = `          const scanned = client.plugin.list({ location }).pipe(
+            Effect.repeat({
+              until: (plugins) => ["opencode.config.skill", "opencode.config.command"].every(
+                (id) => plugins.data.some((plugin) => plugin.id === id && plugin.state?.status === "active"),
+              ),
+              schedule: Schedule.spaced("100 millis"),
+            }),
+            Effect.asVoid,
+          );
+`;
 
 function mismatch(file) {
   return new Error(`The opencode-skills patch no longer matches ${file}. Review the upstream source before publishing this runtime.`);
@@ -127,10 +162,54 @@ export function patchOpenCodeSkills(source) {
     change(files[0], normalized, normalized);
   }
   change(files[0], 'import * as Deferred from "effect/Deferred";', 'import * as Schedule from "effect/Schedule";');
-  change(files[0], 'import * as Stream from "effect/Stream";\n', "");
-  change(files[0], "openCode2Server.withConnection(({ client, events }) =>", "openCode2Server.withConnection(({ client }) =>");
-  change(files[0],
-    `          const scanned = yield* Deferred.make<void>();
+  if (shape.tracksScans) {
+    change(files[0], "  followOpenCode2Scans,\n", "");
+    change(files[0], "openCode2Server.withConnection(({ client, events, url }) =>", "openCode2Server.withConnection(({ client }) =>");
+    change(files[0],
+      `    // Locations whose scan T3 saw end on the current server; a scan is announced only once.
+    let scans = { url: "", scanned: new Set<string>() };
+    const followScans = (connection: OpenCode2Server.OpenCode2Connection) =>
+      Effect.suspend(() => {
+        const scanned = new Set<string>();
+        scans = { url: connection.url, scanned };
+        return connection.events.pipe(
+          Effect.flatMap((events) =>
+            followOpenCode2Scans(events, (directory) => Effect.sync(() => scanned.add(directory))),
+          ),
+          Effect.scoped,
+          Effect.ignore,
+          Effect.forkScoped,
+        );
+      });
+    // A session or text generation can start the server too, and reads no catalog when it does.
+    yield* Stream.runForEach(openCode2Server.connections, (connection) =>
+      followScans(connection).pipe(Effect.andThen(followMachineCatalog(connection))),
+    ).pipe(Effect.forkScoped);
+`, `    // A session or text generation can start the server too, and reads no catalog when it does.
+    yield* Stream.runForEach(openCode2Server.connections, followMachineCatalog).pipe(Effect.forkScoped);
+`);
+    change(files[0],
+      `          if (scans.url !== url) scans = { url, scanned: new Set() };
+          const { scanned: seen } = scans;
+          const scanned = yield* Deferred.make<void>();
+          const stream = yield* events.pipe(Effect.option);
+          if (stream._tag === "Some") {
+            yield* followOpenCode2Scans(stream.value, (scannedDirectory) =>
+              scannedDirectory === directory
+                ? Deferred.succeed(scanned, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+            ).pipe(Effect.forkScoped);
+          }
+`, nativeReadiness);
+    change(files[0],
+      `          // A location loaded before T3 watched never announces its scan; wait for it only once.
+          seen.add(directory);
+`, "");
+  } else {
+    change(files[0], 'import * as Stream from "effect/Stream";\n', "");
+    change(files[0], "openCode2Server.withConnection(({ client, events }) =>", "openCode2Server.withConnection(({ client }) =>");
+    change(files[0],
+      `          const scanned = yield* Deferred.make<void>();
           const pending = new Set(["command.updated", "skill.updated"]);
           const stream = yield* events.pipe(Effect.option);
           if (stream._tag === "Some") {
@@ -148,16 +227,8 @@ export function patchOpenCodeSkills(source) {
             );
           }
 `,
-    `          const scanned = client.plugin.list({ location }).pipe(
-            Effect.repeat({
-              until: (plugins) => ["opencode.config.skill", "opencode.config.command"].every(
-                (id) => plugins.data.some((plugin) => plugin.id === id && plugin.state?.status === "active"),
-              ),
-              schedule: Schedule.spaced("100 millis"),
-            }),
-            Effect.asVoid,
-          );
-`);
+      nativeReadiness);
+  }
   const callEnd = shape.directory === "directory" ? "\n          );" : "";
   change(files[0], shape.argument + callEnd,
     "            scanned," + (shape.environment ? "\n            processEnv," : "") + callEnd);

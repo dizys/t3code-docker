@@ -3,6 +3,7 @@ import test from "node:test";
 import { source } from "./fixtures/opencode-workspace-source.mjs";
 import { normalizedSource } from "./fixtures/opencode-workspace-normalized-source.mjs";
 import { settledSource } from "./fixtures/opencode-workspace-settled-source.mjs";
+import { scansSource } from "./fixtures/opencode-workspace-scans-source.mjs";
 import { files, patchOpenCodeSkills } from "../docker/runtime/patches/opencode-skills.mjs";
 import { patches } from "../docker/runtime/patches/index.mjs";
 
@@ -73,5 +74,25 @@ test("settled Nightly replaces the upstream catalog barrier with native plugin r
   ]) {
     const changed = { ...settledSource, [file]: settledSource[file].replace(before, after) };
     assert.throws(() => patchOpenCodeSkills(changed), /no longer matches/, "unreviewed settlement changes fail closed");
+  }
+});
+
+test("Nightly 5209 waits for config plugins and keeps watching the model catalog", () => {
+  const before = structuredClone(scansSource);
+  const [driver, status] = files;
+  const result = patchOpenCodeSkills(scansSource);
+  assert.deepEqual(scansSource, before);
+  assert.match(result[driver], /Stream\.runForEach\(openCode2Server\.connections, followMachineCatalog\)/);
+  assert.match(result[driver], /const directory = pathService\.resolve\(cwd\);/);
+  assert.match(result[driver], /client\.plugin\.list\(\{ location \}\)/);
+  assert.match(result[driver], /opencode\.config\.skill/);
+  assert.match(result[driver], /opencode\.config\.command/);
+  assert.match(result[driver], /scanned,\s+processEnv,/);
+  assert.doesNotMatch(result[driver], /followScans|followOpenCode2Scans|seen\.|Deferred/);
+  assert.match(result[status], /yield\* read;\s+yield\* scanned\.pipe\(Effect\.timeout\(resolveProviderProbeTimeoutMs\("opencode", 10_000, environment\)\)\);\s+return yield\* read;/);
+  assert.doesNotMatch(result[status], /sawScan|timeoutOption/);
+  for (const [file, anchor] of [[driver, 'seen.has(directory)'], [status, 'if (sawScan) return first;']]) {
+    const changed = { ...scansSource, [file]: scansSource[file].replace(anchor, '') };
+    assert.throws(() => patchOpenCodeSkills(changed), /no longer matches/);
   }
 });

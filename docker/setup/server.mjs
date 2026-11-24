@@ -30,7 +30,7 @@ import { createFilesService, FILES_ROUTES, FILES_POST_ROUTES, filesFailure } fro
 import { createHoldControl } from './files/hold.mjs';
 import { createLatestCache } from "./latest.mjs";
 import { createT3Api } from "./t3-api.mjs";
-import { createAntigravity } from "./antigravity.mjs";
+import { antigravityCodePrompt, createAntigravity } from "./antigravity.mjs";
 import { createT3Sessions } from "./t3-session.mjs";
 import { createDeviceLabels } from "./device-labels.mjs";
 import * as Context from "./context.mjs";
@@ -1691,7 +1691,7 @@ const startAntigravitySignin = async () => {
   const session = {
     id, agentId: "antigravity", state: "starting", url: null, code: null,
     needsCode: true, output: "", error: null, child: null, t3: true,
-    flow: null, flowId: null, codeInteractionId: null, expiresAt: null, startedAt: Date.now(),
+    flow: null, flowId: null, codePrompt: null, expiresAt: null, startedAt: Date.now(),
   };
   sessions.set(id, session);
   const end = (state, error = null) => {
@@ -1699,7 +1699,7 @@ const startAntigravitySignin = async () => {
     session.state = state;
     session.error = error;
     session.url = null;
-    session.codeInteractionId = null;
+    session.codePrompt = null;
     session.flow?.close();
     sessionStore.settle(session);
   };
@@ -1710,8 +1710,7 @@ const startAntigravitySignin = async () => {
       if (Number.isFinite(expires)) session.expiresAt = expires;
       if (state.phase === "waiting" && state.authorizationUrl) {
         session.url = state.authorizationUrl;
-        session.codeInteractionId = state.interaction?.type === "credentials" &&
-          state.interaction.fields?.some((field) => field.name === "authorizationCode") ? state.interaction.id : null;
+        session.codePrompt = antigravityCodePrompt(state.interaction);
         if (session.state === "starting") session.state = "awaiting-code";
       } else if (state.phase === "verifying") {
         session.state = "submitted";
@@ -1742,7 +1741,7 @@ const startAntigravitySignin = async () => {
 const publicSession = (s) => ({
   id: s.id, agent: s.agentId, state: s.state, url: s.url, code: s.code, qr: s.qr ?? null,
   needsCode: s.needsCode, error: s.error, identity: s.identity ?? null, warning: s.warning ?? null,
-  googleAuthorizationCode: Boolean(s.codeInteractionId),
+  googleAuthorizationCode: Boolean(s.codePrompt),
   // When the wait for the browser step gives up, for the device code's countdown.
   startedAt: s.startedAt, expiresAt: s.expiresAt ?? s.startedAt + SESSION_TTL_MS,
   tail: s.output.trim().split("\n").slice(-4).join("\n"),
@@ -3283,15 +3282,15 @@ const server = createServer(async (req, res) => {
       if (session.t3) {
         if (session.state !== "awaiting-code") return sendJson(res, 409, { error: "This sign-in is no longer waiting for a response." });
         const code = String(input.code ?? "").trim();
-        const expectsCode = Boolean(session.codeInteractionId);
-        if (expectsCode && (!/^[!-~]{1,4096}$/u.test(code) || /^https?:\/\//i.test(code))) {
+        const prompt = session.codePrompt;
+        if (prompt && (!/^[!-~]{1,4096}$/u.test(code) || /^https?:\/\//i.test(code))) {
           return sendJson(res, 400, { error: "Paste the authorization code shown by Google." });
         }
-        if (!expectsCode && (!/^https?:\/\//i.test(code) || code.length > 16384)) {
+        if (!prompt && (!/^https?:\/\//i.test(code) || code.length > 16384)) {
           return sendJson(res, 400, { error: "Paste the whole address from the browser's address bar, starting with http://127.0.0.1." });
         }
         try {
-          if (session.codeInteractionId) await antigravity.submitSignInCode(session.flowId, session.codeInteractionId, code);
+          if (prompt) await antigravity.submitSignInCode(session.flowId, prompt, code);
           else await antigravity.completeSignIn(session.flowId, code);
           if (!TERMINAL_STATES.has(session.state)) session.state = "submitted";
           session.submittedAt = Date.now();
@@ -3332,7 +3331,7 @@ const server = createServer(async (req, res) => {
         if (session.flowId && !TERMINAL_STATES.has(session.state)) void antigravity.cancelSignIn(session.flowId).catch(() => {});
         session.state = "cancelled";
         session.url = null;
-        session.codeInteractionId = null;
+        session.codePrompt = null;
         session.flow?.close();
       } else if (session) {
         session.state = "cancelled";

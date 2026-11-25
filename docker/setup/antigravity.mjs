@@ -8,6 +8,12 @@
 // short cache, so a status poll never waits on T3.
 export const INSTANCE = "antigravity";
 
+export function antigravityCodePrompt(interaction) {
+  if (interaction?.type !== "credentials" || !interaction.id || !Array.isArray(interaction.fields)) return null;
+  const field = ["code", "authorizationCode"].find((name) => interaction.fields.some((entry) => entry?.name === name));
+  return field ? { id: interaction.id, field } : null;
+}
+
 // T3 names a release `agy_acp_server_1.1.1`; the page says 1.1.1.
 const shortVersion = (value) => (value ? String(value).replace(/^agy_acp_server_/, "") : null);
 const BUSY = new Set(["downloading", "extracting", "verifying"]);
@@ -232,8 +238,8 @@ export function createAntigravity({ api, now = Date.now, maxAgeMs = 15_000 }) {
     }
   };
   const completeSignIn = (flowId, callbackUrl) => api.call("provider.auth.complete", { instanceId: INSTANCE, flowId, callbackUrl });
-  const submitSignInCode = (flowId, interactionId, code) => api.call("provider.auth.respond", {
-    instanceId: INSTANCE, flowId, interactionId, response: { type: "credentials", values: { authorizationCode: code } },
+  const submitSignInCode = (flowId, prompt, code) => api.call("provider.auth.respond", {
+    instanceId: INSTANCE, flowId, interactionId: prompt.id, response: { type: "credentials", values: { [prompt.field]: code } },
   });
   const cancelSignIn = (flowId) => api.call("provider.auth.cancel", { instanceId: INSTANCE, flowId });
   /** After a sign-in: have T3 check access again, then read it. */

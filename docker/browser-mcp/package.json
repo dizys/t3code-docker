@@ -5,6 +5,6 @@
   "description": "Pinned browser automation MCP servers for the browser image stage. Versions mirror the Dockerfile ARGs; refresh both with scripts/bump-versions.sh.",
   "dependencies": {
     "@playwright/mcp": "0.0.86",
-    "chrome-devtools-mcp": "1.13.0"
+    "chrome-devtools-mcp": "1.14.0"
   }
 }

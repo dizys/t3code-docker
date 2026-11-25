@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { antigravityFacts, createAntigravity } from "../docker/setup/antigravity.mjs";
+import { antigravityCodePrompt, antigravityFacts, createAntigravity } from "../docker/setup/antigravity.mjs";
 import { createT3Api, failureOf, T3ApiError } from "../docker/setup/t3-api.mjs";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -234,6 +234,9 @@ function fakeT3({ tokens = new Set(["good"]), protocolVersion = 1, settingsForma
       case "provider.auth.respond":
         if (message.payload.flowId !== t3.auth.flowId || message.payload.interactionId !== t3.auth.interaction?.id) {
           return answer(fail("This sign-in is no longer active in this client.", "respond"));
+        }
+        if (!message.payload.response.values?.[t3.auth.interaction.fields[0].name]) {
+          return answer(fail("Paste the code using the field named by the sign-in prompt.", "respond"));
         }
         t3.authResponse = message.payload.response;
         t3.setAuth({ phase: "verifying", interaction: null, authorizationUrl: null });
@@ -490,30 +493,40 @@ test("sign-in follows T3's flow: a Google link, the pasted address, T3's verdict
   const { api } = apiFor(t3);
   const ag = createAntigravity({ api });
   const states = [];
-  const flow = await ag.signIn((state) => states.push(state.phase));
+  const flow = await ag.signIn((state) => states.push(state));
   assert.equal(flow.flowId, "flow-1");
   t3.setAuth({ phase: "waiting", authorizationUrl: "https://accounts.google.com/o/oauth2/auth?x=1" });
   await settle();
+  assert.equal(antigravityCodePrompt(states.find((state) => state.phase === "waiting")?.interaction), null);
   await ag.completeSignIn("flow-1", "http://127.0.0.1:52219/?code=abc&state=def");
   t3.setAuth({ phase: "succeeded" });
   await settle();
-  assert.deepEqual(states.filter((p, i) => states.indexOf(p) === i), ["starting", "waiting", "verifying", "succeeded"], "never the state an earlier flow left");
+  assert.deepEqual([...new Set(states.map((state) => state.phase))], ["starting", "waiting", "verifying", "succeeded"], "never the state an earlier flow left");
   await assert.rejects(ag.completeSignIn("other", "http://127.0.0.1:1/"), /no longer active/);
   flow.close();
   api.close();
 });
 
-test("headless Antigravity sign-in sends the code to the current native credential prompt", async (t) => {
-  const t3 = fakeT3();
-  const { api } = apiFor(t3);
-  t.after(() => api.close());
-  const ag = createAntigravity({ api });
-  const flow = await ag.signIn(() => {});
-  t.after(() => flow.close());
-  t3.setAuth({ phase: "waiting", interaction: { type: "credentials", id: "code-prompt" } });
-  await assert.rejects(ag.submitSignInCode(flow.flowId, "old-prompt", "fixture-code"), /no longer active/);
-  const sent = await ag.submitSignInCode(flow.flowId, "code-prompt", "fixture-code");
-  assert.equal(sent.phase, "verifying");
-  assert.deepEqual(t3.authResponse, { type: "credentials", values: { authorizationCode: "fixture-code" } });
-  assert.equal(t3.requests.includes("provider.auth.complete"), false);
-});
+for (const field of ["code", "authorizationCode"]) {
+  test(`headless Antigravity sign-in uses the advertised ${field} field`, async (t) => {
+    const t3 = fakeT3();
+    const { api } = apiFor(t3);
+    t.after(() => api.close());
+    const ag = createAntigravity({ api });
+    let prompt = null;
+    const flow = await ag.signIn((state) => { prompt = antigravityCodePrompt(state.interaction); });
+    t.after(() => flow.close());
+    t3.setAuth({
+      phase: "waiting",
+      authorizationUrl: "https://accounts.google.com/o/oauth2/auth?x=1",
+      interaction: { type: "credentials", id: "code-prompt", fields: [{ name: field }] },
+    });
+    await settle();
+    assert.deepEqual(prompt, { id: "code-prompt", field });
+    await assert.rejects(ag.submitSignInCode(flow.flowId, { ...prompt, id: "old-prompt" }, "fixture-code"), /no longer active/);
+    const sent = await ag.submitSignInCode(flow.flowId, prompt, "fixture-code");
+    assert.equal(sent.phase, "verifying");
+    assert.deepEqual(t3.authResponse, { type: "credentials", values: { [field]: "fixture-code" } });
+    assert.equal(t3.requests.includes("provider.auth.complete"), false);
+  });
+}

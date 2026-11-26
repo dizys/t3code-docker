@@ -82,3 +82,46 @@ export function forwardedHost(headers, { trusted = true } = {}) {
   const value = forwarded ?? fallback;
   return Array.isArray(value) ? value[0] : value;
 }
+
+/**
+ * Whether a browser request proves it came from this same origin.
+ *
+ * Modern browsers send Sec-Fetch-Site on trustworthy origins (HTTPS and
+ * localhost). Over plain HTTP to a LAN or remote IP, browsers omit
+ * Sec-Fetch-Site, but still send Origin on state-changing requests (POST).
+ * When Sec-Fetch-Site is present, only "same-origin" passes. When it is
+ * absent, a valid http(s) Origin must match this request's own origin.
+ */
+export function isSameOriginRequest(headers, { encrypted = false, trusted = true } = {}) {
+  const fetchSite = String(headers?.["sec-fetch-site"] ?? "").trim().toLowerCase();
+  if (fetchSite) return fetchSite === "same-origin";
+
+  const rawOrigin = headers?.origin;
+  const originHeader = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
+  if (typeof originHeader !== "string" || !originHeader.trim()) return false;
+
+  let originUrl;
+  try {
+    originUrl = new URL(originHeader.trim());
+  } catch {
+    return false;
+  }
+  if ((originUrl.protocol !== "http:" && originUrl.protocol !== "https:") || originUrl.origin === "null") {
+    return false;
+  }
+
+  const host = String(forwardedHost(headers, { trusted }) ?? "").split(",")[0].trim();
+  if (!host) return false;
+  const proto = encrypted || forwardedProto(headers, { trusted }) === "https" ? "https" : "http";
+
+  let expectedUrl;
+  try {
+    expectedUrl = new URL(`${proto}://${host}`);
+  } catch {
+    return false;
+  }
+  if (expectedUrl.pathname !== "/" || expectedUrl.search || expectedUrl.hash || expectedUrl.username || expectedUrl.password) {
+    return false;
+  }
+  return originUrl.origin === expectedUrl.origin;
+}

@@ -46,7 +46,7 @@ import { createGatewayT3 } from "./gateways/t3.mjs";
 import { createGatewayVault } from "./gateways/vault.mjs";
 import { createSessionStore, TERMINAL_STATES } from "./signin-sessions.mjs";
 import { clientAddress, trustsProxyHeaders } from "./client-address.mjs";
-import { cookieValue, forwardedHost, forwardedPrefix, forwardedProto } from "./request-auth.mjs";
+import { cookieValue, forwardedHost, forwardedPrefix, forwardedProto, isSameOriginRequest } from "./request-auth.mjs";
 import { createKeyThrottle } from "./key-throttle.mjs";
 import { newKey, readKeyFile, validKey, writeKeyFile } from "./setup-key.mjs";
 import { createCredentialStore, credentialFailure, CredentialError, credentialDirectory } from "./credentials.mjs";
@@ -2625,7 +2625,7 @@ const viewerOf = async (req, ip) => {
     if (candidate !== undefined && await keyGuesses.check(ip, candidate)) return { via: "key" };
   }
   if (!ACCEPT_T3_SESSIONS) return null;
-  if (!SAFE_METHODS.has(req.method) && fetchSite(req) !== "same-origin") return null;
+  if (!SAFE_METHODS.has(req.method) && !isSameOriginRequest(req.headers, { encrypted: Boolean(req.socket?.encrypted), trusted: proxyHeadersTrusted(req) })) return null;
   return (await t3Sessions.verify(req.headers.cookie)) ? { via: "t3" } : null;
 };
 

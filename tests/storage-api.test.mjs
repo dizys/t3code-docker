@@ -26,7 +26,7 @@ test("storage API authenticates, validates, acknowledges durable jobs, and prese
     import { createStorageManager as core } from ${JSON.stringify(new URL("../docker/harness/storage/manager.mjs", import.meta.url).href)};
     import { promises as fs } from 'node:fs';
     export const createStorageManager = (options) => core({ ...options, retention: options.harness.retention,
-      temporary: ${JSON.stringify(path.join(root, "tmp"))}, intervalMs: 0,
+      temporary: ${JSON.stringify(path.join(root, "tmp"))},
       processes: async () => ({ complete: true, processes: [] }),
       detectCaches: async () => ({ go: { path: ${JSON.stringify(go)}, executable: '/fixture/go' }, npm: { path: ${JSON.stringify(path.join(home, ".npm"))}, executable: null } }),
       run: async (args) => {
@@ -44,6 +44,7 @@ test("storage API authenticates, validates, acknowledges durable jobs, and prese
       MISE_DATA_DIR: path.join(home, ".local/share/mise"), MISE_STATE_DIR: path.join(home, ".local/state/mise"),
       MISE_CONFIG_DIR: path.join(home, ".config/mise"), T3_HARNESS_MODULE: module, T3_SETUP_PORT: String(port),
       T3_SETUP_KEY: "fixture-key", T3_SETUP_KEY_SOURCE: "env", T3_INFRA_LAUNCHER: "/bin/false", T3CODE_PORT: "1",
+      T3_STORAGE_SCAN_INTERVAL_MINUTES: "0",
     }, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", (chunk) => { logs += chunk; }); child.stderr.on("data", (chunk) => { logs += chunk; });
     for (let i = 0; i < 100; i++) {
@@ -58,6 +59,13 @@ test("storage API authenticates, validates, acknowledges durable jobs, and prese
   await start();
   const request = (route, body, headers = {}) => fetch(`http://127.0.0.1:${port}${route}`, { method: body === undefined ? "GET" : "POST",
     headers: { "x-t3-setup-key": "fixture-key", "content-type": "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const initial = await (await request("/storage")).json();
+  assert.equal(initial.backgroundScansEnabled, false);
+  assert.equal(initial.refreshing, false, "on-demand mode skips the startup scan");
+  assert.equal(initial.at, null);
+  assert.ok(initial.disk.totalBytes > 0, "the filesystem meter still reports live capacity");
+  assert.equal((await request("/files/places")).status, 200);
+  assert.deepEqual((await (await request("/files/jobs")).json()).jobs, [], "browsing Files does not start a folder scan");
   assert.equal((await fetch(`http://127.0.0.1:${port}/storage`)).status, 401);
   assert.equal((await request("/storage/clean", { ids: ["go"] }, { "sec-fetch-site": "cross-site" })).status, 403);
   for (const [route, body] of [["/storage/clean", { ids: ["go"], path: workspace }], ["/storage/clean", { ids: ["../../source"] }], ["/storage/clean", []], ["/storage/policy", { automatic: "true" }], ["/storage/policy", { ignored: true }], ["/storage/versions/prune", {}]]) assert.equal((await request(route, body)).status, 400);
@@ -87,6 +95,16 @@ test("storage API authenticates, validates, acknowledges durable jobs, and prese
   assert.equal(trimmed.policy.retainManagedVersions,true,'manual mode does not change automatic retention');
   assert.equal((await request("/proxy/__setup/storage")).status, 200);
   assert.equal((await request("/storage/refresh", {})).status, 202);
+  let inventory;
+  for (let i = 0; i < 100; i++) {
+    inventory = await (await request("/storage")).json();
+    if (inventory.at && !inventory.refreshing) break;
+    await pause(10);
+  }
+  assert.ok(inventory.categories.find(({ id }) => id === "workspace")?.bytes > 0, "manual refresh still measures the workspace");
+  const manualFiles = await request("/files/measure", { path: workspace });
+  assert.equal(manualFiles.status, 200);
+  assert.ok((await manualFiles.json()).job, "Files still accepts an explicit measurement");
   assert.equal((await request("/storage/clean", { ids: ["go"] })).status, 400, 'a fresh review is required');
   assert.equal((await request("/storage/clean/preview", { ids: ["go"], path: workspace })).status, 400);
   assert.equal((await request("/storage/clean/preview", { ids: ["go"] }, { "sec-fetch-site": "cross-site" })).status, 403);

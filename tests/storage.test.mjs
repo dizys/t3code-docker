@@ -35,6 +35,24 @@ async function fixture(t, overrides = {}) {
   return { manager, root, home, workspace, go, npm, env, calls, sentinels, base };
 }
 
+test("the environment configures inventory scans independently of maintenance", async (t) => {
+  const f = await fixture(t);
+  const intervals = t.mock.method(globalThis, "setInterval", () => ({ unref() {} }));
+  const warn = t.mock.method(console, "warn", () => {});
+  for (const [value, scan] of [
+    [undefined, 600_000], ["60", 3_600_000], ["0", 0], ["35791", 2_147_460_000], ["35792", 600_000],
+  ]) {
+    const before = intervals.mock.callCount();
+    const manager = createStorageManager({ ...f.base, intervalMs: undefined,
+      env: { ...f.env, T3_STORAGE_SCAN_INTERVAL_MINUTES: value } });
+    t.after(() => manager.stop());
+    await manager.ready;
+    assert.equal(manager.backgroundScansEnabled, scan > 0, value);
+    assert.deepEqual(intervals.mock.calls.slice(before).map(({ arguments: args }) => args[1]), scan ? [scan, 60_000] : [60_000], value);
+  }
+  assert.equal(warn.mock.callCount(), 1, "an overflowing delay warns instead of scheduling a one-millisecond scan");
+});
+
 test("allocated inventory is cached; polling never detects tools or traverses folders", async (t) => {
   const f = await fixture(t);
   let detections = 0, scans = 0;

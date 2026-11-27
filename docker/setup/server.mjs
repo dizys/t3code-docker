@@ -3471,10 +3471,11 @@ try { await installVaultSkill({ home: CONTEXT_HOME, env: process.env, stateFile:
 catch { console.warn('[setup] The t3-vault skill could not be installed; agents can still run t3-vault directly.'); }
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`[setup] listening on 0.0.0.0:${PORT}`);
-  // Background facts: the storage check now, release lookups shortly after
-  // (a first start is busy downloading; the cache on the volume answers until
-  // then) and every half hour after that, each pass skipped while fresh.
-  void loadStorage().then((storage) => storage.refresh()).catch(() => {});
+  // Start the storage inventory when enabled. Delay the first release lookup
+  // while startup downloads run and serve the saved release cache in the meantime.
+  void loadStorage().then((storage) => {
+    if (storage.backgroundScansEnabled !== false) return storage.refresh();
+  }).catch(() => {});
   void latestCache.load();
   void runtimeManager.check().catch(() => {});
   setInterval(() => { void runtimeManager.check().catch(() => {}); }, 60 * 60 * 1000).unref();

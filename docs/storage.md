@@ -53,9 +53,19 @@ If process activity cannot be checked, cleanup pauses.
 
 Linked cache locations, aggregate cache roots and overlaps with other caches or
 protected folders are refused. A custom location outside the managed home cache
-folders must be cleaned from a terminal. Scans run in the background at startup
-and every ten minutes; **Refresh** requests another. Polling reads cached sizes
-and current filesystem space without traversing folders or starting tools.
+folders must be cleaned from a terminal.
+
+## Storage measurements
+
+The storage inventory includes the workspace and recurses into nested folders.
+By default it runs at startup and every ten minutes. For a large workspace on
+slow storage, set `T3_STORAGE_SCAN_INTERVAL_MINUTES=60` in Compose's `.env` or
+in the container environment, then recreate the container. Set it to `0` to skip
+the startup scan, scheduled scans and automatic folder sizing in Files.
+
+**Storage → Refresh**, **Files → Measure again**, and `t3-storage scan` still measure on
+request. Polling reads cached sizes and live filesystem space. Automatic cache
+cleanup uses the last available inventory and measures selected caches directly.
 Inventories and operation results survive service restarts.
 
 ## Maintenance

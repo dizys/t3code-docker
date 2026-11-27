@@ -118,6 +118,7 @@ const T3StorageUI = (() => {
       const current = view(), running = busy(), disk = current.disk, op = current.operation;
       const statusError = error || current.policyError || current.error;
       const cacheCount = current.cacheRows.length, readyCount = current.cacheRows.filter((row) => row.canClean).length;
+      const awaitingScan = current.backgroundScansEnabled === false && current.loading && !current.refreshing;
       const cacheOperation = op?.ids?.some((id) => id !== 'versions') ? op : null;
       const completed = cacheOperation?.completedIds?.length || 0;
       const checked = current.checked;
@@ -132,13 +133,15 @@ const T3StorageUI = (() => {
         ${current.progress || requesting || pending ? html`<div class="tc-group tc-storage-active" role="status"><span class="tc-spinner" aria-hidden="true"></span><div><strong>${current.progress || 'Starting cleanup…'}</strong><span>${cacheOperation?.state === 'running' ? completed + ' of ' + cacheOperation.ids.length + ' caches complete' : 'The reviewed selection is being checked.'}</span></div>${cacheOperation?.state === 'running' ? html`<button class="tc-btn tc-btn--sm" type="button" data-cmd="storage.clean" data-id="operation" data-key="storage-operation">Details</button>` : ''}</div>` : ''}
         ${statusError ? html`<div class="tc-storage-notice tc-storage-notice--danger" role="alert">${icon('triangle-alert')}<div><strong>Storage needs attention</strong><p>${statusError}</p><button class="tc-btn tc-btn--sm" type="button" data-cmd="storage.refresh"${disabled(current.refreshing || running)}>Check again</button></div></div>` : ''}
         <div class="tc-storage-layout">${part('storage-cache-title', 'Tool caches', html`<div class="tc-group">
-          <div class="tc-storage-cache-summary"><span>${current.loading ? 'Reading tool caches' : readyCount ? M.plural(readyCount, 'cache') + ' available for review' : 'No caches need cleanup'}</span><span class="tc-small tc-muted">${cacheCount ? M.formatBytes(current.cacheBytes) + ' cached in total' : ''}</span></div>
+          ${awaitingScan ? '' : html`<div class="tc-storage-cache-summary"><span>${current.loading ? 'Reading tool caches' : readyCount ? M.plural(readyCount, 'cache') + ' available for review' : 'No caches need cleanup'}</span><span class="tc-small tc-muted">${cacheCount ? M.formatBytes(current.cacheBytes) + ' cached in total' : ''}</span></div>`}
           <div class="tc-list">${cacheCount ? current.cacheRows.map((row) => html`<div class="tc-row tc-row--compact tc-storage-cache-row" data-key="storage-${row.id}" data-state="${row.state}">
             <span class="tc-tile tc-tile--sm" aria-hidden="true">${cacheMark(row)}</span>
             <div class="tc-row-main"><div class="tc-row-title"><span class="tc-row-name">${row.label}</span></div><span class="tc-storage-cache-caption">${row.state === 'protected' ? html`${icon('shield-check', 'tc-icon--sm')}<span>${row.stateLabel}</span>` : row.state === 'empty' ? 'No cached data' : row.description}</span></div>
             <div class="tc-storage-cache-size"><span>${row.size}</span>${row.state === 'ready' && row.id === 'uv' ? html`<span class="tc-small tc-muted">Unused only</span>` : ''}</div>
             <div class="tc-row-actions"><button class="${cx('tc-btn', 'tc-btn--sm', !row.canClean && 'tc-btn--ghost')}" type="button" data-cmd="storage.clean" data-id="${row.id}" data-key="storage-clean-${row.id}" aria-label="${row.canClean ? 'Review' : 'Details for'} ${row.label}"${disabled(running || current.refreshing || current.loading)}>${row.canClean ? 'Review' : 'Details'}</button></div></div>`)
-            : html`<div class="tc-storage-empty" role="status">${current.error ? html`${icon('circle-alert')}<span>Cache sizes could not be read. Use Refresh to try again.</span>` : html`<span class="tc-spinner" aria-hidden="true"></span><span>Measuring tool caches…</span>`}</div>`}</div>
+            : html`<div class="tc-storage-empty" role="status">${current.error ? html`${icon('circle-alert')}<span>Cache sizes could not be read. Use Refresh to try again.</span>`
+              : awaitingScan ? html`<span>Choose Refresh to measure tool caches.</span>`
+              : html`<span class="tc-spinner" aria-hidden="true"></span><span>Measuring tool caches…</span>`}</div>`}</div>
           <div class="tc-card-foot">${icon('shield-check', 'tc-icon--sm')}<span>Cleanup checks each location and keeps shared dependencies. You review the selection first.</span></div>
         </div>`)}
         <div class="tc-storage-secondary">${part('storage-maintenance-title', 'Maintenance', html`<div class="tc-group"><div class="tc-list">

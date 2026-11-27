@@ -29,6 +29,7 @@ services:
       # Set 1 only when the host and container allow Chrome's own sandbox.
       T3CODE_SERVER_BROWSER_SANDBOX: ${T3CODE_SERVER_BROWSER_SANDBOX:-0}
       T3_AUTO_ADD_PROJECTS: ${T3_AUTO_ADD_PROJECTS:-1}
+      T3_STORAGE_SCAN_INTERVAL_MINUTES: ${T3_STORAGE_SCAN_INTERVAL_MINUTES:-10}
       T3_PRINT_PAIRING_ON_START: ${T3_PRINT_PAIRING_ON_START:-0}
       # What to install onto the volume on first start, in the background:
       # all (the five agents plus Go, Rust, Bun, Deno, uv), agents,

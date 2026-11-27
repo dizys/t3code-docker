@@ -66,6 +66,7 @@ export function createSizesService({ storage, home, workspace, now = Date.now, m
     return job;
   };
   const start = (value, options = {}) => {
+    if (!options.force && storage?.backgroundScansEnabled === false) return Promise.resolve(null);
     const existing = jobFor(value); if (existing) return Promise.resolve(existing);
     if (preparing.has(value)) return preparing.get(value);
     if (!options.force && ([...jobs.values()].some(row => ['running', 'queued'].includes(row.state) && inside(row.path, value))

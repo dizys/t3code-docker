@@ -2329,6 +2329,7 @@ button.tc-dv-hunk { width: 100%; border-left: 0; border-right: 0; cursor: pointe
 /* Size cell: a bar against the largest sibling, the rebuildable part hatched. */
 .tc-fsize { display: grid; grid-template-columns: minmax(0, 1fr) 4rem; align-items: center; gap: 0.625rem; min-width: 0; }
 .tc-fsize > b { font-size: 0.8125rem; font-weight: 400; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tc-fsize > b:only-child { grid-column: -2 / -1; }
 .tc-fsize > b[data-muted] { color: var(--fg-muted); }
 .tc-bar { position: relative; display: flex; height: 0.375rem; border-radius: 0.1875rem; background: color-mix(in srgb, var(--fg) 6%, transparent); overflow: hidden; }
 .tc-bar > span { display: block; height: 100%; }

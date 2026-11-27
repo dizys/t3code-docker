@@ -14,11 +14,26 @@ import { createFilesSizesIndex } from "./files-sizes.mjs";
 export { CACHE_IDS, cacheLabel } from "./caches.mjs";
 
 const IDLE_MS = 10 * 60 * 1000;
+const MINUTE_MS = 60_000;
+const DEFAULT_SCAN_MINUTES = 10;
+// Node converts delays above its signed 32-bit timer limit to one millisecond.
+const MAX_SCAN_MINUTES = Math.floor(2_147_483_647 / MINUTE_MS);
 const TERMINAL = new Set(["succeeded", "failed", "interrupted"]);
 const errorResult = (code, error) => ({ ok: false, code, error });
 
+function scanIntervalMs(value) {
+  const setting = (value ?? "").trim();
+  if (!setting) return DEFAULT_SCAN_MINUTES * MINUTE_MS;
+  const minutes = Number(setting);
+  if (/^\d+$/.test(setting) && minutes <= MAX_SCAN_MINUTES) return minutes * MINUTE_MS;
+  console.warn(`[storage] T3_STORAGE_SCAN_INTERVAL_MINUTES must be a whole number between 0 and ${MAX_SCAN_MINUTES}. Using ${DEFAULT_SCAN_MINUTES} minutes.`);
+  return DEFAULT_SCAN_MINUTES * MINUTE_MS;
+}
+
 export function createStorageManager(options = {}) {
   const env = options.env ?? process.env;
+  const intervalMs = options.intervalMs ?? scanIntervalMs(env.T3_STORAGE_SCAN_INTERVAL_MINUTES);
+  const backgroundScansEnabled = intervalMs > 0;
   const userHome = path.resolve(options.home ?? env.HOME ?? os.homedir());
   const workspace = path.resolve(options.workspace ?? env.T3_WORKSPACE ?? "/workspace");
   const stateRoot = path.resolve(env.T3CODE_HOME || path.join(userHome, ".t3"));
@@ -62,7 +77,7 @@ export function createStorageManager(options = {}) {
     await reconcileOperation();
   })();
 
-  const snapshot = () => structuredClone({ ...facts, policyRevision: policyRevision(facts.policy, facts.policyError) });
+  const snapshot = () => structuredClone({ ...facts, backgroundScansEnabled, policyRevision: policyRevision(facts.policy, facts.policyError) });
   const persistOperation = async (operation) => {
     let previous;
     try { previous = JSON.parse(await io.readFile(operationFile, "utf8")); } catch { /* first operation */ }
@@ -77,6 +92,12 @@ export function createStorageManager(options = {}) {
   };
   const refreshDisk = async () => {
     try { facts.disk = await diskUsage(userHome); } catch { facts.disk = null; }
+    // Persistence warnings need the current mounts even with a cold or stale inventory.
+    const mountinfo = await io.readFile("/proc/self/mountinfo", "utf8").catch(() => "");
+    const home = mountSource(userHome, mountinfo), work = mountSource(workspace, mountinfo), state = mountSource(stateRoot, mountinfo);
+    facts.volumeKind = home.kind; facts.volumeName = home.volume;
+    facts.workspaceKind = work.kind; facts.workspaceVolumeName = work.volume;
+    facts.stateKind = state.kind; facts.stateVolumeName = state.volume; facts.statePath = stateRoot;
   };
 
   const refresh = () => {
@@ -146,11 +167,6 @@ export function createStorageManager(options = {}) {
         facts.volumeBytes = bytes(userHome); facts.partial = partial;
         facts.error = partial ? "Some folders could not be read. Sizes are partial estimates." : null;
         facts.at = now();
-        const mountinfo = await io.readFile("/proc/self/mountinfo", "utf8").catch(() => "");
-        const home = mountSource(userHome, mountinfo), work = mountSource(workspace, mountinfo), stateMount = mountSource(stateRoot, mountinfo);
-        facts.volumeKind = home.kind; facts.volumeName = home.volume;
-        facts.workspaceKind = work.kind; facts.workspaceVolumeName = work.volume;
-        facts.stateKind = stateMount.kind; facts.stateVolumeName = stateMount.volume; facts.statePath = stateRoot;
         facts.workspaceProjects = await (options.countProjects ?? countProjects)(workspace);
         await filesSizes.replace(sizes, { at: facts.at, partial });
         const { operation, policy, policyError, refreshing, ...inventory } = facts;
@@ -425,13 +441,16 @@ export function createStorageManager(options = {}) {
     return snapshot();
   }
 
-  const timers = options.intervalMs === 0 ? [] : [
-    setInterval(() => { void refresh(); }, options.intervalMs ?? 10 * 60 * 1000),
-    setInterval(() => { void refreshDisk(); void maintain().catch(() => {}); }, 60_000),
-  ];
+  const timers = [];
+  if (backgroundScansEnabled) timers.push(setInterval(() => { void refresh(); }, intervalMs));
+  // The CLI disables all timers explicitly. The environment setting controls
+  // recursive inventory scans while leaving the disk meter and maintenance active.
+  if (options.intervalMs !== 0) {
+    timers.push(setInterval(() => { void refreshDisk(); void maintain().catch(() => {}); }, MINUTE_MS));
+  }
   timers.forEach((timer) => timer.unref?.());
   return { ready, refresh, snapshot, status, clean, previewClean, setPolicy, maintain, previewVersions, trimVersions,
-    sizes: filesSizes.snapshot,
+    sizes: filesSizes.snapshot, backgroundScansEnabled,
     paths: { home: userHome, workspace, stateRoot, policyFile },
     stop: () => { stopped = true; timers.forEach(clearInterval); } };
 }

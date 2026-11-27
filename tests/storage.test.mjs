@@ -60,10 +60,11 @@ test("on-demand status checks current mounts without measuring folders", async (
     facts: { at: 1, categories: [], volumeKind: "durable", volumeName: "old-home", stateKind: "durable" },
   }, fs);
   let mountinfo = `42 1 0:1 /var/lib/docker/volumes/new-home/_data ${f.home} rw - ext4 /dev/test rw\n`;
+  let scans = 0;
   const manager = createStorageManager({ ...f.base, intervalMs: undefined,
     env: { ...f.env, T3_STORAGE_SCAN_INTERVAL_MINUTES: "0" },
     fs: { ...fs, readFile: (file, ...args) => file === "/proc/self/mountinfo" ? Promise.resolve(mountinfo) : fs.readFile(file, ...args) },
-    measure: async () => assert.fail("status must not start an inventory scan"),
+    measure: async () => { scans++; throw new Error("Unexpected inventory scan"); },
   });
   t.after(() => manager.stop());
   const current = await manager.status();
@@ -74,6 +75,7 @@ test("on-demand status checks current mounts without measuring folders", async (
   const detached = await manager.status();
   assert.equal(detached.volumeKind, "none");
   assert.equal(detached.stateKind, "none");
+  assert.equal(scans, 0, "status must not start an inventory scan");
 });
 
 test("allocated inventory is cached; polling never detects tools or traverses folders", async (t) => {

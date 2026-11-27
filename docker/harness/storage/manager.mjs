@@ -92,6 +92,12 @@ export function createStorageManager(options = {}) {
   };
   const refreshDisk = async () => {
     try { facts.disk = await diskUsage(userHome); } catch { facts.disk = null; }
+    // Persistence warnings need the current mounts even with a cold or stale inventory.
+    const mountinfo = await io.readFile("/proc/self/mountinfo", "utf8").catch(() => "");
+    const home = mountSource(userHome, mountinfo), work = mountSource(workspace, mountinfo), state = mountSource(stateRoot, mountinfo);
+    facts.volumeKind = home.kind; facts.volumeName = home.volume;
+    facts.workspaceKind = work.kind; facts.workspaceVolumeName = work.volume;
+    facts.stateKind = state.kind; facts.stateVolumeName = state.volume; facts.statePath = stateRoot;
   };
 
   const refresh = () => {
@@ -161,11 +167,6 @@ export function createStorageManager(options = {}) {
         facts.volumeBytes = bytes(userHome); facts.partial = partial;
         facts.error = partial ? "Some folders could not be read. Sizes are partial estimates." : null;
         facts.at = now();
-        const mountinfo = await io.readFile("/proc/self/mountinfo", "utf8").catch(() => "");
-        const home = mountSource(userHome, mountinfo), work = mountSource(workspace, mountinfo), stateMount = mountSource(stateRoot, mountinfo);
-        facts.volumeKind = home.kind; facts.volumeName = home.volume;
-        facts.workspaceKind = work.kind; facts.workspaceVolumeName = work.volume;
-        facts.stateKind = stateMount.kind; facts.stateVolumeName = stateMount.volume; facts.statePath = stateRoot;
         facts.workspaceProjects = await (options.countProjects ?? countProjects)(workspace);
         await filesSizes.replace(sizes, { at: facts.at, partial });
         const { operation, policy, policyError, refreshing, ...inventory } = facts;

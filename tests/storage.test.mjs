@@ -53,6 +53,29 @@ test("the environment configures inventory scans independently of maintenance", 
   assert.equal(warn.mock.callCount(), 1, "an overflowing delay warns instead of scheduling a one-millisecond scan");
 });
 
+test("on-demand status checks current mounts without measuring folders", async (t) => {
+  const f = await fixture(t);
+  await writeStorageJson(path.join(f.home, ".t3/setup/storage-snapshot.json"), {
+    schema: 1, home: f.home, workspace: f.workspace,
+    facts: { at: 1, categories: [], volumeKind: "durable", volumeName: "old-home", stateKind: "durable" },
+  }, fs);
+  let mountinfo = `42 1 0:1 /var/lib/docker/volumes/new-home/_data ${f.home} rw - ext4 /dev/test rw\n`;
+  const manager = createStorageManager({ ...f.base, intervalMs: undefined,
+    env: { ...f.env, T3_STORAGE_SCAN_INTERVAL_MINUTES: "0" },
+    fs: { ...fs, readFile: (file, ...args) => file === "/proc/self/mountinfo" ? Promise.resolve(mountinfo) : fs.readFile(file, ...args) },
+    measure: async () => assert.fail("status must not start an inventory scan"),
+  });
+  t.after(() => manager.stop());
+  const current = await manager.status();
+  assert.equal(current.volumeName, "new-home");
+  assert.equal(current.stateVolumeName, "new-home");
+  assert.equal(current.at, 1);
+  mountinfo = "";
+  const detached = await manager.status();
+  assert.equal(detached.volumeKind, "none");
+  assert.equal(detached.stateKind, "none");
+});
+
 test("allocated inventory is cached; polling never detects tools or traverses folders", async (t) => {
   const f = await fixture(t);
   let detections = 0, scans = 0;

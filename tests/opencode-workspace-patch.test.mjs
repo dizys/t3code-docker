@@ -96,3 +96,34 @@ test("Nightly 5209 waits for config plugins and keeps watching the model catalog
     assert.throws(() => patchOpenCodeSkills(changed), /no longer matches/);
   }
 });
+
+test("Stable 0.1.13 and Nightly 5319 retain shared skill updates with native readiness", () => {
+  const [driver] = files;
+  const original = scansSource[driver]
+    .replace('import * as Deferred from "effect/Deferred";', 'import * as Deferred from "effect/Deferred";\nimport * as Scope from "effect/Scope";')
+    .replace('    const followScans =', `    const skillRescans = yield* Queue.unbounded<string, Cause.Done>();
+    // The shared subscription also publishes late skill updates.
+    const followScans =`)
+    .replace('withConnection(({ client, events, url }) =>\n        Effect.gen(function* () {', `withConnection((connection) =>
+        Effect.gen(function* () {
+          const { client, events, url } = connection;
+          const [, stream] = yield* Effect.all(
+            [followScans(connection), events.pipe(Effect.option)],
+            {
+              concurrency: "unbounded",
+            },
+          );`)
+    .replace('          const stream = yield* events.pipe(Effect.option);\n', '')
+    .replace('          return workspace;', `          listed.set(directory, cwd);
+          yield* Queue.offer(skillRescans, cwd);
+          return workspace;`);
+  const result = patchOpenCodeSkills({ ...scansSource, [driver]: original })[driver];
+  const start = '    const listOpenCode2Workspace';
+  assert.equal(result.slice(0, result.indexOf(start)).replace('import * as Schedule from "effect/Schedule";\n', ''), original.slice(0, original.indexOf(start)));
+  const workspace = result.slice(result.indexOf(start));
+  assert.match(workspace, /yield\* followScans\(connection\)/);
+  assert.match(workspace, /client\.plugin\.list\(\{ location \}\)/);
+  assert.match(workspace, /listed\.set\(directory, cwd\)/);
+  assert.match(workspace, /Queue\.offer\(skillRescans, cwd\)/);
+  assert.doesNotMatch(workspace, /Deferred|events\.pipe|seen\.has/);
+});

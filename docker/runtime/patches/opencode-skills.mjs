@@ -161,12 +161,33 @@ export function patchOpenCodeSkills(source) {
     const normalized = "          const directory = pathService.resolve(cwd);\n          const location = { directory };";
     change(files[0], normalized, normalized);
   }
-  change(files[0], 'import * as Deferred from "effect/Deferred";', 'import * as Schedule from "effect/Schedule";');
+  const tracksSkillUpdates = shape.tracksScans && next[files[0]].includes("    const skillRescans = yield* Queue.unbounded<string, Cause.Done>();");
+  if (tracksSkillUpdates) {
+    // Stable 0.1.13 and Nightly 5319 still use Deferred for the shared subscription.
+    change(files[0], 'import * as Scope from "effect/Scope";', 'import * as Schedule from "effect/Schedule";\nimport * as Scope from "effect/Scope";');
+  } else {
+    change(files[0], 'import * as Deferred from "effect/Deferred";', 'import * as Schedule from "effect/Schedule";');
+  }
   if (shape.tracksScans) {
-    change(files[0], "  followOpenCode2Scans,\n", "");
-    change(files[0], "openCode2Server.withConnection(({ client, events, url }) =>", "openCode2Server.withConnection(({ client }) =>");
-    change(files[0],
-      `    // Locations whose scan T3 saw end on the current server; a scan is announced only once.
+    let streamSetup = "";
+    if (tracksSkillUpdates) {
+      // Keep the shared listener that resubscribes, invalidates skills and tracks models.
+      change(files[0], `          const { client, events, url } = connection;
+          const [, stream] = yield* Effect.all(
+            [followScans(connection), events.pipe(Effect.option)],
+            {
+              concurrency: "unbounded",
+            },
+          );
+`, `          const { client } = connection;
+          yield* followScans(connection);
+`);
+    } else {
+      change(files[0], "  followOpenCode2Scans,\n", "");
+      change(files[0], "openCode2Server.withConnection(({ client, events, url }) =>", "openCode2Server.withConnection(({ client }) =>");
+      streamSetup = "          const stream = yield* events.pipe(Effect.option);\n";
+      change(files[0],
+        `    // Locations whose scan T3 saw end on the current server; a scan is announced only once.
     let scans = { url: "", scanned: new Set<string>() };
     const followScans = (connection: OpenCode2Server.OpenCode2Connection) =>
       Effect.suspend(() => {
@@ -188,12 +209,12 @@ export function patchOpenCodeSkills(source) {
 `, `    // A session or text generation can start the server too, and reads no catalog when it does.
     yield* Stream.runForEach(openCode2Server.connections, followMachineCatalog).pipe(Effect.forkScoped);
 `);
+    }
     change(files[0],
       `          if (scans.url !== url) scans = { url, scanned: new Set() };
           const { scanned: seen } = scans;
           const scanned = yield* Deferred.make<void>();
-          const stream = yield* events.pipe(Effect.option);
-          if (stream._tag === "Some") {
+${streamSetup}          if (stream._tag === "Some") {
             yield* followOpenCode2Scans(stream.value, (scannedDirectory) =>
               scannedDirectory === directory
                 ? Deferred.succeed(scanned, undefined).pipe(Effect.asVoid)

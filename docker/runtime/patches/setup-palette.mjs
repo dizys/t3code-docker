@@ -17,8 +17,14 @@ function replaceOnce(text, before, after) {
 export function patchSetupPalette(source) {
   if (Object.hasOwn(source, clientFile)) throw new Error("The setup-palette client already exists. Review the upstream source before publishing this runtime.");
   let text = source[files[0]];
-  text = replaceOnce(text, 'import { useAvailableSettingsSearchItems }',
-    'import { useSetupPaletteActions } from "./SetupPaletteActions";\nimport { useAvailableSettingsSearchItems }');
+  const settingsImports = [
+    'import { useAvailableSettingsSearchItems }',
+    'import { useCommandPaletteSettingsItems }',
+  ].filter(anchor => text?.includes(anchor));
+  if (settingsImports.length !== 1) throw new Error(noMatch);
+  const [settingsImport] = settingsImports;
+  text = replaceOnce(text, settingsImport,
+    `import { useSetupPaletteActions } from "./SetupPaletteActions";\n${settingsImport}`);
   text = replaceOnce(text, '  const isActionsOnly = deferredQuery.startsWith(">");',
     '  const isActionsOnly = deferredQuery.startsWith(">");\n  const setupActions = useSetupPaletteActions(deferredQuery, async () => {\n    await navigate({ to: "/settings" });\n  });');
   const rootGroups = text.match(/^  const rootGroups = buildRootGroups\(\{ actionItems, recentThreadItems \}(?:, messages)?\);$/gm);

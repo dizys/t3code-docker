@@ -113,6 +113,39 @@ test('provider-table patch preserves native readers, transport, diagnostics and 
   assert.match(patched[files[2]], /OpenCode Go/);
 });
 
+test('current gateway readers retain model routing and report custom accounts through native notices', () => {
+  const [api, shared] = files;
+  const modern = localizedNoticesSource[api]
+    .replace('  project_id: Schema.optional(Schema.String),', '  id_token: Schema.optional(Schema.Struct({})),')
+    .replace(`    const call: HubCall = (url, data) =>
+      apiCall(hub, account, provider.header(account, platform, architecture), url, data);`,
+    '    const call: HubCall = (url, data) => apiCall(hub, account, provider.header(account), url, data);');
+  const nativeUnreadProviders = `    const unreadProviders = [
+      ...new Set(
+        accounts.flatMap((account) =>
+          account.disabled || HUB_PROVIDERS.has(account.provider) || !account.provider.trim()
+            ? []
+            : [account.provider.trim()],
+        ),
+      ),
+    ].toSorted();`;
+  const modelRouting = '    const models = yield* routedModels(hub, account);';
+  const input = {
+    ...localizedNoticesSource,
+    [api]: modern.replace('    return yield* Effect.forEach(', `${nativeUnreadProviders}\n${modelRouting}\n    return yield* Effect.forEach(`),
+    [shared]: `        if (account.usageLimits.unavailable?.reason !== "probeFailed") continue;`,
+    [localizedNoticesFile]: '  const failedAccounts = unshownFailedHubAccounts(presentations);',
+  };
+  const patched = patchGatewayQuota(input);
+  assert.match(patched[api], /provider\.header\(account\)/);
+  assert.match(patched[api], /project_id: Schema\.optional/);
+  assert.ok(patched[api].includes(modelRouting));
+  assert.match(patched[api], /const unreadProviders: ReadonlyArray<string> = \[\]/);
+  assert.equal(patched[localizedNoticesFile], input[localizedNoticesFile]);
+  assert.match(patched[shared], /unavailable\?\.reason === "unsupported" && unavailable\.message/);
+  assert.throws(() => patchGatewayQuota({ ...input, [api]: input[api].replace('].toSorted();', '].sort();') }), /no longer matches/);
+});
+
 test('account warnings preserve native notice ordering, deduplication and localization', () => {
   const warning = notice => ({windows: [], notice});
   const presentations = new Map([

@@ -26,6 +26,15 @@ test('Setup actions join the localized palette without changing its message reso
   assert.throws(() => patchSetupPalette({ [files[0]]: mixed }), /no longer matches/);
 });
 
+test('Setup actions join the extracted settings palette used by Stable 0.1.13', () => {
+  const oldImport = 'import { useAvailableSettingsSearchItems } from "./settings/useAvailableSettingsSearchItems";';
+  const newImport = 'import { useCommandPaletteSettingsItems } from "./CommandPaletteSettingsItems";';
+  const next = original.replace(oldImport, newImport);
+  const result = patchSetupPalette({ [files[0]]: next });
+  assert.ok(result[files[0]].includes(`import { useSetupPaletteActions } from "./SetupPaletteActions";\n${newImport}`));
+  assert.throws(() => patchSetupPalette({ [files[0]]: next + '\n' + oldImport }), /no longer matches/);
+});
+
 test('Setup joins native actions before ranking without replacing native result rendering', () => {
   const input = { [files[0]]: original }, before = structuredClone(input);
   const result = patchSetupPalette(input);

@@ -82,3 +82,43 @@ export function forwardedHost(headers, { trusted = true } = {}) {
   const value = forwarded ?? fallback;
   return Array.isArray(value) ? value[0] : value;
 }
+
+// Check origin syntax before normalizing addresses and default ports.
+const HTTP_ORIGIN = /^https?:\/\/(?:\[[0-9a-f:.]+\]|[a-z0-9._-]+)(?::[0-9]+)?$/i;
+
+function normalizedHttpOrigin(value) {
+  if (typeof value !== "string" || !HTTP_ORIGIN.test(value)) return null;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a browser request proves it came from this same origin.
+ *
+ * Modern browsers send Sec-Fetch-Site on trustworthy origins (HTTPS and
+ * localhost). Over plain HTTP to a LAN or remote IP, browsers omit
+ * Sec-Fetch-Site, but still send Origin on state-changing requests (POST).
+ * When Sec-Fetch-Site is present, only "same-origin" passes. When it is
+ * absent, a valid http(s) Origin must match this request's own origin.
+ */
+export function isSameOriginRequest(headers, { encrypted = false, trusted = false } = {}) {
+  const fetchSite = headers?.["sec-fetch-site"];
+  if (fetchSite !== undefined) return fetchSite === "same-origin";
+
+  const origin = normalizedHttpOrigin(headers?.origin);
+  if (origin === null) return false;
+
+  const proxyHost = trusted ? headers?.["x-forwarded-host"] : undefined;
+  if (proxyHost !== undefined && typeof proxyHost !== "string") return false;
+  // The first forwarded entry is the public host. A direct Host is a single authority.
+  const host = proxyHost?.split(",", 1)[0].trim() ?? headers?.host;
+  if (typeof host !== "string") return false;
+
+  const proxyProto = forwardedProto(headers, { trusted });
+  if (proxyProto && proxyProto !== "http" && proxyProto !== "https") return false;
+  const proto = encrypted || proxyProto === "https" ? "https" : "http";
+  return origin === normalizedHttpOrigin(`${proto}://${host}`);
+}

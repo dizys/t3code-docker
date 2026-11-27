@@ -19,7 +19,13 @@ export function patchGatewayQuota(source) {
   const change = (file, before, after) => { next[file] = replaceOnce(next[file], before, after, file); };
   const legacyDriver = 'driver: ProviderDriverKind.make(account.provider === "codex" ? "codex" : "claudeAgent"),';
   const providerTable = /HUB_PROVIDERS|interface HubProvider\b|provider: HubProvider\b/.test(source[files[0]] ?? "");
-  if (providerTable && source[files[0]].includes(legacyDriver)) {
+  const modernCall = 'apiCall(hub, account, provider.header(account), url, data);';
+  const platformCall = 'apiCall(hub, account, provider.header(account, platform, architecture), url, data);';
+  const modernHeader = `    const call: HubCall = (url, data) => ${modernCall}`;
+  const platformHeader = `    const call: HubCall = (url, data) =>
+      ${platformCall}`;
+  const accountHeader = providerTable && source[files[0]].includes(modernHeader);
+  if (providerTable && (source[files[0]].includes(legacyDriver) || (accountHeader && source[files[0]].includes(platformHeader)))) {
     throw new Error(`The gateway-quota patch no longer matches ${files[0]}. Review the upstream source before publishing this runtime.`);
   }
   change(files[0], 'import { codexPlanLabel }', 'import { makeAdditionalQuotaReader, quotaDriver } from "./cliproxyQuota.ts";\nimport { codexPlanLabel }');
@@ -28,7 +34,15 @@ export function patchGatewayQuota(source) {
   runtime_only: Schema.optional(Schema.Boolean),
   supports_quota: Schema.optional(Schema.Boolean),
   quota_plugin_id: Schema.optional(Schema.String),`;
-  if (providerTable) {
+  if (accountHeader) {
+    // Newer releases removed the native Antigravity reader and its project field.
+    change(files[0], `  email: Schema.optional(Schema.String),
+  disabled: Schema.optional(Schema.Boolean),
+  id_token: Schema.optional(`, `  email: Schema.optional(Schema.String),${extraFields}
+  disabled: Schema.optional(Schema.Boolean),
+  project_id: Schema.optional(Schema.String),
+  id_token: Schema.optional(`);
+  } else if (providerTable) {
     // Nightly's native Antigravity reader already owns project_id.
     change(files[0], '  project_id: Schema.optional(Schema.String),', '  project_id: Schema.optional(Schema.String),');
     change(files[0], `  email: Schema.optional(Schema.String),
@@ -46,10 +60,11 @@ export function patchGatewayQuota(source) {
   if (providerTable) {
     // Keep the native provider table, transport, TLS diagnostics and reset-credit
     // calls intact. Only accounts without a native reader use our extension.
+    const headerCall = accountHeader ? modernHeader : platformHeader;
     for (const anchor of [
       'interface HubProvider {',
       'const HUB_PROVIDERS = new Map<string, HubProvider>([',
-      '      apiCall(hub, account, provider.header(account, platform, architecture), url, data);',
+      accountHeader ? modernCall : platformCall,
       `  const apiCall = Effect.fn("CliproxyApi.apiCall")(function* (
     hub: CliproxyHub,
     account: AuthFile,
@@ -64,8 +79,7 @@ export function patchGatewayQuota(source) {
     provider: HubProvider,
   ) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    const call: HubCall = (url, data) =>
-      apiCall(hub, account, provider.header(account, platform, architecture), url, data);`, `  const readAccount = Effect.fn("CliproxyApi.readAccount")(function* (
+${headerCall}`, `  const readAccount = Effect.fn("CliproxyApi.readAccount")(function* (
     hub: CliproxyHub,
     account: AuthFile,
     provider: HubProvider | undefined,
@@ -83,10 +97,22 @@ export function patchGatewayQuota(source) {
         ...yield* readAdditionalQuota(account, checkedAt),
       };
     }
-    const call: HubCall = (url, data) =>
-      apiCall(hub, account, provider.header(account, platform, architecture), url, data);`);
+${headerCall}`);
     change(files[0], 'return provider && !account.disabled ? [{ account, provider }] : [];', 'return !account.disabled ? [{ account, provider }] : [];');
     change(files[0], '// Keyed by the auth-files `provider`; accounts of any other provider are skipped.', '// Keyed by the auth-files `provider`; other providers use the additional quota reader.');
+    // The Nightly response still carries unreadProviders. Every enabled account
+    // now has a reading, including an explicit reason if a reader is unavailable.
+    if (next[files[0]].includes('unreadProviders')) {
+      change(files[0], `    const unreadProviders = [
+      ...new Set(
+        accounts.flatMap((account) =>
+          account.disabled || HUB_PROVIDERS.has(account.provider) || !account.provider.trim()
+            ? []
+            : [account.provider.trim()],
+        ),
+      ),
+    ].toSorted();`, '    const unreadProviders: ReadonlyArray<string> = [];');
+    }
   } else {
     change(files[0], '    data?: unknown,\n  ) {', '    data?: unknown,\n    requestHeaders?: Record<string, string>,\n  ) {');
     change(files[0], '      header,', '      header: requestHeaders ?? header,');
@@ -110,7 +136,15 @@ export function patchGatewayQuota(source) {
   const noticeMethods = ['push', 'add'].filter(method => typeof sharedNotices === 'string' && sharedNotices.includes(noticeAnchor(method)));
   const localized = Object.hasOwn(next, localizedNoticesFile);
   if (noticeMethods.length !== (localized ? 0 : 1)) throw new Error(`The gateway-quota patch no longer matches ${sharedNoticesFile}. Review the upstream source before publishing this runtime.`);
-  if (localized) {
+  const nativeFailedAccounts = '  const failedAccounts = unshownFailedHubAccounts(presentations);';
+  if (localized && next[localizedNoticesFile].includes(nativeFailedAccounts)) {
+    change(localizedNoticesFile, nativeFailedAccounts, nativeFailedAccounts);
+    change(sharedNoticesFile, '        if (account.usageLimits.unavailable?.reason !== "probeFailed") continue;', `        const unavailable = account.usageLimits.unavailable;
+        if (
+          unavailable?.reason !== "probeFailed" &&
+          !(unavailable?.reason === "unsupported" && unavailable.message)
+        ) continue;`);
+  } else if (localized) {
     const accountName = String.raw`const hubAccountName = (account: { readonly id: string }) => account.id.replace(/\.json$/i, "");`;
     change(sharedNoticesFile, `\n${accountName}\n`, `\nexport ${accountName}\n`);
     change(localizedNoticesFile, '  providersWithLimits,', '  hubAccountName,\n  providersWithLimits,');

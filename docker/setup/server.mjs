@@ -2625,7 +2625,10 @@ const viewerOf = async (req, ip) => {
     if (candidate !== undefined && await keyGuesses.check(ip, candidate)) return { via: "key" };
   }
   if (!ACCEPT_T3_SESSIONS) return null;
-  if (!SAFE_METHODS.has(req.method) && !isSameOriginRequest(req.headers, { encrypted: Boolean(req.socket?.encrypted), trusted: proxyHeadersTrusted(req) })) return null;
+  if (!SAFE_METHODS.has(req.method) && !isSameOriginRequest(req.headers, {
+    encrypted: Boolean(req.socket?.encrypted),
+    trusted: proxyHeadersTrusted(req),
+  })) return null;
   return (await t3Sessions.verify(req.headers.cookie)) ? { via: "t3" } : null;
 };
 

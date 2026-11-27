@@ -83,6 +83,18 @@ export function forwardedHost(headers, { trusted = true } = {}) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+// Check origin syntax before normalizing addresses and default ports.
+const HTTP_ORIGIN = /^https?:\/\/(?:\[[0-9a-f:.]+\]|[a-z0-9._-]+)(?::[0-9]+)?$/i;
+
+function normalizedHttpOrigin(value) {
+  if (typeof value !== "string" || !HTTP_ORIGIN.test(value)) return null;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Whether a browser request proves it came from this same origin.
  *
@@ -92,36 +104,21 @@ export function forwardedHost(headers, { trusted = true } = {}) {
  * When Sec-Fetch-Site is present, only "same-origin" passes. When it is
  * absent, a valid http(s) Origin must match this request's own origin.
  */
-export function isSameOriginRequest(headers, { encrypted = false, trusted = true } = {}) {
-  const fetchSite = String(headers?.["sec-fetch-site"] ?? "").trim().toLowerCase();
-  if (fetchSite) return fetchSite === "same-origin";
+export function isSameOriginRequest(headers, { encrypted = false, trusted = false } = {}) {
+  const fetchSite = headers?.["sec-fetch-site"];
+  if (fetchSite !== undefined) return fetchSite === "same-origin";
 
-  const rawOrigin = headers?.origin;
-  const originHeader = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
-  if (typeof originHeader !== "string" || !originHeader.trim()) return false;
+  const origin = normalizedHttpOrigin(headers?.origin);
+  if (origin === null) return false;
 
-  let originUrl;
-  try {
-    originUrl = new URL(originHeader.trim());
-  } catch {
-    return false;
-  }
-  if ((originUrl.protocol !== "http:" && originUrl.protocol !== "https:") || originUrl.origin === "null") {
-    return false;
-  }
+  const proxyHost = trusted ? headers?.["x-forwarded-host"] : undefined;
+  if (proxyHost !== undefined && typeof proxyHost !== "string") return false;
+  // The first forwarded entry is the public host. A direct Host is a single authority.
+  const host = proxyHost?.split(",", 1)[0].trim() ?? headers?.host;
+  if (typeof host !== "string") return false;
 
-  const host = String(forwardedHost(headers, { trusted }) ?? "").split(",")[0].trim();
-  if (!host) return false;
-  const proto = encrypted || forwardedProto(headers, { trusted }) === "https" ? "https" : "http";
-
-  let expectedUrl;
-  try {
-    expectedUrl = new URL(`${proto}://${host}`);
-  } catch {
-    return false;
-  }
-  if (expectedUrl.pathname !== "/" || expectedUrl.search || expectedUrl.hash || expectedUrl.username || expectedUrl.password) {
-    return false;
-  }
-  return originUrl.origin === expectedUrl.origin;
+  const proxyProto = forwardedProto(headers, { trusted });
+  if (proxyProto && proxyProto !== "http" && proxyProto !== "https") return false;
+  const proto = encrypted || proxyProto === "https" ? "https" : "http";
+  return origin === normalizedHttpOrigin(`${proto}://${host}`);
 }
